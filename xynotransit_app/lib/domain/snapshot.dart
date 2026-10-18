@@ -100,11 +100,15 @@ class ReportSnapshot {
     required Period period,
   }) {
     final months = period.months;
+    // Words typed by the reporter win over the profile.
+    final who = report.reporter;
+    String pick(String? typed, String profile) =>
+        (typed ?? '').trim().isEmpty ? profile : typed!.trim();
     return ReportSnapshot(
       assignmentCode: assignment.code,
-      name: catalog.personOf(assignment).fullName,
-      role: assignment.roleTitle,
-      team: catalog.teamOf(assignment).name,
+      name: pick(who?.name, catalog.personOf(assignment).fullName),
+      role: pick(who?.role, assignment.roleTitle),
+      team: pick(who?.country, catalog.teamOf(assignment).name),
       periodLabel: period.label,
       months: months,
       metrics: [

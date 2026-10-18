@@ -28,6 +28,66 @@ abstract final class NoteRules {
   ];
 }
 
+/// Who the report says it is from, in the reporter's own words. These three
+/// free-text answers are what the slides show; they start out as the profile
+/// (person name, team name, role title) and the reporter can change them.
+class Reporter {
+  const Reporter({this.name = '', this.country = '', this.role = ''});
+
+  static const maxLength = 80;
+
+  final String name;
+  final String country;
+  final String role;
+
+  Reporter copyWith({String? name, String? country, String? role}) => Reporter(
+    name: name ?? this.name,
+    country: country ?? this.country,
+    role: role ?? this.role,
+  );
+
+  /// Plain-language problems, in the order of the fields.
+  List<String> problems() => [
+    if (name.trim().isEmpty)
+      'Enter your name.'
+    else if (name.trim().runes.length > maxLength)
+      'Your name can be at most $maxLength characters.',
+    if (country.trim().isEmpty)
+      'Enter your country.'
+    else if (country.trim().runes.length > maxLength)
+      'Your country can be at most $maxLength characters.',
+    if (role.trim().isEmpty)
+      'Enter your role.'
+    else if (role.trim().runes.length > maxLength)
+      'Your role can be at most $maxLength characters.',
+  ];
+
+  Map<String, Object?> toJson() => {
+    'name': name.trim(),
+    'country': country.trim(),
+    'role': role.trim(),
+  };
+
+  static Reporter? fromJson(Object? j) {
+    if (j is! Map<String, Object?>) return null;
+    return Reporter(
+      name: (j['name'] as String?) ?? '',
+      country: (j['country'] as String?) ?? '',
+      role: (j['role'] as String?) ?? '',
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is Reporter &&
+      other.name == name &&
+      other.country == country &&
+      other.role == role;
+
+  @override
+  int get hashCode => Object.hash(name, country, role);
+}
+
 class KpiResult {
   const KpiResult(this.status, {this.comment});
   final KpiStatus status;
@@ -46,6 +106,7 @@ class Report {
     Map<String, List<int?>>? values,
     Map<String, KpiResult>? kpis,
     Map<NoteKind, List<String>>? notes,
+    this.reporter,
   }) : values = values ?? {},
        kpis = kpis ?? {},
        notes = notes ?? {for (final k in NoteKind.values) k: <String>[]};
@@ -58,6 +119,10 @@ class Report {
   final Map<String, List<int?>> values;
   final Map<String, KpiResult> kpis;
   final Map<NoteKind, List<String>> notes;
+
+  /// Name, country and role as typed by the reporter. Null on reports sent
+  /// before these fields existed: the profile is used then.
+  final Reporter? reporter;
 
   bool get isSubmitted => status == ReportStatus.submitted;
 
@@ -83,6 +148,7 @@ class Report {
     Map<String, List<int?>>? values,
     Map<String, KpiResult>? kpis,
     Map<NoteKind, List<String>>? notes,
+    Reporter? reporter,
   }) => Report(
     id: id ?? this.id,
     periodId: periodId,
@@ -92,11 +158,13 @@ class Report {
     values: values ?? this.values,
     kpis: kpis ?? this.kpis,
     notes: notes ?? this.notes,
+    reporter: reporter ?? this.reporter,
   );
 
   /// Plain-language problems that block sending. Empty means ready.
   List<String> validate(Assignment a, Period p) {
-    final problems = <String>[];
+    final problems = <String>[...?reporter?.problems()];
+    if (reporter == null) problems.addAll(const Reporter().problems());
     final months = p.months;
     for (final m in a.metrics) {
       final v = values[m.id];
@@ -121,6 +189,7 @@ class Report {
         e.key: {'status': e.value.status.name, 'comment': e.value.comment},
     },
     'notes': {for (final e in notes.entries) e.key.name: e.value},
+    if (reporter != null) 'reporter': reporter!.toJson(),
   };
 
   static Report fromDraftJson(
@@ -156,6 +225,7 @@ class Report {
       values: values,
       kpis: kpis,
       notes: notes,
+      reporter: Reporter.fromJson(j['reporter']),
     );
   }
 }
