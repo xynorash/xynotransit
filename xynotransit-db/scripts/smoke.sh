@@ -75,16 +75,29 @@ import sys,json
 a=json.load(sys.stdin)
 vals=[{'metric_def_id':m['id'],'month_offset':o,'value':10+o} for m in a['metrics'] for o in range(3)]
 kpis=[{'kpi_def_id':k['id'],'status':'met','comment':'Smoke comment'} for k in a['kpis']]
-print(json.dumps({'values':vals,'kpis':kpis,'notes':[{'kind':'well','position':1,'text':'Smoke test note'}]}))")
+print(json.dumps({'reporter':{'name':'Smoke Reporter','country':'Smokeland','role':'Tester'},'values':vals,'kpis':kpis,'notes':[{'kind':'well','position':1,'text':'Smoke test note'}]}))")
 curl -fsS -X PUT "$API/periods/$PERIOD/reports/$SEAT" "${EH[@]}" -d "$BODY" | j "d['status']" | grep -qx submitted || fail "send report"
+curl -fsS "$API/periods/$PERIOD/deck-text" -H "authorization: Bearer $E" -o /dev/null || fail "employee must read the deck words"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$API/periods/$PERIOD/deck" -H "authorization: Bearer $E")
 [ "$code" = 403 ] || fail "employee must not read the deck (got $code)"
 
 step "manager sets the slide words, generates the deck, reads the summary"
-curl -fsS -X GET "$API/periods/$PERIOD/deck-text" -H "authorization: Bearer $M" >/dev/null 2>&1 \
-  && curl -fsS -X PUT "$API/periods/$PERIOD/deck-text" "${H[@]}" \
-       -d '{"settings":{"title":"Smoke Test Review"}}' -o /dev/null || echo "(deck-text endpoint not present, skipped)"
+curl -fsS -X PUT "$API/periods/$PERIOD/deck-text" "${H[@]}" \
+  -d '{"settings":{"title":"Smoke Test Review"}}' -o /dev/null || fail "set deck words"
 curl -fsS -X POST "$API/periods/$PERIOD/deck" "${H[@]}" -d '{}' | j "d['included_count']" | grep -qx 1 || fail "generate deck"
 curl -fsS "$API/summary?period_id=$PERIOD" -H "authorization: Bearer $M" | j "d['submitted']" | grep -qx 1 || fail "summary"
+
+step "a deck works with no submitted reports at all"
+EMPTY=$(curl -fsS -X POST "$API/periods/ensure" "${H[@]}" -d '{"start_month":"2026-08-01"}' | j "d['id']")
+curl -fsS -X POST "$API/periods/$EMPTY/deck" "${H[@]}" -d '{}' | j "d['included_count']" | grep -qx 0 || fail "deck with zero reports"
+
+step "the sign-in limit answers the same for an address that does not exist"
+ghost="ghost.$RANDOM$RANDOM@xynotransit.example"
+for i in 1 2 3 4 5; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/auth/magic-link" -H 'content-type: application/json' -d "{\"email\":\"$ghost\"}")
+  [ "$code" = 202 ] || fail "request $i for unknown address returned $code"
+done
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/auth/magic-link" -H 'content-type: application/json' -d "{\"email\":\"$ghost\"}")
+[ "$code" = 429 ] || fail "6th request for unknown address returned $code, expected 429"
 
 echo "SMOKE OK"
