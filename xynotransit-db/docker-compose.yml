@@ -1,0 +1,68 @@
+# Xynotransit local stack: db + api + mailpit + web (http://127.0.0.1:8080)
+name: xynotransit-db
+
+services:
+  db:
+    build: .
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-xynotransit}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgres/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h /tmp -U xynotransit -d xynotransit"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../xynotransit-api
+    image: xynotransit-api
+    environment:
+      DATABASE_URL: postgres://xynotransit:${POSTGRES_PASSWORD:-xynotransit}@db:5432/xynotransit
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-0123456789abcdef}
+      PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:8080}
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      MAIL_FROM: ${MAIL_FROM:-Xynotransit <no-reply@xynotransit.local>}
+      BOOTSTRAP_CONTROLLER_EMAIL: ${BOOTSTRAP_CONTROLLER_EMAIL:-}
+      BOOTSTRAP_CONTROLLER_NAME: ${BOOTSTRAP_CONTROLLER_NAME:-}
+      LOG_MAGIC_LINKS: ${LOG_MAGIC_LINKS:-true}
+      BIND: 0.0.0.0:8081
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    expose:
+      - "8081"
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "127.0.0.1:8025:8025"
+    expose:
+      - "1025"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.web
+    image: xynotransit-web
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ../xynotransit_app/build/web:/usr/share/nginx/html:ro
+    restart: unless-stopped
+
+volumes:
+  pgdata:

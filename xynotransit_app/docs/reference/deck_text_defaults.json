@@ -1,0 +1,198 @@
+{
+  "fields": [
+    {
+      "key": "title",
+      "default": "Xynotransit Regional Logistics Meeting",
+      "tokens": [
+        "period"
+      ],
+      "max_length": 80,
+      "can_be_empty": false
+    },
+    {
+      "key": "subtitle",
+      "default": "KPI, volumes and priorities, {period}",
+      "tokens": [
+        "period"
+      ],
+      "max_length": 120,
+      "can_be_empty": false
+    },
+    {
+      "key": "dateText",
+      "default": "",
+      "tokens": [],
+      "max_length": 60,
+      "can_be_empty": true
+    },
+    {
+      "key": "orgName",
+      "default": "Xynotransit",
+      "tokens": [],
+      "max_length": 40,
+      "can_be_empty": false
+    },
+    {
+      "key": "coverPill",
+      "default": "{team} · {count}",
+      "tokens": [
+        "team",
+        "count"
+      ],
+      "max_length": 60,
+      "can_be_empty": false
+    },
+    {
+      "key": "kpiEyebrow",
+      "default": "KPI · {org} {team} team · {role}",
+      "tokens": [
+        "org",
+        "title",
+        "period",
+        "name",
+        "role",
+        "team"
+      ],
+      "max_length": 120,
+      "can_be_empty": false
+    },
+    {
+      "key": "kpiTitle",
+      "default": "{name}: KPI and volumes",
+      "tokens": [
+        "org",
+        "title",
+        "period",
+        "name",
+        "role",
+        "team"
+      ],
+      "max_length": 120,
+      "can_be_empty": false
+    },
+    {
+      "key": "kpiBadge",
+      "default": "KPI · {met} of {total} met",
+      "tokens": [
+        "met",
+        "total"
+      ],
+      "max_length": 40,
+      "can_be_empty": false
+    },
+    {
+      "key": "resultsEyebrow",
+      "default": "Results · {org} {team} team · {role}",
+      "tokens": [
+        "org",
+        "title",
+        "period",
+        "name",
+        "role",
+        "team"
+      ],
+      "max_length": 120,
+      "can_be_empty": false
+    },
+    {
+      "key": "resultsTitle",
+      "default": "{name}: results and next priorities",
+      "tokens": [
+        "org",
+        "title",
+        "period",
+        "name",
+        "role",
+        "team"
+      ],
+      "max_length": 120,
+      "can_be_empty": false
+    },
+    {
+      "key": "highlightsTitle",
+      "default": "Highlights",
+      "tokens": [],
+      "max_length": 30,
+      "can_be_empty": false
+    },
+    {
+      "key": "lowlightsTitle",
+      "default": "Lowlights",
+      "tokens": [],
+      "max_length": 30,
+      "can_be_empty": false
+    },
+    {
+      "key": "nextTitle",
+      "default": "Next 3 months",
+      "tokens": [],
+      "max_length": 30,
+      "can_be_empty": false
+    },
+    {
+      "key": "emptyNote",
+      "default": "Nothing to report",
+      "tokens": [],
+      "max_length": 40,
+      "can_be_empty": false
+    },
+    {
+      "key": "footer",
+      "default": "Source: {title} · {team} team · {period}",
+      "tokens": [
+        "title",
+        "org",
+        "period",
+        "team"
+      ],
+      "max_length": 120,
+      "can_be_empty": false
+    },
+    {
+      "key": "dividerEyebrow",
+      "default": "{title} · Team {i} of {n}",
+      "tokens": [
+        "title",
+        "period",
+        "i",
+        "n"
+      ],
+      "max_length": 120,
+      "can_be_empty": false
+    },
+    {
+      "key": "dividerTitle",
+      "default": "{team} team",
+      "tokens": [
+        "team"
+      ],
+      "max_length": 60,
+      "can_be_empty": false
+    },
+    {
+      "key": "dividerSubtitle",
+      "default": "{k} {reports}, two slides each: KPI and results",
+      "tokens": [
+        "k",
+        "reports",
+        "team"
+      ],
+      "max_length": 120,
+      "can_be_empty": false
+    },
+    {
+      "key": "suggestionsTitle",
+      "default": "Suggestions",
+      "tokens": [],
+      "max_length": 60,
+      "can_be_empty": false
+    },
+    {
+      "key": "suggestionsBody",
+      "default": "Suggestions will be added here.",
+      "tokens": [],
+      "max_length": 400,
+      "can_be_empty": true
+    }
+  ]
+}

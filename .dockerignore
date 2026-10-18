@@ -1,0 +1,16 @@
+# Context of the self-contained web image (xynotransit-db/web/Dockerfile.full).
+**/.git
+**/.dart_tool
+**/build
+**/target
+.github
+.devcontainer
+xynotransit-api
+xynotransit-db/*
+!xynotransit-db/web
+xynotransit_app/android
+xynotransit_app/ios
+xynotransit_app/linux
+xynotransit_app/macos
+xynotransit_app/windows
+xynotransit_app/test

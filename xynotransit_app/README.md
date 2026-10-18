@@ -1,0 +1,374 @@
+# Xynotransit Logistics Report Builder
+
+A Flutter web app that replaces the monthly logistics report chase. It does three jobs:
+
+1. **Form.** Each person (employee) fills in their monthly counts, target answers and notes in their own words, and sends the report.
+2. **Overview and live table.** The manager (role controller) sees a summary dashboard with graphs, and a live table of which reports have arrived.
+3. **Slide preview and generator.** The manager turns submitted reports into a 1920x1080 slide deck, scrolls through it as one vertical stream and exports it as PDF, PPTX or a ZIP of PNGs.
+4. **Slide text.** The manager chooses the words on the slides (meeting title, date line, organisation name and more). The preview and every export show exactly those words.
+5. **People.** The manager builds the catalog in the app: teams, people, seats, and per seat the counts and targets. Nothing is a fixed list.
+
+The UI is split by role. An employee sees only the report form. A manager sees Overview, Reports, Deck text, People and the form.
+
+Stack: Flutter (Dart 3), Riverpod 3, go_router (path URLs, no `#`), package:http. The backend is a separate Rust axum service, see `../xynotransit-api/README.md`. The database and the Docker stack are in `../xynotransit-db/README.md`.
+
+## Roles, screens and routes
+
+| Role (API value) | Home route | What they see |
+| --- | --- | --- |
+| Employee (`contributor`) | `/report` | Only the report form. No overview, slides, table, People or exports. |
+| Manager (`controller`) | `/manager` | Overview, Reports, Deck text, People, and the form (`/report`). |
+
+Routes:
+
+| Route | Who | Screen |
+| --- | --- | --- |
+| `/signin`, `/auth/verify?token=...` | anyone | Sign in; the emailed link opens `/auth/verify`. |
+| `/report` | everyone signed in | The report form. |
+| `/manager` | manager | Overview: the summary dashboard. |
+| `/manager/reports` | manager | Reports: slides on one side, "Reports received" table on the other, Generate and Export. |
+| `/manager/deck` | manager | Deck text: the words on the slides, with a draft preview. |
+| `/manager/people` | manager | People: teams, people, seats, counts and targets. |
+| `/gallery` | anyone | Design gallery. |
+
+Redirects (`lib/app/app.dart`):
+
+- `/` and `/signin` go to `/manager` for a manager and to `/report` for everyone else. When signed out, the app shows `/signin`; `/auth/verify` always opens.
+- A non-manager who opens any `/manager...` path (also an unknown sub-path) is sent to `/report`.
+- In demo mode, switching the **Demo:** user re-evaluates the redirects.
+
+The top bar shows Overview, Reports, Deck text, People and "Fill in a report" to a manager and marks the current one. A manager gets the compact menu below 900 px; others keep 640 px.
+
+### Employee screen (`/report`)
+
+One column, up to 720 px wide: the form header and the form cards. A manager who arrives from the table sees a "Back to the dashboard" link above the form. The form shows exactly the counts and targets of that seat, 1 to 8 counts, each with a colour dot that matches the bars on the slides.
+
+### Notes and target comments: their own words
+
+There are no suggestion chips. The form has free text only.
+
+- **Notes:** three boxes (the kinds shown on the slides). Each box has 3 point fields. A point is 1 to 70 characters, with a live counter. Empty fields are ignored, order is kept. The 70 character limit keeps every slide from overflowing.
+- **Target comment:** under Met, Partly and Missed each target has an optional comment, up to 200 characters, with a counter. A comment typed before a status is picked is kept and joins the status once one is chosen.
+- Comments are not on the slides. The manager reads them on the Overview ("What people wrote").
+
+### Overview (`/manager`)
+
+A period picker and four tiles, then the charts. Everything counts submitted reports only. Two columns from 1100 px, one below. Every chart has a text alternative with its numbers.
+
+| Section | What it shows | Where the numbers come from |
+| --- | --- | --- |
+| Tiles | Reports in ("N of M"), Targets met (percent of answered targets), Volume (all counts added), People missing | `expected` is the active seats, `submitted` the submitted reports of the period. |
+| Who has reported | Per team, sent against still missing | `teams[].submitted` and `expected`. |
+| How targets went | Per team, met, partly met, missed | The status of every target answer in submitted reports. |
+| Volume by month | Per team, the three months of the period | The sum of all counts of a team per month. |
+| Biggest counts | Counts ranked by total, with a dropdown to look at one count by month and by team | Counts with the same name (ignoring case) are added across seats. |
+| Trend over periods | Reports sent and targets met for the shown period and up to 5 earlier ones | `trend`, oldest first. Expected for older periods is the active seats now. |
+| People | Table, sortable by header click, people who have not sent first | `people`, one row per seat. |
+| What people wrote | Notes and target comments, 5 shown, "Show all N" for the rest | The free text of submitted reports. |
+
+With no reports in the period the page explains it and shows only "Who has reported" and the People table. The summary reloads when the period changes, and shortly after a report is sent or the catalog changes. Data comes from `GET /api/summary` (see the API README); demo mode computes the same numbers in memory (`lib/domain/summary_compute.dart`).
+
+### Reports (`/manager/reports`)
+
+- At 1100 px wide or more, the slides are on the left and the table column on the right.
+  - Left: a pinned header card with the title, **Generate** / **Regenerate**, **Export** (once a deck exists), the meeting date and a jump menu. Below it is one continuous vertical list of every slide in deck order: the cover, then for each team a divider and two slides per person, then one Suggestions page at the very end. A deck of 14 reports and 4 teams has 1 + 4 + 28 + 1 = 34 slides.
+  - Right: the Period card and the "Reports received" table, in a column that scrolls on its own.
+- Below 1100 px everything is one column: the table column first, then the preview header, then the slides.
+- The jump menu is a dropdown plus Previous slide and Next slide buttons.
+- The slide list is lazy: only the slides near the screen are built.
+- Slide A (counts) lays out 1 to 8 counts: the totals row wraps (3 per row from 4 counts), and bars, numbers and labels shrink as the count grows. 1 to 3 counts look as before.
+
+### Deck text (`/manager/deck`)
+
+The "Slide text" screen is where the manager writes the words of the deck. Every text a manager may want to change is a field here.
+
+- A period picker at the top. Words are kept **per period**.
+- Fields sit in cards by group. Each field has a label, help, a character counter, placeholder chips (press one to insert it), a plain-words error and **Reset** (back to the built-in default). Save is disabled while a field is invalid or nothing changed. **Reset all to defaults** resets every field.
+- A banner says where the words come from: "These words were carried over from Feb to Apr 2026." or "Built-in words. Nobody has changed them yet."
+- On a wide screen a **draft preview** sits beside the form, below it on a narrow one. It renders five slides (cover, one divider, KPI, results, suggestions) with the unsaved words. A field that has an error keeps its saved words in the preview. Without a deck it uses a sample person, labelled "Sample data".
+- After Save: "Saved. Regenerate the slides to use these words."
+
+Fields (key, label, limit in characters, allowed placeholders). All are required except where noted.
+
+| Group | Key | Label | Max | Placeholders |
+| --- | --- | --- | --- | --- |
+| Cover | `title` | Meeting title (also in footer and dividers) | 80 | `{period}` |
+| Cover | `subtitle` | Subtitle | 120 | `{period}` |
+| Cover | `dateText` | Date line (may be empty) | 60 | none |
+| Cover | `orgName` | Organisation name | 40 | none |
+| Cover | `coverPill` | Team label on the cover | 60 | `{team}` `{count}` |
+| Person slides | `kpiEyebrow` | KPI slide, small line | 120 | `{org}` `{title}` `{period}` `{name}` `{role}` `{team}` |
+| Person slides | `kpiTitle` | KPI slide, title | 120 | same six |
+| Person slides | `kpiBadge` | KPI slide, badge | 40 | `{met}` `{total}` |
+| Person slides | `resultsEyebrow` | Results slide, small line | 120 | same six as KPI |
+| Person slides | `resultsTitle` | Results slide, title | 120 | same six |
+| Person slides | `highlightsTitle`, `lowlightsTitle`, `nextTitle` | Column titles | 30 | none |
+| Person slides | `emptyNote` | Text for an empty column | 40 | none |
+| Person slides | `footer` | Footer | 120 | `{title}` `{org}` `{period}` `{team}` |
+| Dividers | `dividerEyebrow` | Divider, small line | 120 | `{title}` `{period}` `{i}` `{n}` |
+| Dividers | `dividerTitle` | Divider, title | 60 | `{team}` |
+| Dividers | `dividerSubtitle` | Divider, line under the title | 120 | `{k}` `{reports}` `{team}` |
+| Suggestions | `suggestionsTitle` | Page title | 60 | none |
+| Suggestions | `suggestionsBody` | Page text (may be empty, may have line breaks) | 400 | none |
+
+Placeholders are a closed list, all lowercase in braces. A field accepts only the ones in its row; any other is refused with a message such as "{name} cannot be used in Meeting title. It allows {period}." (or "It allows no placeholders.").
+
+| Placeholder | Meaning |
+| --- | --- |
+| `{org}` | The organisation name field. |
+| `{title}` | The meeting title, with its own `{period}` filled in. |
+| `{period}` | Period label, for example "Feb to Apr 2026". |
+| `{name}` | The person's name. |
+| `{role}` | The seat's role title. |
+| `{team}` | The team name. |
+| `{met}` | Number of targets met on that report. |
+| `{total}` | Number of targets of that seat. |
+| `{count}` | Number of reports in the team (cover label). |
+| `{i}` | Position of the team in the deck, starting at 1. |
+| `{n}` | Number of teams. |
+| `{k}` | Number of reports in the team (divider). |
+| `{reports}` | "report" when `{k}` is 1, else "reports". |
+
+Details:
+
+- **Date line.** When `dateText` is empty the cover shows the meeting date of the period, like `TUESDAY 09 JUNE 2026`, or nothing when the period has no meeting date. When it has words, those words replace the date. The slide shows it in capitals.
+- **Carry forward.** A period with no words of its own uses the words of the latest earlier period, else the built-in defaults. Saving in a period gives that period its own words.
+- **Defaults.** `docs/reference/deck_text_defaults.json` is the single source of the keys, defaults, placeholders and limits. `DeckTexts.defaults` (`lib/domain/deck_text.dart`) must equal it; a test checks that. The API keeps a byte-identical copy.
+- A seat with no targets still shows "KPI · no targets" in the badge, whatever `kpiBadge` says.
+- Long words shrink to fit, then end with an ellipsis, so nothing runs out of the 1920x1080 slide.
+
+### Suggestions page
+
+The last slide of every deck is one Suggestions page, after the last team. It is a placeholder: a navy page with the period label, the title, a dashed box with the page text (default "Suggestions will be added here.") and the footer. Real suggestions are future work, not in scope yet. The page is in the preview, the jump menu and all exports (PDF page, PPTX slide, PNG).
+
+### The preview is faithful
+
+What the manager sees is what the exports contain, by construction and by test.
+
+1. **Frozen words and data.** Generate freezes the report data and the effective words (`DeckRun.texts`) into the deck run. The preview and exports read only that frozen deck.
+2. **One function draws slides.** `slideFor` (`lib/features/slides/slide_view.dart`) turns a slide spec (which carries the words) into a widget. The preview stream, the draft preview, the PNG and PDF export and the PPTX pictures all call it. Alt text and notes come from `slideAltText` of the same specs.
+3. **Tests.** `test/faithful_test.dart` compares preview and export pixels for all 34 slides (a few anti-aliased edge pixels may differ; the test allows at most 1000 pixels and 24 of 255 levels), PPTX alt text and notes, the PNG zip, the PDF (34 pages of 1920x1080), and that changing words later does not change a built deck. `test/deck_text_test.dart` covers rendering, validation and the defaults file. `test/deck_text_ui_test.dart` covers the screen. Goldens in `test/goldens` cover long words and the Suggestions page.
+
+### Stale notice and Regenerate
+
+Editing words never changes a deck that already exists. When the saved words differ from the words frozen in the latest deck, the manager sees "Slide text changed after this deck was generated. Regenerate to apply it." above the **Regenerate slides** button on the Reports page. Press Regenerate to freeze the new words (and the latest reports) into a new deck. Old decks keep their words forever.
+
+### Fixing someone's report (manager)
+
+In the "Reports received" table press **Edit** on the row. The report is loaded into the form and the app opens `/report`. Change it and send; the manager may write for any seat, and also into a closed period. Then press "Back to the dashboard". Regenerate the deck to pick up the change.
+
+### People (`/manager/people`)
+
+This is where the catalog is built and kept.
+
+- **Teams:** add, rename, delete. A team that still has seats cannot be deleted ("Move or remove the seats of this team first.").
+- **People:** add a person (name, email, Employee or Manager). Deactivate a person with the Active switch: they can no longer sign in and every token of theirs stops working at once. Their old reports stay. Inactive people and seats are hidden until you turn on the inactive switch.
+- **Seats:** a seat is a person in a team with a role title. A person can have several seats. A deactivated seat is no longer expected in any period; its old reports stay.
+- **Counts and targets:** "What they count" on a seat opens the definitions editor.
+  - Counts: up to 8 (a seat with none has nothing to count on its form), each named by you (a seat can have just "Sea", or "Sea", "Air", "Road" and so on), name 1 to 60 characters, unique ignoring case. The order is the order on the form and the slides; use the up and down buttons.
+  - Targets: up to 20, text 1 to 200 characters.
+  - Removing a count or target, or changing the wording of a target, **retires** the old one instead of deleting it. Old reports keep the counts and the wording they were answered against. New forms and new periods use the new list.
+- **Last manager guard:** you cannot demote or deactivate the last active manager ("There must be at least one manager.").
+
+## First run on an empty database
+
+A fresh database has no catalog. Only the manager from the environment exists.
+
+1. In `xynotransit-db/.env` set `BOOTSTRAP_CONTROLLER_EMAIL` and, if you like, `BOOTSTRAP_CONTROLLER_NAME`. Without a name the app uses the part of the email before the `@`, capitalised.
+2. Build the web app and start the stack (see Quick start). At API start the manager is created (or promoted and activated when already there).
+3. Open http://127.0.0.1:8080, sign in with that email, read the link in Mailpit (http://127.0.0.1:8025). You land on Overview, which says nobody is expected yet.
+4. Open **People**. Add a team, then a person, then a seat (team and role title). Open the definitions editor and name the counts and write the targets.
+5. Tell the person to sign in with their email. They land on their form.
+
+## Loading the optional example catalog
+
+`xynotransit-db/examples/` holds `10-seed.sql` (4 teams, 13 people, seats, counts, targets) and `20-seed-demo.sql` (14 demo reports). They are not loaded automatically. See `xynotransit-db/examples/README.md` for the commands. They create a person for `shalini@xynotransit.example`.
+
+## Architecture
+
+```
+Browser (Flutter web)
+   |  same origin, http://127.0.0.1:8080
+   v
+nginx (web container)        serves build/web, falls back to index.html
+   |  /api/ proxied (no buffering on /api/events)
+   v
+axum API (api container, port 8081)    all authorization lives here
+   |  sqlx                       |  SMTP
+   v                             v
+Postgres 18 (db container)    Mailpit (dev mail catcher, UI on 127.0.0.1:8025)
+   |
+   +-- NOTIFY xt_changes --> API listener --> Server-Sent Events --> browser
+```
+
+- Only the API talks to Postgres. There is no row level security.
+- Sign-in is an emailed magic link. No passwords, no open sign-up.
+- Live updates use Server-Sent Events (SSE). If SSE fails, the app polls every 5 seconds.
+
+## Quick start with the Docker stack
+
+Needs Docker with compose, and Flutter (`export PATH="$HOME/projects/flutter/bin:$PATH"`).
+
+```bash
+# 1. Build the web app. The stack serves ../xynotransit_app/build/web.
+cd ~/projects/xynotransit_app
+flutter pub get
+flutter build web --release --no-web-resources-cdn --dart-define=API_BASE_URL=/api
+
+# 2. Start db, api, mailpit and web.
+cd ~/projects/xynotransit-db
+cp .env.example .env        # first time only; set BOOTSTRAP_CONTROLLER_EMAIL
+./scripts/up.sh             # same as: docker compose up -d --build
+```
+
+Then:
+
+1. Open http://127.0.0.1:8080.
+2. Type the manager email (the value of `BOOTSTRAP_CONTROLLER_EMAIL`) and press "Send me a link".
+3. Open Mailpit at http://127.0.0.1:8025, open the mail and click the link. A link works once and expires after 15 minutes. You land on `/manager`.
+4. Build the catalog in People (see First run below). With the optional example data loaded, pick Feb 2026 in the period dropdown to see 14 submitted reports.
+
+To try an employee, add a person in People and sign in with that email. They land on `/report` and see only their form.
+
+Always build with `--no-web-resources-cdn`: it bundles CanvasKit and fonts so the page works behind the nginx CSP and offline (without it the page stays blank because the engine is fetched from gstatic.com).
+
+After changing Flutter code, run the build again. nginx mounts `build/web` read only, so no image rebuild is needed.
+
+## Demo mode
+
+Without `API_BASE_URL` the app runs on in-memory data: the example catalog and 14 demo reports for Feb to Apr 2026. Nothing is saved after a reload and no server is needed. People, teams, seats, counts and targets can be added and edited in demo mode too, in memory only; a reload brings back the starting data.
+
+```bash
+flutter run -d chrome
+```
+
+- It is on whenever `API_BASE_URL` is empty. `--dart-define=DEMO_MODE=true` forces it even if a URL is set.
+- Use the **Demo:** menu in the app bar to act as any person of the current catalog. Their role comes from their app role: a manager opens `/manager`, an employee opens `/report`. People you add in demo mode appear in the menu. Switching re-evaluates the redirects.
+
+## Configuration
+
+Flutter build time:
+
+| Define | Meaning |
+| --- | --- |
+| `API_BASE_URL` | Base URL of the API, for the compose stack `/api`. Empty means demo mode. |
+| `DEMO_MODE` | `true` forces demo mode. |
+
+API runtime (set in `xynotransit-db/.env`, passed by compose):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DATABASE_URL` | none, required | Postgres connection string. |
+| `JWT_SECRET` | none, required | HS256 signing secret, at least 32 characters. |
+| `PUBLIC_URL` | `http://127.0.0.1:8080` | Origin used in magic links. |
+| `SMTP_HOST` | `mailpit` | SMTP server. |
+| `SMTP_PORT` | `1025` | SMTP port. |
+| `MAIL_FROM` | `Xynotransit <no-reply@xynotransit.local>` | Sender of magic links. |
+| `BIND` | `0.0.0.0:8081` | Listen address. |
+| `BOOTSTRAP_CONTROLLER_EMAIL` | empty | At start, this person is created as an active controller when missing, or promoted and activated. |
+| `BOOTSTRAP_CONTROLLER_NAME` | empty | Name used when the person is created. Default: the part of the email before the `@`, capitalised. |
+| `LOG_MAGIC_LINKS` | `false` | `true` logs the link at info level. Dev only. |
+| `RUST_LOG` | `info` | Log level. |
+| `POSTGRES_PASSWORD` | `xynotransit` | Used by compose for db and the API URL. |
+
+## Going to production
+
+- Use a real SMTP server: set `SMTP_HOST`, `SMTP_PORT`, `MAIL_FROM`. Remove the Mailpit service.
+- Set `JWT_SECRET` to a long random value (for example `openssl rand -hex 32`).
+- Put TLS in front (a reverse proxy or load balancer) and set `PUBLIC_URL` to the https origin, so magic links point to it.
+- Set `BOOTSTRAP_CONTROLLER_EMAIL` to the real controller.
+- Do not load `xynotransit-db/examples/` (placeholder people and demo reports). Add real people in People.
+- Set `LOG_MAGIC_LINKS=false`, change `POSTGRES_PASSWORD`, and do not publish the db port.
+
+## The deck snapshot
+
+The deck is not built live. It freezes the slide words as well as the data. **Generate** (and later **Regenerate**) asks the API to freeze the submitted reports of the period into a snapshot, built on the server in deck order (team sort, then assignment sort). The preview and every export read that snapshot, so the deck does not change under you when someone resends a report. Press Regenerate to freeze the latest submitted reports into a new snapshot and pick up newer ones. Only a manager (controller) can do this.
+
+## Exports
+
+Every export includes the Suggestions page (34 slides for 14 reports). File names and the PDF and PPTX titles use the rendered meeting title.
+
+- **PDF**: one page per slide.
+- **PPTX**: every slide is a full-bleed picture, with alt text and speaker notes.
+- **PNG**: a ZIP with one PNG per slide.
+
+## Offline behaviour
+
+- The form keeps a draft in `shared_preferences`, so a reload or a closed tab loses nothing.
+- If sending fails (no network), the report is queued and retried every 15 seconds until it goes through.
+- The sign-in token is also kept in `shared_preferences`. If the network is down at start, the last known person is used.
+
+## Who can call what (API)
+
+| Endpoint | Employee | Manager |
+| --- | --- | --- |
+| `POST /api/auth/magic-link`, `POST /api/auth/verify` | open | open |
+| `GET /api/me`, `GET /api/catalog` | yes (active rows only, other people's emails hidden) | yes (all emails; `?include_inactive=true` adds inactive rows) |
+| `POST/PATCH/DELETE` teams, `POST/PATCH` persons and assignments, `PUT /api/assignments/{id}/definitions` | no | yes |
+| `GET /api/summary` | no | yes |
+| `POST /api/periods/ensure` | yes | yes |
+| `PATCH /api/periods/{id}` (meeting date) | no | yes |
+| `GET /api/periods/{id}/reports` (all reports) | no | yes |
+| `GET /api/periods/{id}/reports/{assignment}` | own seat only | any |
+| `PUT /api/periods/{id}/reports/{assignment}` (send) | own seat only, not in a closed period | any seat, also closed |
+| `GET` and `POST /api/periods/{id}/deck` | no | yes |
+| `GET` and `PUT /api/periods/{id}/deck-text` | no | yes |
+| `POST /api/events/ticket`, `GET /api/events` | no | yes |
+
+## Security model
+
+- Authorization is in the API, not in the database. The JWT only proves who you are. The role is re-read from the database on every request, so demoting or deactivating someone takes effect at once.
+- Only an active person can sign in. A deactivated person gets 401 on every request at once. Unknown addresses get the same answer as known ones, so addresses cannot be probed.
+- Magic link tokens are 32 random bytes. Only their SHA-256 is stored. A link is single use and valid 15 minutes.
+- Rate limit: at most 5 links per person per hour.
+- An employee (contributor) can read and send only their own report. Only a manager (controller) can generate decks, set the meeting date, or write into a closed period.
+- The UI split is enforced by the API too: the list of reports, the deck (read and generate), the slide texts (read and save) and live events (ticket and stream) are controller only and return 403 to employees.
+- In the catalog, person emails are `null` for an employee, except their own. A manager gets all emails.
+- Live updates use a short ticket (60 seconds, single use, bound to the person), because EventSource cannot send headers.
+- Errors never show SQL; details are logged on the server.
+
+## Tests
+
+```bash
+export PATH="$HOME/projects/flutter/bin:$PATH"
+flutter analyze
+flutter test
+flutter test --update-goldens     # only after an intended visual change
+```
+
+API tests (need the db container running, see the API README):
+
+```bash
+cd ../xynotransit-api && cargo test
+```
+
+## Seed generator
+
+`xynotransit-db/examples/10-seed.sql` (catalog) and `20-seed-demo.sql` (14 demo reports) are generated from `lib/data/seed_data.dart` and `lib/data/demo_data.dart`, which also feed demo mode. Do not edit them by hand. After changing the data, run from this folder:
+
+```bash
+dart run tool/gen_seed.dart
+```
+
+They are not loaded automatically; see `xynotransit-db/examples/README.md`.
+
+## Folder layout
+
+```
+xynotransit_app/            this Flutter app
+  lib/domain                models (report, period, deck, catalog, snapshot)
+  lib/data                  Repository and AuthService interfaces, MemoryRepository (demo), seed data
+  lib/data/api              ApiRepository, ApiAuthService, JSON mapping, SSE (web and stub)
+  lib/features              employee (report screen), manager (reports, people page), deck_text (Slide text screen and draft preview), summary (overview dashboard and charts), admin (People screen and editors), form, table, preview, slides (1920x1080 widgets), export, shell (top bar), sign-in, verify
+  lib/core                  theme tokens, shared widgets, formatting
+  lib/app                   bootstrap, config, providers
+  assets/fonts              bundled fonts (DM Sans, IBM Plex Mono)
+  test                      unit, widget, API and golden tests (test/goldens)
+  tool/gen_seed.dart        seed generator
+  docs                      ASSUMPTIONS.md, reference/schema.sql, reference/deck_text_defaults.json
+  web                       index.html, manifest, icons
+xynotransit-api/            Rust axum backend
+xynotransit-db/             Postgres image, initdb SQL, compose stack, nginx config, scripts
+```
+
+See `docs/ASSUMPTIONS.md` for choices made where the spec was silent.

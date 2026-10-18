@@ -1,0 +1,12 @@
+# Self-contained stack: nothing is needed on the host except Docker.
+# The web image builds the Flutter app itself.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.full.yml up -d --build
+#
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: xynotransit-db/web/Dockerfile.full
+    image: xynotransit-web-full
+    volumes: !reset []

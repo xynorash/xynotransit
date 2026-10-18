@@ -1,0 +1,23 @@
+# Self-contained web image: builds the Flutter web app inside Docker, then serves it
+# with nginx. Used by CI and Codespaces, where there is no Flutter on the host.
+# Build context is the repository root (see docker-compose.full.yml).
+FROM debian:bookworm-slim AS flutter
+ARG FLUTTER_VERSION=3.47.7
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git curl ca-certificates unzip xz-utils zip libglu1-mesa \
+ && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch ${FLUTTER_VERSION} https://github.com/flutter/flutter.git /flutter
+ENV PATH=/flutter/bin:$PATH
+RUN flutter config --no-analytics >/dev/null 2>&1 || true \
+ && flutter precache --web
+WORKDIR /app
+COPY xynotransit_app/pubspec.yaml xynotransit_app/pubspec.lock ./
+RUN flutter pub get
+COPY xynotransit_app/ ./
+ARG API_BASE_URL=/api
+RUN flutter build web --release --no-web-resources-cdn --dart-define=API_BASE_URL=${API_BASE_URL}
+
+FROM nginx:alpine
+COPY xynotransit-db/web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY xynotransit-db/web/security-headers.conf /etc/nginx/security-headers.conf
+COPY --from=flutter /app/build/web /usr/share/nginx/html

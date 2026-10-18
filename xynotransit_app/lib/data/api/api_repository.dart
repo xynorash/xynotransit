@@ -1,0 +1,358 @@
+import 'dart:async';
+
+import '../../domain/admin.dart';
+import '../../domain/summary.dart';
+import '../../domain/catalog.dart';
+import '../../domain/enums.dart';
+import '../../domain/deck.dart';
+import '../../domain/deck_text.dart';
+import '../../domain/period.dart';
+import '../../domain/report.dart';
+import '../repository.dart';
+import 'api_client.dart';
+import 'api_models.dart';
+import 'sse.dart';
+
+/// Talks to the axum API. Live data: any change message refetches, with a
+/// polling fallback when the live connection is down.
+class ApiRepository implements Repository {
+  ApiRepository(
+    this._api, {
+    SseSource? sse,
+    bool useDefaultSse = true,
+    this.backoff = defaultBackoff,
+    this.pollInterval = const Duration(seconds: 5),
+    this.debounce = const Duration(milliseconds: 250),
+  }) : _sse = sse ?? (useDefaultSse ? createPlatformSseSource() : null);
+
+  final ApiClient _api;
+  final SseSource? _sse;
+  final Duration Function(int attempt) backoff;
+  final Duration pollInterval;
+  final Duration debounce;
+  final _live = <String, LiveChanges>{};
+
+  @override
+  Future<Catalog> loadCatalog({bool includeInactive = false}) async =>
+      parseCatalog(
+        await _api.get(
+          '/catalog',
+          query: includeInactive ? {'include_inactive': 'true'} : null,
+        ),
+      );
+
+  final _catalogChanged = StreamController<void>.broadcast();
+
+  /// The catalog now, and again after every admin write made through this
+  /// repository. A refetch that fails keeps the last value.
+  @override
+  Stream<Catalog> watchCatalog({bool includeInactive = false}) {
+    late final StreamController<Catalog> out;
+    StreamSubscription<void>? sub;
+    var disposed = false;
+    var busy = false;
+    var dirty = false;
+
+    Future<void> refetch() async {
+      if (busy) {
+        dirty = true;
+        return;
+      }
+      busy = true;
+      do {
+        dirty = false;
+        try {
+          final c = await loadCatalog(includeInactive: includeInactive);
+          if (!disposed) out.add(c);
+        } on NetworkException {
+          // Keep what we have.
+        } on ApiException catch (e) {
+          if (e is UnauthorizedException && !disposed) out.addError(e);
+        }
+      } while (dirty && !disposed);
+      busy = false;
+    }
+
+    out = StreamController<Catalog>(
+      onListen: () async {
+        sub = _catalogChanged.stream.listen((_) => unawaited(refetch()));
+        try {
+          final first = await loadCatalog(includeInactive: includeInactive);
+          if (!disposed) out.add(first);
+        } on Object catch (e) {
+          if (disposed) return;
+          out.addError(e);
+          await out.close();
+        }
+      },
+      onCancel: () {
+        disposed = true;
+        return sub?.cancel();
+      },
+    );
+    return out.stream;
+  }
+
+  Future<T> _written<T>(Future<T> write) async {
+    final v = await write;
+    _catalogChanged.add(null);
+    return v;
+  }
+
+  @override
+  Future<Period> ensurePeriod(DateTime startMonth) async => parsePeriod(
+    await _api.post(
+      '/periods/ensure',
+      body: {
+        'start_month': Period.dateOnly(
+          DateTime(startMonth.year, startMonth.month),
+        ),
+      },
+    ),
+  );
+
+  @override
+  Future<void> setMeetingDate(String periodId, DateTime? date) async {
+    await _api.patch(
+      '/periods/$periodId',
+      body: {'meeting_date': date == null ? null : Period.dateOnly(date)},
+    );
+  }
+
+  Future<List<Report>> _fetchReports(String periodId) async =>
+      parseReports(await _api.get('/periods/$periodId/reports'));
+
+  Future<DeckRun?> _fetchDeck(String periodId) async =>
+      parseDeckOrNull(await _api.get('/periods/$periodId/deck'));
+
+  LiveChanges _liveFor(String periodId) => _live.putIfAbsent(
+    periodId,
+    () => LiveChanges(
+      source: _sse,
+      fetchTicket: () async {
+        final j = asJson(await _api.post('/events/ticket'));
+        return j['ticket'] as String;
+      },
+      buildUrl: (ticket) =>
+          _api.uri('/events', {'ticket': ticket, 'period_id': periodId}),
+      backoff: backoff,
+      pollInterval: pollInterval,
+      debounce: debounce,
+    ),
+  );
+
+  /// The first load may fail loudly. Later refetches keep the last value
+  /// when they fail, and the next change or poll tries again. Refetches never
+  /// overlap: a change during a fetch schedules one more fetch after it.
+  Stream<T> _watch<T>(
+    String periodId,
+    LiveKind own,
+    Future<T> Function() load,
+  ) {
+    late final StreamController<T> out;
+    StreamSubscription<LiveKind>? sub;
+    var disposed = false;
+    var busy = false;
+    var dirty = false;
+
+    Future<void> refetch() async {
+      if (busy) {
+        dirty = true;
+        return;
+      }
+      busy = true;
+      do {
+        dirty = false;
+        try {
+          final v = await load();
+          if (!disposed) out.add(v);
+        } on UnauthorizedException catch (e) {
+          if (!disposed) out.addError(e);
+        } on Exception {
+          // Keep what we have; the next change or poll tries again.
+        }
+      } while (dirty && !disposed);
+      busy = false;
+    }
+
+    Future<void> begin() async {
+      try {
+        final first = await load();
+        if (disposed) return;
+        out.add(first);
+      } on Object catch (e) {
+        if (disposed) return;
+        out.addError(e);
+        await out.close();
+        return;
+      }
+      sub = _liveFor(periodId).stream.listen((kind) {
+        if (kind == LiveKind.all || kind == own) unawaited(refetch());
+      });
+    }
+
+    out = StreamController<T>(
+      onListen: () => unawaited(begin()),
+      onCancel: () {
+        disposed = true;
+        return sub?.cancel();
+      },
+    );
+    return out.stream;
+  }
+
+  @override
+  Stream<List<Report>> watchReports(String periodId) =>
+      _watch(periodId, LiveKind.reports, () => _fetchReports(periodId));
+
+  @override
+  Future<Report?> getReport(String periodId, String assignmentId) async {
+    try {
+      return parseReport(
+        await _api.get('/periods/$periodId/reports/$assignmentId'),
+      );
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  @override
+  Future<Report> sendReport(Report report) async => parseReport(
+    await _api.put(
+      '/periods/${report.periodId}/reports/${report.assignmentId}',
+      body: reportToJson(report),
+    ),
+  );
+
+  @override
+  Stream<DeckRun?> watchDeck(String periodId) =>
+      _watch(periodId, LiveKind.deck, () => _fetchDeck(periodId));
+
+  @override
+  Future<DeckRun> generateDeck(Period period, Catalog catalog) async =>
+      parseDeck(await _api.post('/periods/${period.id}/deck'));
+
+  // ---- Manager only: who reports, on what ----
+
+  @override
+  Future<Team> saveTeam({String? id, required String name}) =>
+      _written(() async {
+        final body = teamToJson(name);
+        return parseTeam(
+          id == null
+              ? await _api.post('/teams', body: body)
+              : await _api.patch('/teams/$id', body: body),
+        );
+      }());
+
+  @override
+  Future<void> deleteTeam(String id) => _written(_api.delete('/teams/$id'));
+
+  @override
+  Future<Person> savePerson({
+    String? id,
+    required String fullName,
+    required String email,
+    required AppRole role,
+    bool active = true,
+  }) => _written(() async {
+    final body = personToJson(
+      fullName: fullName,
+      email: email,
+      role: role,
+      active: active,
+    );
+    if (id != null) {
+      return parsePerson(await _api.patch('/persons/$id', body: body));
+    }
+    final created = parsePerson(
+      await _api.post(
+        '/persons',
+        body: {
+          'full_name': body['full_name'],
+          'email': body['email'],
+          'app_role': body['app_role'],
+        },
+      ),
+    );
+    if (active) return created;
+    return parsePerson(
+      await _api.patch('/persons/${created.id}', body: {'active': false}),
+    );
+  }());
+
+  @override
+  Future<Assignment> saveAssignment({
+    String? id,
+    required String personId,
+    required String teamId,
+    required String roleTitle,
+    bool active = true,
+  }) => _written(() async {
+    if (id != null) {
+      return parseAssignment(
+        await _api.patch(
+          '/assignments/$id',
+          body: {
+            'team_id': teamId,
+            'role_title': roleTitle.trim(),
+            'active': active,
+          },
+        ),
+      );
+    }
+    final created = parseAssignment(
+      await _api.post(
+        '/assignments',
+        body: assignmentToJson(
+          personId: personId,
+          teamId: teamId,
+          roleTitle: roleTitle,
+        ),
+      ),
+    );
+    if (active) return created;
+    return parseAssignment(
+      await _api.patch('/assignments/${created.id}', body: {'active': false}),
+    );
+  }());
+
+  @override
+  Future<Assignment> saveDefinitions(
+    String assignmentId, {
+    required List<MetricInput> metrics,
+    required List<KpiInput> kpis,
+  }) => _written(
+    _api
+        .put(
+          '/assignments/$assignmentId/definitions',
+          body: definitionsToJson(metrics: metrics, kpis: kpis),
+        )
+        .then(parseAssignment),
+  );
+
+  @override
+  Future<Summary> loadSummary(String periodId, {int trend = 6}) async =>
+      parseSummary(
+        await _api.get(
+          '/summary',
+          query: {'period_id': periodId, 'trend': '$trend'},
+        ),
+      );
+
+  @override
+  Future<DeckTextsState> loadDeckTexts(String periodId) async =>
+      parseDeckTextsState(await _api.get('/periods/$periodId/deck-text'));
+
+  @override
+  Future<DeckTextsState> saveDeckTexts(
+    String periodId,
+    DeckTexts texts,
+  ) async => parseDeckTextsState(
+    await _api.put(
+      '/periods/$periodId/deck-text',
+      body: {'settings': texts.toJson()},
+    ),
+  );
+}
