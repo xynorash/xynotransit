@@ -53,17 +53,17 @@ There are no suggestion chips. The form has free text only.
 
 ### Overview (`/manager`)
 
-A period picker and four tiles, then the charts. Everything counts submitted reports only. Two columns from 1100 px, one below. Every chart has a text alternative with its numbers.
+A period picker and four tiles. When reports are missing, a card right under the tiles names who (up to 12 names, then "and N more"). Then the charts. Everything counts submitted reports only. Two columns from 1100 px, one below. Every chart has a text alternative with its numbers.
 
 | Section | What it shows | Where the numbers come from |
 | --- | --- | --- |
-| Tiles | Reports in ("N of M"), Targets met (percent of answered targets), Volume (all counts added), People missing | `expected` is the active seats, `submitted` the submitted reports of the period. |
+| Tiles | Reports in ("N of M"), Targets met (percent of answered targets), Volume (all counts added), People missing | `expected` is the seats where seat and person are both active, `submitted` the submitted reports of the period. |
 | Who has reported | Per team, sent against still missing | `teams[].submitted` and `expected`. |
 | How targets went | Per team, met, partly met, missed | The status of every target answer in submitted reports. |
 | Volume by month | Per team, the three months of the period | The sum of all counts of a team per month. |
-| Biggest counts | Counts ranked by total, with a dropdown to look at one count by month and by team | Counts with the same name (ignoring case) are added across seats. |
+| Biggest counts | The 8 counts with the highest totals (one colour, each bar is named), with a dropdown to look at one count by month and by team | Counts with the same name (ignoring case) are added across seats. |
 | Trend over periods | Reports sent and targets met for the shown period and up to 5 earlier ones | `trend`, oldest first. Expected for older periods is the active seats now. |
-| People | Table, sortable by header click, people who have not sent first | `people`, one row per seat. |
+| People | Table, sortable by header click, people who have not sent first. A search box (name, role, team) and a "Missing only" filter; 100 rows show first, then "Show N more" | `people`, one row per seat. |
 | What people wrote | Notes and target comments, 5 shown, "Show all N" for the rest | The free text of submitted reports. |
 
 With no reports in the period the page explains it and shows only "Who has reported" and the People table. The summary reloads when the period changes, and shortly after a report is sent or the catalog changes. Data comes from `GET /api/summary` (see the API README); demo mode computes the same numbers in memory (`lib/domain/summary_compute.dart`).
@@ -73,10 +73,14 @@ With no reports in the period the page explains it and shows only "Who has repor
 - At 1100 px wide or more, the slides are on the left and the table column on the right.
   - Left: a pinned header card with the title, **Generate** / **Regenerate**, **Export** (once a deck exists), the meeting date and a jump menu. Below it is one continuous vertical list of every slide in deck order: the cover, then for each team a divider and two slides per person, then one Suggestions page at the very end. A deck of 14 reports and 4 teams has 1 + 4 + 28 + 1 = 34 slides.
   - Right: the Period card and the "Reports received" table, in a column that scrolls on its own.
+- The "Reports received" card counts only seats that are expected: the seat and its person are both active (same rule as the Overview tiles and the API). Who is still missing is listed first, above the table. A search box appears from 7 reports. On a phone (under 500 px) each report is a stacked block with all its columns, with no sideways scrolling.
+- **Export data (CSV)** (above the table) downloads the sent reports of the shown period as one long table, ready for Excel: columns Period, Team, Person, Role, Seat, Type, Item, Month, Value, Status, Text, Sent at. Types: Count (one row per count and month), Target (status and comment), Note, and Missing (a seat with no sent report). UTF-8 with a byte order mark, CRLF lines, quoted cells, a leading apostrophe on text that starts with = + - @ or a tab. File name: `Xynotransit_reports_Feb_to_Apr_2026.csv`.
 - Below 1100 px everything is one column: the table column first, then the preview header, then the slides.
 - The jump menu is a dropdown plus Previous slide and Next slide buttons.
 - The slide list is lazy: only the slides near the screen are built.
-- Slide A (counts) lays out 1 to 8 counts: the totals row wraps (3 per row from 4 counts), and bars, numbers and labels shrink as the count grows. 1 to 3 counts look as before.
+- Slide A (counts) lays out 1 to 8 counts: the totals sit 3 to a row up to 6 counts and 4 to a row for 7 and 8 counts, and bars, numbers and labels shrink as the count grows, but no text goes below 20 px (18 px for the value labels of the bars). 1 to 3 counts look as before.
+- Slide B (targets): up to 6 targets sit in one column; 7 to 10 targets, and 6 long ones that do not fit, switch to a two-column grid of compact cards. A text that still does not fit ends with an ellipsis (the full text stays in the alt text and notes).
+- A cover or divider with more team pills than fit ends with one last pill, "+N more".
 
 ### Deck text (`/manager/deck`)
 
@@ -162,11 +166,11 @@ In the "Reports received" table press **Edit** on the row. The report is loaded 
 This is where the catalog is built and kept.
 
 - **Teams:** add, rename, delete. A team that still has seats cannot be deleted ("Move or remove the seats of this team first.").
-- **People:** add a person (name, email, Employee or Manager). Deactivate a person with the Active switch: they can no longer sign in and every token of theirs stops working at once. Their old reports stay. Inactive people and seats are hidden until you turn on the inactive switch.
+- **People:** add a person (name, email, Employee or Manager). Deactivate a person with the Active switch: they can no longer sign in and every token of theirs stops working at once. Their old reports stay. Inactive people and seats are hidden until you turn on the inactive switch. The dialog explains what saving an inactive person does and how to undo it (turn Active on and save). The page has a search (name, email, role), a team filter and a sort (order set up, name, role), and builds only the rows near the screen, so a catalog of 300 people stays fast. Deleting a team asks first; a team that still has seats is refused with a message.
 - **Seats:** a seat is a person in a team with a role title. A person can have several seats. A deactivated seat is no longer expected in any period; its old reports stay.
 - **Counts and targets:** "What they count" on a seat opens the definitions editor.
   - Counts: up to 8 (a seat with none has nothing to count on its form), each named by you (a seat can have just "Sea", or "Sea", "Air", "Road" and so on), name 1 to 60 characters, unique ignoring case. The order is the order on the form and the slides; use the up and down buttons.
-  - Targets: up to 20, text 1 to 200 characters.
+  - Targets: up to 10, text 1 to 200 characters.
   - Removing a count or target, or changing the wording of a target, **retires** the old one instead of deleting it. Old reports keep the counts and the wording they were answered against. New forms and new periods use the new list.
 - **Last manager guard:** you cannot demote or deactivate the last active manager ("There must be at least one manager.").
 
@@ -289,7 +293,7 @@ The deck is not built live. It freezes the slide words as well as the data. **Ge
 Every export includes the Suggestions page (34 slides for 14 reports). File names and the PDF and PPTX titles use the rendered meeting title.
 
 - **PDF**: one page per slide.
-- **PPTX**: every slide is a full-bleed picture, with alt text and speaker notes.
+- **PPTX**: every slide is a full-bleed picture of 3840 x 2160 (twice the slide size), with alt text, and speaker notes that hold the full content of the slide, one fact per line.
 - **PNG**: a ZIP with one PNG per slide.
 
 ## Offline behaviour

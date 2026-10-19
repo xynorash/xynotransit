@@ -2,8 +2,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::config::SmtpSecurity;
 use lettre::{
     message::{header::ContentType, Mailbox},
+    transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 
@@ -16,22 +18,39 @@ pub struct SentMail {
 #[derive(Clone)]
 pub enum Mailer {
     Smtp {
-        transport: AsyncSmtpTransport<Tokio1Executor>,
+        transport: Box<AsyncSmtpTransport<Tokio1Executor>>,
         from: Mailbox,
     },
     Capture(Arc<Mutex<Vec<SentMail>>>),
 }
 
 impl Mailer {
-    pub fn smtp(host: &str, port: u16, from: &str) -> anyhow::Result<Self> {
+    pub fn smtp(
+        host: &str,
+        port: u16,
+        from: &str,
+        security: SmtpSecurity,
+        credentials: Option<(String, String)>,
+    ) -> anyhow::Result<Self> {
         let from: Mailbox = from
             .parse()
             .map_err(|_| anyhow::anyhow!("MAIL_FROM is not a valid address"))?;
-        let transport = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
+        let builder = match security {
+            SmtpSecurity::None => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host),
+            SmtpSecurity::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)?,
+            SmtpSecurity::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(host)?,
+        };
+        let mut builder = builder
             .port(port)
-            .timeout(Some(std::time::Duration::from_secs(10)))
-            .build();
-        Ok(Mailer::Smtp { transport, from })
+            .timeout(Some(std::time::Duration::from_secs(10)));
+        if let Some((user, pass)) = credentials {
+            builder = builder.credentials(Credentials::new(user, pass));
+        }
+        let transport = builder.build();
+        Ok(Mailer::Smtp {
+            transport: Box::new(transport),
+            from,
+        })
     }
 
     pub fn capture() -> Self {

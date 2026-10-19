@@ -404,9 +404,9 @@ void main() {
       'navy on paper pill': (SlidePalette.navy, SlidePalette.paper),
       'navy on white pill': (SlidePalette.navy, SlidePalette.white),
       'orange on navy (cover date)': (SlidePalette.orange, SlidePalette.navy),
-      'targets-only met': (const Color(0xFF5FD3B0), SlidePalette.navy),
-      'targets-only partly': (const Color(0xFFF0C24A), SlidePalette.navy),
-      'targets-only missed': (const Color(0xFFF0933A), SlidePalette.navy),
+      'targets-only met': (SlidePalette.metOnNavy, SlidePalette.navy),
+      'targets-only partly': (SlidePalette.partlyOnNavy, SlidePalette.navy),
+      'targets-only missed': (SlidePalette.missedOnNavy, SlidePalette.navy),
       for (var i = 0; i < SlidePalette.series.length; i++)
         'series $i on navy': (SlidePalette.series[i], SlidePalette.navy),
     };

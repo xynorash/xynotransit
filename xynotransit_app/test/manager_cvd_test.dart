@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:flutter/material.dart' show Colors;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xynotransit_app/core/theme/tokens.dart';
 import 'package:xynotransit_app/features/slides/palette.dart';
@@ -67,16 +69,48 @@ double minDistance(List<Color> colors, String sim) {
   return best;
 }
 
+double _contrast(Color a, Color b) {
+  final la = a.computeLuminance(), lb = b.computeLuminance();
+  return (math.max(la, lb) + 0.05) / (math.min(la, lb) + 0.05);
+}
+
 void main() {
   final series = [for (var i = 0; i < 8; i++) seriesColor(i)];
   final status = [SlidePalette.met, SlidePalette.partly, SlidePalette.missed];
+  final onNavy = [
+    SlidePalette.metOnNavy,
+    SlidePalette.partlyOnNavy,
+    SlidePalette.missedOnNavy,
+  ];
   for (final sim in _sims.keys) {
-    test('report distances $sim', () {
-      // ignore: avoid_print
-      print(
-        '$sim series=${minDistance(series, sim).toStringAsFixed(1)} '
-        'status=${minDistance(status, sim).toStringAsFixed(1)}',
-      );
+    test('series colours stay apart under $sim (Lab distance >= 12)', () {
+      expect(minDistance(series, sim), greaterThanOrEqualTo(12));
+    });
+    test('status colours on slide cards stay apart under $sim', () {
+      expect(minDistance(status, sim), greaterThanOrEqualTo(12));
+    });
+    test('status colours on the navy panel stay apart under $sim', () {
+      expect(minDistance(onNavy, sim), greaterThanOrEqualTo(12));
     });
   }
+
+  test('series 1 to 3 keep the blue, orange and green look', () {
+    expect(series[0], const Color(0xFF6FB1FF));
+    expect(series[1], const Color(0xFFF0933A));
+    expect(series[2], const Color(0xFF5FD3B0));
+  });
+
+  test('every series colour reads on navy (text 4.5, bars 3)', () {
+    for (final c in series) {
+      expect(_contrast(c, SlidePalette.navy), greaterThanOrEqualTo(4.5));
+      expect(_contrast(c, const Color(0xFF0D1526)), greaterThanOrEqualTo(4.5));
+    }
+  });
+
+  test('status chips: white text reads on each colour', () {
+    for (final c in status) {
+      expect(_contrast(Colors.white, c), greaterThanOrEqualTo(4.5));
+      expect(_contrast(c, SlidePalette.card), greaterThanOrEqualTo(4.5));
+    }
+  });
 }

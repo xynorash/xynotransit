@@ -21,6 +21,13 @@ class PeopleTableCard extends StatefulWidget {
 class _PeopleTableCardState extends State<PeopleTableCard> {
   PeopleSort _sort = PeopleSort.status;
   bool _ascending = true;
+  String _query = '';
+  bool _missingOnly = false;
+  int _limit = _pageSize;
+
+  /// Rows built at first; the rest wait behind a button so 300 people stay
+  /// quick to scroll.
+  static const _pageSize = 100;
 
   static const _minWidth = 600.0;
 
@@ -56,7 +63,18 @@ class _PeopleTableCardState extends State<PeopleTableCard> {
       return signed != 0 ? signed : a.$1.compareTo(b.$1);
     }
 
-    return ([...indexed]..sort(cmp)).map((e) => e.$2).toList();
+    final q = _query.trim().toLowerCase();
+    return ([...indexed]..sort(cmp))
+        .map((e) => e.$2)
+        .where((p) => !_missingOnly || !p.submitted)
+        .where(
+          (p) =>
+              q.isEmpty ||
+              p.name.toLowerCase().contains(q) ||
+              p.role.toLowerCase().contains(q) ||
+              p.team.toLowerCase().contains(q),
+        )
+        .toList();
   }
 
   static double _rate(PersonSummary p) {
@@ -68,7 +86,8 @@ class _PeopleTableCardState extends State<PeopleTableCard> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final rows = _sorted();
+    final all = _sorted();
+    final rows = all.take(_limit).toList();
     final missing = widget.people.where((p) => !p.submitted).length;
     return ChartCard(
       title: 'People',
@@ -88,18 +107,93 @@ class _PeopleTableCardState extends State<PeopleTableCard> {
                   children: [
                     _header(context),
                     for (final p in rows) _PersonRow(person: p),
+                    if (all.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 20),
+                        child: Text(
+                          _missingOnly && _query.trim().isEmpty
+                              ? 'Everyone has sent.'
+                              : 'No one matches. Clear the search or show '
+                                    'everyone.',
+                          style: bodyStyle(context, color: t.muted),
+                        ),
+                      ),
+                    if (all.length > rows.length)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: GhostButton(
+                            key: const ValueKey('people-show-more'),
+                            label:
+                                'Show ${all.length - rows.length} more '
+                                '(${rows.length} of ${all.length} shown)',
+                            onPressed: () =>
+                                setState(() => _limit += _pageSize),
+                          ),
+                        ),
+                      ),
                   ],
                 );
+                Widget wrapped = table;
                 // Bigger text needs a wider table.
                 final minWidth =
                     _minWidth * MediaQuery.textScalerOf(context).scale(1);
-                if (c.maxWidth >= minWidth) return table;
-                return SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SizedBox(width: minWidth, child: table),
+                if (c.maxWidth < minWidth) {
+                  wrapped = SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SizedBox(width: minWidth, child: table),
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [_filters(context), wrapped],
                 );
               },
             ),
+    );
+  }
+
+  Widget _filters(BuildContext context) {
+    final search = TextField(
+      key: const ValueKey('people-search'),
+      // Read out as the field's name; the hint vanishes once typing starts.
+      decoration: xInput(context).copyWith(
+        hintText: 'Search by name, role or team',
+        prefixIcon: const Icon(Icons.search),
+      ),
+      onChanged: (v) => setState(() {
+        _query = v;
+        _limit = _pageSize;
+      }),
+    );
+    final only = FilterChip(
+      key: const ValueKey('people-missing-only'),
+      label: const Text('Missing only'),
+      selected: _missingOnly,
+      onSelected: (v) => setState(() {
+        _missingOnly = v;
+        _limit = _pageSize;
+      }),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360, minWidth: 220),
+            child: Semantics(
+              label: 'Search the people table',
+              container: true,
+              child: search,
+            ),
+          ),
+          only,
+        ],
+      ),
     );
   }
 

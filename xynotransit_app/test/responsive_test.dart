@@ -219,7 +219,7 @@ void main() {
     });
   }
 
-  testWidgets('phone: month inputs are stacked and fit 999,999,999', (
+  testWidgets('phone: month inputs are stacked and fit 1,000,000,000', (
     tester,
   ) async {
     // Deliberate change: three columns left about 80 px per box on a phone,

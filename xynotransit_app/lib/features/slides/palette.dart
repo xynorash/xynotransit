@@ -24,16 +24,16 @@ abstract final class SlidePalette {
 
   /// Target totals on the navy panel when a role has no counts.
   static const metOnNavy = Color(0xFF5FD3B0);
-  static const partlyOnNavy = Color(0xFFF0C24A);
-  static const missedOnNavy = Color(0xFFF0933A);
+  static const partlyOnNavy = Color(0xFFFFD86B);
+  static const missedOnNavy = Color(0xFFF27B5B);
 
   static const series = XynoTokens.series;
 
   static Color seriesColor(int i) => series[i % series.length];
 
   static const met = Color(0xFF17785F);
-  static const partly = Color(0xFF8A5A00);
-  static const missed = Color(0xFFB8400A);
+  static const partly = Color(0xFFA15F00);
+  static const missed = Color(0xFFA31F2E);
   static const unanswered = Color(0xFF566175);
 
   static Color statusColor(KpiStatus? s) => switch (s) {

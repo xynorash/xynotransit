@@ -32,7 +32,13 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(changed = n, "bootstrap controller checked");
     }
 
-    let mailer = Mailer::smtp(&config.smtp_host, config.smtp_port, &config.mail_from)?;
+    let mailer = Mailer::smtp(
+        &config.smtp_host,
+        config.smtp_port,
+        &config.mail_from,
+        config.smtp_security,
+        config.smtp_credentials.clone(),
+    )?;
     let bind = config.bind;
     let state = AppState::new(pool.clone(), config, mailer);
     listener::start(pool, state.events.clone()).await;

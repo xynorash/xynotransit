@@ -6,6 +6,7 @@ import '../../core/theme/tokens.dart';
 import '../../core/widgets.dart';
 import '../../domain/admin.dart';
 import '../../domain/catalog.dart';
+import '../../domain/text_rules.dart';
 import '../../domain/enums.dart';
 import 'admin_providers.dart';
 import 'definitions_dialog.dart';
@@ -75,7 +76,7 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
     if (name.isEmpty) {
       return _say('Enter the full name.', true);
     }
-    if (name.length > DefinitionRules.maxName) {
+    if (charCount(name) > DefinitionRules.maxName) {
       return _say(
         'Use ${DefinitionRules.maxName} characters or fewer for the name.',
         true,
@@ -122,7 +123,7 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
       return _seatSay('Choose a team.', true);
     }
     if (title.isEmpty) return _seatSay('Enter the role title.', true);
-    if (title.length > DefinitionRules.maxRoleTitle) {
+    if (charCount(title) > DefinitionRules.maxRoleTitle) {
       return _seatSay(
         'Use ${DefinitionRules.maxRoleTitle} characters or fewer.',
         true,
@@ -256,8 +257,12 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
               contentPadding: EdgeInsets.zero,
               title: Text('Active', style: bodyStyle(context, size: 16)),
               subtitle: Text(
-                'Inactive people cannot sign in and are not expected to '
-                'report. Their old reports stay.',
+                _active
+                    ? 'Inactive people cannot sign in and are not expected to '
+                          'report. Their old reports stay.'
+                    : 'Saving switches this person off: they cannot sign in '
+                          'and are not expected to report. Their old reports '
+                          'stay. To undo, turn Active back on and save.',
                 style: bodyStyle(
                   context,
                   size: 14,

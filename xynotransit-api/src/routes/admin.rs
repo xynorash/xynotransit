@@ -404,7 +404,7 @@ async fn create_assignment(
         return Err(ApiError::bad("Choose a team."));
     }
     let dup: bool = sqlx::query_scalar(
-        "select exists(select 1 from assignment where person_id = $1 and team_id = $2 and role_title = $3)",
+        "select exists(select 1 from assignment where person_id = $1 and team_id = $2 and lower(btrim(role_title)) = lower($3))",
     )
     .bind(person.id)
     .bind(team)
@@ -498,7 +498,7 @@ async fn update_assignment(
     }
     let dup: bool = sqlx::query_scalar(
         "select exists(select 1 from assignment
-                       where person_id = $1 and team_id = $2 and role_title = $3 and id <> $4)",
+                       where person_id = $1 and team_id = $2 and lower(btrim(role_title)) = lower($3) and id <> $4)",
     )
     .bind(person_id)
     .bind(new_team)

@@ -1,0 +1,14 @@
+# Caddy in front of the web container: gets and renews the HTTPS certificate by itself.
+# DOMAIN comes from .env.prod (its DNS A/AAAA record must point at this machine, ports 80 and 443 open).
+{$DOMAIN} {
+	header Strict-Transport-Security "max-age=31536000"
+
+	# flush_interval -1: do not hold back the live update stream (/api/events).
+	reverse_proxy web:80 {
+		flush_interval -1
+	}
+
+	log {
+		output stdout
+	}
+}

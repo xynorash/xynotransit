@@ -48,9 +48,9 @@ class XynoTokens extends ThemeExtension<XynoTokens> {
     soft: Color(0xFFE6EDFA),
     ok: Color(0xFF17785F),
     onOk: Color(0xFFFFFFFF),
-    warn: Color(0xFF8A5A00),
+    warn: Color(0xFF9A5800),
     onWarn: Color(0xFFFFFFFF),
-    bad: Color(0xFFB8400A),
+    bad: Color(0xFFA31F2E),
     onBad: Color(0xFFFFFFFF),
     flash: Color(0xFFDDF3EA),
   );
@@ -74,16 +74,20 @@ class XynoTokens extends ThemeExtension<XynoTokens> {
   );
 
   /// Series colours: blue, orange, green, then five more. Shared by the form
-  /// dots and the slides.
+  /// dots and the slides. Chosen so that every pair stays apart (CIE Lab
+  /// distance of at least 12) for people with red-green or blue-yellow colour
+  /// blindness, with at least 4.5 : 1 contrast on the navy slides and dark
+  /// pages. Colour is never the only sign: bars carry value labels and a
+  /// legend with the count names (test: manager_cvd_test.dart).
   static const series = [
     Color(0xFF6FB1FF),
     Color(0xFFF0933A),
     Color(0xFF5FD3B0),
-    Color(0xFFE879A8),
-    Color(0xFFB59CFF),
-    Color(0xFFF0C24A),
-    Color(0xFF4FC6E0),
-    Color(0xFFA3D45B),
+    Color(0xFFEE616D),
+    Color(0xFFE062D1),
+    Color(0xFF92FF80),
+    Color(0xFFB6DEFC),
+    Color(0xFFD0B168),
   ];
 
   static const sans = 'DM Sans';

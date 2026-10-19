@@ -26,6 +26,7 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
   final Map<String, DateTime?> _seen = {};
   final Set<String> _fresh = {};
   bool _first = true;
+  String _query = '';
 
   void _onReports(List<Report> reports) {
     final rows = reports.where((r) => r.isSubmitted);
@@ -68,15 +69,32 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
       return const XCard(child: SizedBox(height: 60));
     }
 
-    final progress = PeriodProgress.of(reports, catalog.assignments.length);
     final byAssignment = {for (final r in reports) r.assignmentId: r};
+    // A seat counts only when the seat and its person are both active, the
+    // same way the server and the tiles count.
+    final progress = PeriodProgress(
+      expected: catalog.expectedCount,
+      submitted: [
+        for (final a in catalog.assignments)
+          if (catalog.isExpected(a) && byAssignment[a.id] != null) a,
+      ].length,
+    );
     final rows = [
       for (final a in catalog.assignments)
         if (byAssignment[a.id] != null) (a, byAssignment[a.id]!),
     ];
+    final q = _query.trim().toLowerCase();
+    final shown = q.isEmpty
+        ? rows
+        : [
+            for (final (a, r) in rows)
+              if (catalog.labelOf(a).toLowerCase().contains(q) ||
+                  catalog.teamOf(a).name.toLowerCase().contains(q))
+                (a, r),
+          ];
     final missing = [
       for (final a in catalog.assignments)
-        if (byAssignment[a.id] == null) a,
+        if (byAssignment[a.id] == null && catalog.isExpected(a)) a,
     ];
 
     return XCard(
@@ -117,31 +135,6 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
           const SizedBox(height: 12),
           _ProgressBar(fraction: progress.fraction),
           const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerRight,
-            child: CsvExportButton(
-              period: period,
-              catalog: catalog,
-              reports: reports,
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (rows.isEmpty)
-            DashedBox(
-              child: Text(
-                'The table appears here as soon as the first report for this period is sent.',
-                textAlign: TextAlign.center,
-                style: bodyStyle(
-                  context,
-                  size: 15,
-                  color: t.muted,
-                  height: 1.4,
-                ),
-              ),
-            )
-          else
-            _ReportTable(rows: rows, catalog: catalog, fresh: _fresh),
-          const SizedBox(height: 16),
           if (missing.isEmpty)
             Semantics(
               liveRegion: true,
@@ -196,6 +189,54 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
                 ),
               ],
             ),
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerRight,
+            child: CsvExportButton(
+              period: period,
+              catalog: catalog,
+              reports: reports,
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (rows.isEmpty)
+            DashedBox(
+              child: Text(
+                'The table appears here as soon as the first report for this period is sent.',
+                textAlign: TextAlign.center,
+                style: bodyStyle(
+                  context,
+                  size: 15,
+                  color: t.muted,
+                  height: 1.4,
+                ),
+              ),
+            )
+          else ...[
+            if (rows.length > 6) ...[
+              Semantics(
+                label: 'Search the reports',
+                container: true,
+                child: TextField(
+                  key: const ValueKey('reports-search'),
+                  style: bodyStyle(context),
+                  decoration: xInput(
+                    context,
+                    hint: 'Search by name, role or team',
+                  ).copyWith(prefixIcon: const Icon(Icons.search)),
+                  onChanged: (v) => setState(() => _query = v),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (shown.isEmpty)
+              Text(
+                'No report matches "${_query.trim()}".',
+                style: bodyStyle(context, color: t.muted),
+              )
+            else
+              _ReportTable(rows: shown, catalog: catalog, fresh: _fresh),
+          ],
         ],
       ),
     );
@@ -259,7 +300,29 @@ class _ReportTable extends ConsumerWidget {
       clipBehavior: Clip.antiAlias,
       child: LayoutBuilder(
         builder: (context, c) {
-          final width = c.maxWidth < 500 ? 500.0 : c.maxWidth;
+          if (c.maxWidth < 500) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final (a, r) in rows)
+                  _FlashRow(
+                    key: ValueKey(
+                      '${a.id}@${r.submittedAt?.microsecondsSinceEpoch}',
+                    ),
+                    flash: fresh.contains(
+                      '${a.id}@${r.submittedAt?.microsecondsSinceEpoch}',
+                    ),
+                    child: _DataRow(
+                      assignment: a,
+                      report: r,
+                      catalog: catalog,
+                      compact: true,
+                    ),
+                  ),
+              ],
+            );
+          }
+          final width = c.maxWidth;
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SizedBox(
@@ -357,8 +420,10 @@ class _DataRow extends ConsumerWidget {
     required this.assignment,
     required this.report,
     required this.catalog,
+    this.compact = false,
   });
 
+  final bool compact;
   final Assignment assignment;
   final Report report;
   final Catalog catalog;
@@ -369,124 +434,121 @@ class _DataRow extends ConsumerWidget {
     final person = catalog.personOf(assignment);
     final team = catalog.teamOf(assignment);
     const pad = EdgeInsets.symmetric(horizontal: 12, vertical: 12);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          flex: _colPerson,
-          child: Padding(
-            padding: pad,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  person.fullName,
-                  style: bodyStyle(
-                    context,
-                    weight: FontWeight.w700,
-                    height: 1.3,
-                  ),
-                ),
-                Text(
-                  '${team.name} · ${assignment.roleTitle}',
-                  style: bodyStyle(
-                    context,
-                    size: 13,
-                    color: t.muted,
-                    height: 1.3,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                SmallButton(
-                  label: 'Edit',
-                  semanticLabel:
-                      'Edit report of ${person.fullName}, ${assignment.roleTitle}',
-                  onPressed: () => _edit(context, ref),
-                ),
-              ],
+    Widget cell(int flex, Widget child) {
+      final padded = Padding(
+        padding: compact
+            ? const EdgeInsets.symmetric(horizontal: 12, vertical: 6)
+            : pad,
+        child: child,
+      );
+      return compact ? padded : Expanded(flex: flex, child: padded);
+    }
+
+    final cells = [
+      cell(
+        _colPerson,
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              person.fullName,
+              style: bodyStyle(context, weight: FontWeight.w700, height: 1.3),
             ),
-          ),
+            Text(
+              '${team.name} · ${assignment.roleTitle}',
+              style: bodyStyle(context, size: 13, color: t.muted, height: 1.3),
+            ),
+            const SizedBox(height: 6),
+            SmallButton(
+              label: 'Edit',
+              semanticLabel:
+                  'Edit report of ${person.fullName}, ${assignment.roleTitle}',
+              onPressed: () => _edit(context, ref),
+            ),
+          ],
         ),
-        Expanded(
-          flex: _colNumbers,
-          child: Padding(
-            padding: pad,
-            child: assignment.hasCounts
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (final m in assignment.metrics)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: Text.rich(
+      ),
+      cell(
+        _colNumbers,
+        assignment.hasCounts
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final m in assignment.metrics)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Text.rich(
+                        TextSpan(
+                          style: monoStyle(context, size: 13, color: t.ink),
+                          children: [
                             TextSpan(
-                              style: monoStyle(context, size: 13, color: t.ink),
-                              children: [
-                                TextSpan(
-                                  text: '${truncate(m.label, 22)} ',
-                                  style: monoStyle(context, size: 13),
-                                ),
-                                TextSpan(
-                                  text: [
-                                    for (var i = 0; i < 3; i++)
-                                      thousands(report.valueOf(m.id, i)),
-                                  ].join(' · '),
-                                ),
-                              ],
+                              text: '${truncate(m.label, 22)} ',
+                              style: monoStyle(context, size: 13),
                             ),
-                          ),
-                        ),
-                    ],
-                  )
-                : Text('No counts', style: monoStyle(context, size: 13)),
-          ),
-        ),
-        Expanded(
-          flex: _colKpi,
-          child: Padding(
-            padding: pad,
-            child: Wrap(
-              spacing: 4,
-              runSpacing: 4,
-              children: [
-                for (final s in KpiStatus.values)
-                  if (report.kpiCount(s) > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 1,
-                      ),
-                      decoration: BoxDecoration(
-                        color: t.statusFill(s.name),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        '${report.kpiCount(s)} ${s.name}',
-                        style: bodyStyle(
-                          context,
-                          size: 13,
-                          weight: FontWeight.w700,
-                          color: t.statusOn(s.name),
-                          height: 1.4,
+                            TextSpan(
+                              text: [
+                                for (var i = 0; i < 3; i++)
+                                  thousands(report.valueOf(m.id, i)),
+                              ].join(' · '),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-              ],
-            ),
-          ),
+                ],
+              )
+            : Text('No counts', style: monoStyle(context, size: 13)),
+      ),
+      cell(
+        _colKpi,
+        Wrap(
+          spacing: 4,
+          runSpacing: 4,
+          children: [
+            for (final s in KpiStatus.values)
+              if (report.kpiCount(s) > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 1,
+                  ),
+                  decoration: BoxDecoration(
+                    color: t.statusFill(s.name),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '${report.kpiCount(s)} ${s.name}',
+                    style: bodyStyle(
+                      context,
+                      size: 13,
+                      weight: FontWeight.w700,
+                      color: t.statusOn(s.name),
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+          ],
         ),
-        Expanded(
-          flex: _colNotes,
-          child: Padding(
-            padding: pad,
-            child: Text(
-              '${report.noteCount} ${report.noteCount == 1 ? 'point' : 'points'}',
-              style: bodyStyle(context, size: 15, height: 1.3),
-            ),
-          ),
+      ),
+      cell(
+        _colNotes,
+        Text(
+          '${report.noteCount} ${report.noteCount == 1 ? 'point' : 'points'}',
+          style: bodyStyle(context, size: 15, height: 1.3),
         ),
-      ],
-    );
+      ),
+    ];
+    if (compact) {
+      // Phones: one stacked block per report, nothing hidden to the right.
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: cells,
+        ),
+      );
+    }
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: cells);
   }
 
   void _edit(BuildContext context, WidgetRef ref) {

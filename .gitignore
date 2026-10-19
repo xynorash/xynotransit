@@ -8,3 +8,4 @@ target/
 .dart_tool/
 .flutter-plugins*
 *.log
+.env.prod

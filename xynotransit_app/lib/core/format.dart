@@ -1,3 +1,5 @@
+import '../domain/text_rules.dart';
+
 const monthShort = [
   'Jan',
   'Feb',
@@ -65,5 +67,6 @@ String shortDateTime(DateTime d) =>
 /// "14:05".
 String hourMinute(DateTime d) => '${_two(d.hour)}:${_two(d.minute)}';
 
+/// Cuts to [max] characters (code points) and adds an ellipsis.
 String truncate(String s, int max) =>
-    s.length <= max ? s : '${s.substring(0, max)}…';
+    charCount(s) <= max ? s : '${cutChars(s, max)}…';

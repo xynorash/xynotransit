@@ -166,6 +166,11 @@ void main() {
     expect(find.text('Team renamed.'), findsOneWidget);
     expect(find.textContaining('Operations  (0 seats)'), findsOneWidget);
     await tapText(tester, 'Delete');
+    expect(find.text('Delete Operations?'), findsOneWidget);
+    await tapText(tester, 'Keep team');
+    expect(find.text('Team deleted.'), findsNothing);
+    await tapText(tester, 'Delete');
+    await tapText(tester, 'Delete team');
     expect(find.text('Team deleted.'), findsOneWidget);
     expect(find.text('No team yet.'), findsOneWidget);
   });
@@ -474,6 +479,8 @@ void main() {
 
           final edit = find.text('Edit person').first;
           await reveal(tester, edit);
+          await tester.ensureVisible(edit);
+          await tester.pumpAndSettle();
           await tester.tap(edit);
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull);

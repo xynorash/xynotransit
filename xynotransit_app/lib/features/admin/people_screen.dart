@@ -33,6 +33,9 @@ class PeopleScreenBody extends ConsumerStatefulWidget {
 
 class _PeopleScreenBodyState extends ConsumerState<PeopleScreenBody> {
   bool _showInactive = false;
+  String _query = '';
+  String? _teamId;
+  _SeatSort _sort = _SeatSort.setUp;
 
   @override
   Widget build(BuildContext context) {
@@ -42,9 +45,16 @@ class _PeopleScreenBodyState extends ConsumerState<PeopleScreenBody> {
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 960),
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 20, 16, 40),
-            children: _content(context, c),
+          child: Builder(
+            builder: (context) {
+              // Built lazily: with 300 people only the rows on screen exist.
+              final items = _content(context, c);
+              return ListView.builder(
+                padding: const EdgeInsets.fromLTRB(16, 20, 16, 40),
+                itemCount: items.length,
+                itemBuilder: (_, i) => items[i],
+              );
+            },
           ),
         ),
       ),
@@ -66,11 +76,32 @@ class _PeopleScreenBodyState extends ConsumerState<PeopleScreenBody> {
     final persons = {for (final p in c.persons) p.id: p};
     bool visible(Assignment a) =>
         _showInactive || (a.active && (persons[a.personId]?.active ?? false));
-    final seats = c.assignments.where(visible).toList();
+    final q = _query.trim().toLowerCase();
+    final filtering = q.isNotEmpty || _teamId != null;
+    bool matches(Person p, [Assignment? a]) =>
+        q.isEmpty ||
+        p.fullName.toLowerCase().contains(q) ||
+        (p.email ?? '').toLowerCase().contains(q) ||
+        (a?.roleTitle ?? '').toLowerCase().contains(q);
+    final seats = c.assignments
+        .where(visible)
+        .where((a) => matches(c.personOf(a), a))
+        .toList();
     final seated = {for (final a in c.assignments) a.personId};
     final unseated = c.persons
         .where((p) => !seated.contains(p.id) && (_showInactive || p.active))
+        .where((p) => _teamId == null && matches(p))
         .toList();
+    final shownTeams = [
+      for (final team in c.teams)
+        if (_teamId == null || _teamId == team.id) team,
+    ];
+    final shownSeatCount = seats
+        .where((a) => _teamId == null || a.teamId == _teamId)
+        .length;
+    final totalPeople = c.persons
+        .where((p) => _showInactive || p.active)
+        .length;
     return [
       Semantics(
         header: true,
@@ -121,7 +152,27 @@ class _PeopleScreenBodyState extends ConsumerState<PeopleScreenBody> {
           ),
         ],
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
+      _Filters(
+        teams: c.teams,
+        teamId: _teamId,
+        sort: _sort,
+        onQuery: (v) => setState(() => _query = v),
+        onTeam: (v) => setState(() => _teamId = v),
+        onSort: (v) => setState(() => _sort = v),
+      ),
+      const SizedBox(height: 8),
+      Semantics(
+        liveRegion: true,
+        child: Text(
+          filtering
+              ? '$shownSeatCount ${shownSeatCount == 1 ? 'seat matches' : 'seats match'}.'
+              : '$totalPeople ${totalPeople == 1 ? 'person' : 'people'}, '
+                    '${c.teams.length} ${c.teams.length == 1 ? 'team' : 'teams'}.',
+          style: bodyStyle(context, size: 14, color: t.muted),
+        ),
+      ),
+      const SizedBox(height: 12),
       if (c.teams.isEmpty && c.persons.isEmpty)
         DashedBox(
           child: Text(
@@ -129,34 +180,201 @@ class _PeopleScreenBodyState extends ConsumerState<PeopleScreenBody> {
             textAlign: TextAlign.center,
             style: bodyStyle(context, color: t.muted),
           ),
-        ),
-      for (final team in c.teams) ...[
-        _TeamSeats(
-          team: team,
-          seats: seats.where((a) => a.teamId == team.id).toList(),
-          catalog: c,
-        ),
-        const SizedBox(height: 12),
-      ],
-      if (unseated.isNotEmpty)
-        XCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Semantics(
-                header: true,
-                child: Text(
-                  'People without a seat',
-                  style: bodyStyle(context, size: 18, weight: FontWeight.w700),
-                ),
-              ),
-              const SizedBox(height: 8),
-              for (final p in unseated)
-                _PersonLine(person: p, subtitle: 'No seat yet'),
-            ],
+        )
+      else if (filtering && shownSeatCount == 0 && unseated.isEmpty)
+        DashedBox(
+          child: Text(
+            'No one matches. Clear the search or choose all teams.',
+            textAlign: TextAlign.center,
+            style: bodyStyle(context, color: t.muted),
           ),
         ),
+      for (final team in shownTeams)
+        ..._teamSection(
+          context,
+          team,
+          _sorted(seats.where((a) => a.teamId == team.id).toList(), c),
+          c,
+          hideEmpty: filtering,
+        ),
+      if (unseated.isNotEmpty) ...[
+        _SectionHead(title: 'People without a seat'),
+        for (final p in unseated)
+          _PersonLine(person: p, subtitle: 'No seat yet'),
+      ],
     ];
+  }
+
+  List<Assignment> _sorted(List<Assignment> seats, Catalog c) {
+    switch (_sort) {
+      case _SeatSort.setUp:
+        return seats;
+      case _SeatSort.name:
+        return seats..sort(
+          (a, b) => c
+              .personOf(a)
+              .fullName
+              .toLowerCase()
+              .compareTo(c.personOf(b).fullName.toLowerCase()),
+        );
+      case _SeatSort.role:
+        return seats..sort(
+          (a, b) =>
+              a.roleTitle.toLowerCase().compareTo(b.roleTitle.toLowerCase()),
+        );
+    }
+  }
+
+  List<Widget> _teamSection(
+    BuildContext context,
+    Team team,
+    List<Assignment> seats,
+    Catalog c, {
+    required bool hideEmpty,
+  }) {
+    final t = context.tokens;
+    if (seats.isEmpty && hideEmpty) return const [];
+    return [
+      _SectionHead(
+        title: team.name,
+        count: '${seats.length} ${seats.length == 1 ? 'seat' : 'seats'}',
+      ),
+      if (seats.isEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(
+            'No seats in this team yet. Open a person and add a seat.',
+            style: bodyStyle(context, size: 15, color: t.muted),
+          ),
+        ),
+      for (final a in seats)
+        _PersonLine(
+          person: c.personOf(a),
+          seat: a,
+          subtitle:
+              '${a.roleTitle} · ${a.metrics.length} '
+              '${a.metrics.length == 1 ? 'count' : 'counts'}, '
+              '${a.kpis.length} ${a.kpis.length == 1 ? 'target' : 'targets'}',
+        ),
+      const SizedBox(height: 8),
+    ];
+  }
+}
+
+enum _SeatSort { setUp, name, role }
+
+class _SectionHead extends StatelessWidget {
+  const _SectionHead({required this.title, this.count});
+  final String title;
+  final String? count;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 10),
+      child: Semantics(
+        header: true,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Flexible(
+              child: Text(
+                title,
+                style: bodyStyle(context, size: 20, weight: FontWeight.w700),
+              ),
+            ),
+            if (count != null) ...[
+              const SizedBox(width: 10),
+              Text(count!, style: monoStyle(context, size: 13, color: t.muted)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Filters extends StatelessWidget {
+  const _Filters({
+    required this.teams,
+    required this.teamId,
+    required this.sort,
+    required this.onQuery,
+    required this.onTeam,
+    required this.onSort,
+  });
+  final List<Team> teams;
+  final String? teamId;
+  final _SeatSort sort;
+  final ValueChanged<String> onQuery;
+  final ValueChanged<String?> onTeam;
+  final ValueChanged<_SeatSort> onSort;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      crossAxisAlignment: WrapCrossAlignment.end,
+      children: [
+        SizedBox(
+          width: 300,
+          child: Labeled(
+            label: 'Search people',
+            child: TextField(
+              key: const Key('people-search'),
+              style: bodyStyle(context),
+              decoration: xInput(context, hint: 'Name, email or role'),
+              onChanged: onQuery,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 200,
+          child: Labeled(
+            label: 'Team',
+            child: DropdownButtonFormField<String?>(
+              key: const Key('people-team-filter'),
+              initialValue: teamId,
+              isExpanded: true,
+              decoration: xInput(context),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('All teams')),
+                for (final t in teams)
+                  DropdownMenuItem(
+                    value: t.id,
+                    child: Text(t.name, overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: onTeam,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 200,
+          child: Labeled(
+            label: 'Sort by',
+            child: DropdownButtonFormField<_SeatSort>(
+              key: const Key('people-sort'),
+              initialValue: sort,
+              isExpanded: true,
+              decoration: xInput(context),
+              items: const [
+                DropdownMenuItem(
+                  value: _SeatSort.setUp,
+                  child: Text('Order set up'),
+                ),
+                DropdownMenuItem(value: _SeatSort.name, child: Text('Name')),
+                DropdownMenuItem(value: _SeatSort.role, child: Text('Role')),
+              ],
+              onChanged: (v) => onSort(v ?? _SeatSort.setUp),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -297,8 +515,34 @@ class _TeamsCardState extends ConsumerState<_TeamsCard> {
           SmallButton(
             label: 'Delete',
             semanticLabel: 'Delete ${team.name}',
-            onPressed: () =>
-                _run(() => repo.deleteTeam(team.id), 'Team deleted.'),
+            onPressed: () async {
+              // A team with seats is refused with a clear message; only a
+              // real deletion needs a second look.
+              if (seats == 0) {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: Text('Delete ${team.name}?'),
+                    content: const Text(
+                      'The team is removed. This cannot be undone, but you '
+                      'can add a team with the same name again.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Keep team'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('Delete team'),
+                      ),
+                    ],
+                  ),
+                );
+                if (ok != true) return;
+              }
+              await _run(() => repo.deleteTeam(team.id), 'Team deleted.');
+            },
           ),
         ],
       ),
@@ -346,51 +590,6 @@ class _TeamsCardState extends ConsumerState<_TeamsCard> {
       await repo.saveTeam(id: team.id, name: _rename.text);
       if (mounted) setState(() => _renaming = null);
     }, 'Team renamed.');
-  }
-}
-
-class _TeamSeats extends StatelessWidget {
-  const _TeamSeats({
-    required this.team,
-    required this.seats,
-    required this.catalog,
-  });
-  final Team team;
-  final List<Assignment> seats;
-  final Catalog catalog;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    return XCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Semantics(
-            header: true,
-            child: Text(
-              team.name,
-              style: bodyStyle(context, size: 20, weight: FontWeight.w700),
-            ),
-          ),
-          const SizedBox(height: 8),
-          if (seats.isEmpty)
-            Text(
-              'No seats in this team yet. Open a person and add a seat.',
-              style: bodyStyle(context, size: 15, color: t.muted),
-            ),
-          for (final a in seats)
-            _PersonLine(
-              person: catalog.personOf(a),
-              seat: a,
-              subtitle:
-                  '${a.roleTitle} · ${a.metrics.length} '
-                  '${a.metrics.length == 1 ? 'count' : 'counts'}, '
-                  '${a.kpis.length} ${a.kpis.length == 1 ? 'target' : 'targets'}',
-            ),
-        ],
-      ),
-    );
   }
 }
 

@@ -51,9 +51,9 @@ Scripts (also `make up|down|reset|logs`):
 | `LOG_MAGIC_LINKS` | `true` | Log links. Dev only. |
 | `RUST_LOG` | `info` | Log level. |
 | `LOG_FORMAT` | text | `json` for one JSON object per log line. |
-| `SHUTDOWN_GRACE_SECS` | `8` | Seconds that running requests get to finish after SIGTERM (Docker stops after 10 by default). |
+| `SHUTDOWN_GRACE_SECS` | `8` | Seconds that running requests get to finish after SIGTERM (the compose file gives the api `stop_grace_period: 15s`). |
 
-The API variables `SMTP_HOST` (`mailpit`), `SMTP_PORT` (`1025`) and `BIND` (`0.0.0.0:8081`) are fixed in the compose file. See `../xynotransit-api/README.md` for all of them.
+The API variables `SMTP_HOST` (`mailpit`), `SMTP_PORT` (`1025`), plain SMTP and `BIND` (`0.0.0.0:8081`) are fixed in the dev compose file; `docker-compose.prod.yml` makes them settable. See `../xynotransit-api/README.md` for all of them.
 
 ## Init SQL (initdb/) and migrations
 
@@ -68,6 +68,7 @@ The API variables `SMTP_HOST` (`mailpit`), `SMTP_PORT` (`1025`) and `BIND` (`0.0
 | `05-reporter.sql` | `report.reporter_name/country/role` (null on old rows) and `login_attempt` (magic link rate limit by email string). | yes |
 | `06-integrity.sql` | The database refuses bad data by itself: CHECK constraints, case-insensitive unique indexes, frozen decks, `updated_at`, indexes, views that match the API. See below. | yes |
 | `07-ledger.sql` | `schema_migration` (which files this database has had) and `xt_purge_expired()`. | yes |
+| `08-role-title-unique.sql` | One seat per person, team and role title, ignoring case and outer spaces (unique index on `lower(btrim(role_title))`). Skipped with a warning if old rows already repeat a title. | yes |
 
 A fresh database has an empty catalog. The first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app. The old seed (`10-seed.sql`, `20-seed-demo.sql`) lives in `examples/` and is not loaded automatically; see `examples/README.md` to load it by hand.
 
@@ -135,9 +136,26 @@ curl -s localhost:8080/api/health                 # {"ok":true,"db":"up"}, or 50
 ## nginx (web/)
 
 - `web/nginx.conf`: SPA fallback to `index.html`, `/api/` proxied to `api:8081`, `/api/events` with `proxy_buffering off` and a 1 hour read timeout, `index.html` and the service worker files not cached, hashed files cached long.
-- `web/security-headers.conf`: security headers including the content security policy.
+- `web/security-headers.conf`: security headers including the content security policy. `https://fonts.gstatic.com` is allowed in `connect-src` and `font-src` on purpose: the Flutter engine loads a fallback font at runtime for glyphs the bundled font lacks (names in CJK, Arabic, Cyrillic). The browser asks Google only when such glyphs appear. Remove it if you accept boxes instead of those letters.
+- `/api/` passes `X-Request-Id` (nginx `$request_id`) to the API, and hides the security and cache headers the API sets itself, so the browser gets exactly one of each.
 - `web/Dockerfile.web`: the image. The Flutter build is mounted, not copied, so rebuilding Flutter needs no image rebuild.
 
 ## Production notes
 
-Remove `mailpit`, set real SMTP variables on the API, `LOG_MAGIC_LINKS=false`, schedule `scripts/backup.sh`, set `stop_grace_period` of the api above `SHUTDOWN_GRACE_SECS`, use a strong `JWT_SECRET` and `POSTGRES_PASSWORD`, put TLS in front and set `PUBLIC_URL`, never load `examples/`, and do not publish the db port.
+The ready made production setup is [`docker-compose.prod.yml`](docker-compose.prod.yml) with
+[`.env.prod.example`](.env.prod.example) and a [`Caddyfile`](Caddyfile). The full walk-through,
+including free servers, is in [`../docs/DEPLOY.md`](../docs/DEPLOY.md). What it does differently
+from the dev stack, and what you must set:
+
+- **Images, not builds.** It pulls `ghcr.io/xynorash/xynotransit/{api,db,web}` (`IMAGE_TAG`, default `latest`; pin a commit sha to control upgrades). Nothing is built on the server.
+- **TLS.** Caddy is the only container with published ports (80 and 443). It gets and renews a Let's Encrypt certificate for `DOMAIN` by itself and sends an HSTS header. The DNS record must point at the server first.
+- **No database port.** `db` and `api` are reachable only inside the Docker network. Do not add a `ports:` entry for the database.
+- **Real SMTP.** There is no Mailpit. Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS` (`starttls` for 587, `tls` for 465), `SMTP_USERNAME`, `SMTP_PASSWORD` and `MAIL_FROM`. The API checks the server certificate. `LOG_MAGIC_LINKS` is forced to `false`, so a link is never written to the logs.
+- **Secrets.** `JWT_SECRET` (`openssl rand -hex 32`, at least 32 characters; changing it signs everyone out) and `POSTGRES_PASSWORD` (`openssl rand -hex 24`, letters and digits only because it goes into a URL). Keep `.env.prod` at mode 600 and out of git (it is ignored).
+- **First manager.** `BOOTSTRAP_CONTROLLER_EMAIL` (and `_NAME`) creates or promotes that person every time the API starts. Everyone else is added in the app, on the People page.
+- **Restart and health.** Every service has `restart: unless-stopped` and a health check; Caddy waits for `web`, which waits for `api`, which waits for a healthy `db`. Logs rotate (3 files of 10 MB each).
+- **Data.** Named volume `pgdata`. Back it up with `scripts/backup.sh` on a schedule (cron line in the Backup section) and copy the dumps off the machine. Keep `caddy_data` too (certificates).
+- **Upgrade.** `scripts/backup.sh`, `docker compose ... pull`, `scripts/migrate.sh`, `docker compose ... up -d`. Never edit an `initdb/` file that has been applied; add the next number.
+- **Keep** `stop_grace_period` of the api (15s) above `SHUTDOWN_GRACE_SECS` (8), never load `examples/`, and keep the `web` container's security headers (they are in the image).
+
+Check the file before using it: `docker compose --env-file .env.prod -f docker-compose.prod.yml config`.

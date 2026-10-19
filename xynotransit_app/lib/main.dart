@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app.dart';
 import 'app/bootstrap.dart';
+import 'app/config.dart';
 import 'app/providers.dart';
 
 Future<void> main() async {
@@ -19,6 +20,7 @@ Future<void> main() async {
         repositoryProvider.overrideWithValue(backend.repository),
         authServiceProvider.overrideWithValue(backend.auth),
         initialStartProvider.overrideWithValue(backend.initialStart),
+        demoNoticeAvailableProvider.overrideWithValue(AppConfig.demo),
       ],
       child: const XynotransitApp(),
     ),

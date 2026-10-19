@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/theme/theme.dart';
+import '../core/theme/tokens.dart';
 import '../features/gallery_screen.dart';
 import '../features/employee/employee_screen.dart';
 import '../features/deck_text/deck_text_screen.dart';
@@ -84,6 +85,59 @@ class XynotransitApp extends ConsumerWidget {
       darkTheme: buildTheme(Brightness.dark),
       themeMode: ref.watch(themeModeProvider),
       routerConfig: ref.watch(routerProvider),
+      builder: (context, child) => DemoNoticeShell(child: child),
+    );
+  }
+}
+
+/// A thin, dismissible bar on the demo build: says that the data is made up
+/// and stays in this browser tab.
+class DemoNoticeShell extends ConsumerWidget {
+  const DemoNoticeShell({super.key, required this.child});
+
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final page = child ?? const SizedBox.shrink();
+    final show =
+        ref.watch(demoNoticeAvailableProvider) &&
+        !ref.watch(demoNoticeDismissedProvider);
+    if (!show) return page;
+    final t = context.tokens;
+    return Column(
+      children: [
+        Expanded(child: page),
+        Material(
+          color: t.soft,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 16, right: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'Demo: the people and reports here are made up and '
+                        'stay in this browser tab.',
+                        style: TextStyle(color: t.ink, fontSize: 13),
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => ref
+                        .read(demoNoticeDismissedProvider.notifier)
+                        .dismiss(),
+                    child: Text('Close', style: TextStyle(color: t.accent)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -79,6 +79,19 @@ jobs:
       - name: Smoke test through nginx
         working-directory: xynotransit-db
         run: scripts/smoke.sh
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+      - name: Contract tests (the Flutter repository against the real API)
+        working-directory: xynotransit_app
+        run: |
+          flutter pub get
+          flutter test test/contract \
+            --dart-define=CONTRACT_API=http://127.0.0.1:8080 \
+            --dart-define=CONTRACT_MAIL=http://127.0.0.1:8025 \
+            --dart-define=CONTRACT_MANAGER=smoke.manager@xynotransit.example
       - name: Logs on failure
         if: failure()
         working-directory: xynotransit-db

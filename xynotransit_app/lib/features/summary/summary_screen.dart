@@ -215,6 +215,10 @@ class _Loaded extends StatelessWidget {
           children: [
             _Tiles(summary: s),
             const SizedBox(height: _gap),
+            if (s.people.any((p) => !p.submitted)) ...[
+              _MissingCard(people: s.people),
+              const SizedBox(height: _gap),
+            ],
             if (wide)
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -242,6 +246,57 @@ class _Loaded extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// Who still has to send, right under the tiles: it is the first thing a
+/// manager needs to act on.
+class _MissingCard extends StatelessWidget {
+  const _MissingCard({required this.people});
+
+  final List<PersonSummary> people;
+
+  static const _shown = 12;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final missing = [
+      for (final p in people)
+        if (!p.submitted) p,
+    ];
+    final names = [
+      for (final p in missing.take(_shown)) '${p.name} (${p.team})',
+    ];
+    final more = missing.length - names.length;
+    final text = names.join(', ') + (more > 0 ? ' and $more more' : '');
+    return XCard(
+      key: const ValueKey('missing-card'),
+      child: Semantics(
+        container: true,
+        label: 'Still to send: $text',
+        child: ExcludeSemantics(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                missing.length == 1
+                    ? '1 report is still missing'
+                    : '${missing.length} reports are still missing',
+                style: bodyStyle(
+                  context,
+                  size: 18,
+                  weight: FontWeight.w700,
+                  height: 1.25,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(text, style: bodyStyle(context, color: t.muted)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

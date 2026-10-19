@@ -6,7 +6,7 @@ See `../xynotransit_app/README.md` for the whole system and `../xynotransit-db/R
 
 ## Run
 
-Needs a Postgres with the schema: every file of `xynotransit-db/initdb/` in name order (`01` to `07`; a database that lives on is brought up to date with `xynotransit-db/scripts/migrate.sh`). The catalog starts empty: the first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app.
+Needs a Postgres with the schema: every file of `xynotransit-db/initdb/` in name order (`01` to `08`; a database that lives on is brought up to date with `xynotransit-db/scripts/migrate.sh`). The catalog starts empty: the first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app.
 
 ```bash
 cd ../xynotransit-db && docker compose up -d db      # database on 127.0.0.1:5432
@@ -28,6 +28,8 @@ Or use the full stack with `docker compose up -d --build` in `xynotransit-db`. T
 | `PUBLIC_URL` | `http://127.0.0.1:8080` | Origin in magic links: `{PUBLIC_URL}/auth/verify?token=...`. |
 | `SMTP_HOST` | `mailpit` | SMTP host. |
 | `SMTP_PORT` | `1025` | SMTP port. |
+| `SMTP_TLS` | `none` | `none` (plain, for Mailpit), `starttls` (port 587) or `tls` (port 465). Use `starttls` or `tls` with a real provider; the certificate is checked. |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | none | Sign in to the mail server. Set both or neither. |
 | `MAIL_FROM` | `Xynotransit <no-reply@xynotransit.local>` | Sender. |
 | `BIND` | `0.0.0.0:8081` | Listen address. |
 | `BOOTSTRAP_CONTROLLER_EMAIL` | none | At start, that person becomes an active controller. Created when missing, promoted and activated when present. |
@@ -35,7 +37,7 @@ Or use the full stack with `docker compose up -d --build` in `xynotransit-db`. T
 | `LOG_MAGIC_LINKS` | `false` | Logs links at info level. Dev only. |
 | `RUST_LOG` | `info,sqlx=warn` | Log filter. |
 | `LOG_FORMAT` | text | `json` writes one JSON object per log line. |
-| `SHUTDOWN_GRACE_SECS` | `8` | After SIGTERM, how long requests that are running get to finish (1 to 300). Keep it below the container stop timeout (10 s by default in Docker). |
+| `SHUTDOWN_GRACE_SECS` | `8` | After SIGTERM, how long requests that are running get to finish (1 to 300). Keep it below the container stop timeout (the compose file sets `stop_grace_period: 15s`; Docker's default is 10 s). |
 
 ## Endpoints
 

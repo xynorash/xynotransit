@@ -59,15 +59,23 @@ class TopBar extends ConsumerWidget implements PreferredSizeWidget {
               for (final u in auth.choices)
                 PopupMenuItem(value: u, child: Text(u.label)),
             ],
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Center(
-                child: Text(
-                  'Demo: ${user?.label ?? ''}',
-                  style: monoStyle(
-                    context,
-                    size: 13,
-                    color: context.tokens.ink,
+            child: Semantics(
+              label: 'Demo: act as someone else',
+              button: true,
+              excludeSemantics: true,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                child: Center(
+                  child: Text(
+                    'Demo: ${user?.label ?? ''}',
+                    style: monoStyle(
+                      context,
+                      size: 13,
+                      color: context.tokens.ink,
+                    ),
                   ),
                 ),
               ),

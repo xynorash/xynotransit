@@ -11,6 +11,8 @@ import '../../domain/catalog.dart';
 import '../../domain/enums.dart';
 import '../../domain/period.dart';
 import '../../domain/report.dart';
+import '../../domain/text_rules.dart';
+import '../../data/api/api_client.dart' show UnauthorizedException;
 
 enum SendPhase { idle, sending, sent, queued, failed }
 
@@ -103,6 +105,12 @@ class FormController extends Notifier<FormModel> {
         unawaited(_load(state.assignmentId!));
       }
     });
+    // Reports that waited for a sign in go out after the next one.
+    ref.listen(userProvider, (prev, next) {
+      if (next.value != null && prev?.value == null) {
+        unawaited(retryPending());
+      }
+    });
     ref.onDispose(() => _retry?.cancel());
     return const FormModel();
   }
@@ -166,6 +174,10 @@ class FormController extends Notifier<FormModel> {
       draft = rec.report;
       notice = reconcileNotice(rec);
     }
+    final stored = prefs.getString(
+      'reconcilenote/${Period.dateOnly(period.startMonth)}/$assignmentId',
+    );
+    notice ??= stored;
     var working = draft ?? _workingCopy(existing, period.id, assignmentId);
     if (draft == null && seat != null) working = working.reconcile(seat);
     working = working.copyWith(
@@ -307,9 +319,9 @@ class FormController extends Notifier<FormModel> {
   }
 
   String? _commentFor(Report r, String kpiId) {
-    final t = (r.kpis[kpiId]?.comment ?? _comments.remove(kpiId) ?? '').trim();
+    final t = trimText(r.kpis[kpiId]?.comment ?? _comments.remove(kpiId) ?? '');
     if (t.isEmpty) return null;
-    return t.length > kpiCommentMax ? t.substring(0, kpiCommentMax) : t;
+    return cutChars(t, kpiCommentMax);
   }
 
   void _setNotes(NoteKind kind, List<String> list) {
@@ -362,10 +374,8 @@ class FormController extends Notifier<FormModel> {
   void setKpiComment(String kpiId, String text) {
     final r = state.report;
     if (r == null) return;
-    final t = text.trim();
-    final comment = t.isEmpty
-        ? null
-        : (t.length > kpiCommentMax ? t.substring(0, kpiCommentMax) : t);
+    final t = trimText(text);
+    final comment = t.isEmpty ? null : cutChars(t, kpiCommentMax);
     final cur = r.kpis[kpiId];
     if (cur == null) {
       // Kept until a status is picked; a comment alone is not an answer.
@@ -414,6 +424,9 @@ class FormController extends Notifier<FormModel> {
       await prefs.remove(_draftKey(period, r.assignmentId));
       await prefs.remove(_draftAtKey(period, r.assignmentId));
       await prefs.remove(_pendingKey(period, r.assignmentId));
+      await prefs.remove(
+        'reconcilenote/${Period.dateOnly(period.startMonth)}/${r.assignmentId}',
+      );
       if (state.assignmentId == r.assignmentId) {
         state = state.copyWith(
           attempted: false,
@@ -458,7 +471,17 @@ class FormController extends Notifier<FormModel> {
     _retry = Timer(retryDelay, () => unawaited(retryPending()));
   }
 
+  String _noteKey(String pendingKey) =>
+      pendingKey.replaceFirst('pending/', 'reconcilenote/');
+
   /// Sends every report that was saved on this device while offline.
+  ///
+  /// Each one is first matched against the CURRENT counts and targets of its
+  /// seat. If the manager changed them while the report waited, it is not
+  /// sent: it stays on this device as a draft with a notice, so the person
+  /// checks it. A damaged entry is deleted and the others still go out. A
+  /// sign in that ran out keeps the entry; it is tried again after the next
+  /// sign in.
   Future<void> retryPending() async {
     final prefs = ref.read(prefsProvider);
     final keys = prefs
@@ -469,39 +492,96 @@ class FormController extends Notifier<FormModel> {
     final repo = ref.read(repositoryProvider);
     var stillOffline = false;
     for (final key in keys) {
-      final raw = prefs.getString(key);
-      if (raw == null) continue;
-      final j = jsonDecode(raw) as Map<String, Object?>;
-      final periodId = j['periodId']! as String;
-      final assignmentId = j['assignmentId']! as String;
-      final report = Report.fromDraftJson(
-        periodId,
-        assignmentId,
-        j['draft']! as Map<String, Object?>,
-      );
+      final String periodId;
+      final String assignmentId;
+      final Report report;
       try {
-        final saved = await repo.sendReport(report);
+        final j =
+            jsonDecode(prefs.getString(key) ?? '') as Map<String, Object?>;
+        periodId = j['periodId']! as String;
+        assignmentId = j['assignmentId']! as String;
+        report = Report.fromDraftJson(
+          periodId,
+          assignmentId,
+          j['draft']! as Map<String, Object?>,
+        );
+      } on Object {
+        // Damaged beyond reading: nothing can be sent from it.
         await prefs.remove(key);
+        continue;
+      }
+      Catalog catalog;
+      try {
+        catalog = await ref.read(catalogProvider.future);
+      } on Object {
+        stillOffline = true;
+        continue;
+      }
+      final seat = catalog.assignmentById(assignmentId);
+      if (seat == null) {
+        // The seat is gone: there is nobody to send it for (the draft stays).
+        await prefs.remove(key);
+        continue;
+      }
+      final rec = report.reconciliation(seat);
+      if (rec.lostAnswers || rec.openCounts > 0 || rec.openTargets > 0) {
+        await _keepAsDraft(key, periodId, assignmentId, rec);
+        continue;
+      }
+      try {
+        final saved = await repo.sendReport(rec.report);
+        await prefs.remove(key);
+        await prefs.remove(_noteKey(key));
         await prefs.remove(key.replaceFirst('pending/', 'draft/'));
+        await prefs.remove(key.replaceFirst('pending/', 'draftat/'));
         final period = _period;
         if (period?.id == periodId && state.assignmentId == assignmentId) {
           state = state.copyWith(
             phase: SendPhase.sent,
             sentAt: saved.submittedAt,
             clearMessage: true,
+            clearNotice: true,
+            clearDraftSavedAt: true,
           );
         }
-      } on NetworkException {
-        stillOffline = true;
+      } on UnauthorizedException {
+        // Keep the entry; the next sign in starts this again.
+        return;
       } on RepositoryException catch (e) {
         // The server refused it for good; drop the queue entry and tell the person.
         await prefs.remove(key);
         if (state.assignmentId == assignmentId) {
           state = state.copyWith(phase: SendPhase.failed, message: e.message);
         }
+      } on NetworkException {
+        stillOffline = true;
+      } on Object {
+        stillOffline = true;
       }
     }
     if (stillOffline) _scheduleRetry();
+  }
+
+  /// A waiting report that no longer fits its seat becomes a draft again.
+  Future<void> _keepAsDraft(
+    String pendingKey,
+    String periodId,
+    String assignmentId,
+    Reconciliation rec,
+  ) async {
+    final prefs = ref.read(prefsProvider);
+    final notice =
+        reconcileNotice(rec) ??
+        'Your manager changed this role while your report waited to be sent. '
+            'It was not sent. Please fill in the new numbers and targets, '
+            'then send it.';
+    final draftKey = pendingKey.replaceFirst('pending/', 'draft/');
+    await prefs.setString(draftKey, jsonEncode(rec.report.toDraftJson()));
+    await prefs.setString(_noteKey(pendingKey), notice);
+    await prefs.remove(pendingKey);
+    if (_period?.id == periodId && state.assignmentId == assignmentId) {
+      await _load(assignmentId);
+    }
   }
 }
 

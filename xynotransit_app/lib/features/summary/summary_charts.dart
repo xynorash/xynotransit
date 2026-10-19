@@ -515,7 +515,9 @@ class _BiggestCardState extends State<BiggestCard> {
                     bar: _SingleBar(
                       value: top[i].total,
                       peak: peak,
-                      color: seriesColor(i),
+                      // One colour: each bar is named, and the team colours
+                      // of the volume chart must keep their own meaning.
+                      color: t.accent,
                     ),
                   ),
               ],
@@ -824,35 +826,36 @@ class _TrendValues extends StatelessWidget {
     final t = context.tokens;
     TextStyle style(Color c) =>
         monoStyle(context, size: 12, color: c, weight: FontWeight.w500);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final p in points)
-          Expanded(
-            child: Column(
-              children: [
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    TrendCard.shortLabel(p),
-                    style: monoStyle(context, size: 11, color: t.muted),
+    // Same room as the chart's left axis (name 20 + labels 40), so every
+    // column sits under its own point.
+    return Padding(
+      padding: const EdgeInsets.only(left: 60),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final p in points)
+            Expanded(
+              child: Column(
+                children: [
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      fmtPct(p.submissionRate),
+                      style: style(t.accent),
+                    ),
                   ),
-                ),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(fmtPct(p.submissionRate), style: style(t.accent)),
-                ),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    p.answered == 0 ? '–' : fmtPct(p.metRate),
-                    style: style(t.ok),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      p.answered == 0 ? '–' : fmtPct(p.metRate),
+                      style: style(t.ok),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }

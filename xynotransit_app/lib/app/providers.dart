@@ -105,3 +105,19 @@ class ThemeModeController extends Notifier<ThemeMode> {
 final themeModeProvider = NotifierProvider<ThemeModeController, ThemeMode>(
   ThemeModeController.new,
 );
+
+/// True on the public demo build. main.dart switches it on; tests leave it
+/// off so the notice does not move their layouts.
+final demoNoticeAvailableProvider = Provider<bool>((ref) => false);
+
+/// Whether the person closed the demo notice (until the page is reloaded).
+class DemoNoticeDismissed extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void dismiss() => state = true;
+}
+
+final demoNoticeDismissedProvider = NotifierProvider<DemoNoticeDismissed, bool>(
+  DemoNoticeDismissed.new,
+);

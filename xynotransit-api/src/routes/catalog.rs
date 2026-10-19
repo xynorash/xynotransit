@@ -94,8 +94,8 @@ pub async fn assignments_json(
 ) -> Result<Vec<Value>, ApiError> {
     let assignments: Vec<AssignmentRow> = sqlx::query_as(
         "select a.id, a.code, a.person_id, a.team_id::int as team_id, a.role_title, a.sort::int as sort, a.active
-         from assignment a join team t on t.id = a.team_id
-         where ($1::uuid is null or a.id = $1) and (a.active or $2)
+         from assignment a join team t on t.id = a.team_id join person pe on pe.id = a.person_id
+         where ($1::uuid is null or a.id = $1) and ((a.active and pe.active) or $2)
          order by t.sort, t.id, a.sort, a.code",
     )
     .bind(only)
@@ -105,8 +105,8 @@ pub async fn assignments_json(
 
     let metrics: Vec<MetricRow> = sqlx::query_as(
         "select m.id, m.assignment_id, m.key, m.label, m.series::int as series
-         from metric_def m join assignment a on a.id = m.assignment_id
-         where ($1::uuid is null or a.id = $1) and (a.active or $2) and m.retired_at is null
+         from metric_def m join assignment a on a.id = m.assignment_id join person pe on pe.id = a.person_id
+         where ($1::uuid is null or a.id = $1) and ((a.active and pe.active) or $2) and m.retired_at is null
          order by m.series, m.key",
     )
     .bind(only)
@@ -116,8 +116,8 @@ pub async fn assignments_json(
 
     let kpis: Vec<KpiRow> = sqlx::query_as(
         "select k.id, k.assignment_id, k.sort::int as sort, k.text
-         from kpi_def k join assignment a on a.id = k.assignment_id
-         where ($1::uuid is null or a.id = $1) and (a.active or $2) and k.retired_at is null
+         from kpi_def k join assignment a on a.id = k.assignment_id join person pe on pe.id = a.person_id
+         where ($1::uuid is null or a.id = $1) and ((a.active and pe.active) or $2) and k.retired_at is null
          order by k.sort, k.id",
     )
     .bind(only)

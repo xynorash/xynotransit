@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../domain/numbers.dart';
 import 'format.dart';
 import 'theme/tokens.dart';
 
@@ -386,12 +387,12 @@ class Labeled extends StatelessWidget {
   }
 }
 
-/// Most a count may hold (9 digits). Matches the API.
-const maxCountValue = 999999999;
+/// Plain message when a number is over [countMax].
+const numberTooLargeMessage = 'A number can be at most $countMax.';
 
 /// Reads a pasted or typed whole number. Spaces, thin spaces and commas are
 /// thousands separators and are dropped. Returns the digits, or a plain
-/// message when the text is not a whole number from 0 up to [maxCount].
+/// message when the text is not a whole number from 0 up to [countMax].
 ({String? digits, String? problem}) parseWholeNumber(String raw) {
   final cleaned = raw.replaceAll(RegExp(r"[\s\u00A0\u202F,'\u2019_]"), '');
   if (cleaned.isEmpty) return (digits: '', problem: null);
@@ -403,7 +404,9 @@ const maxCountValue = 999999999;
     );
   }
   final trimmed = cleaned.replaceFirst(RegExp(r'^0+(?=\d)'), '');
-  if (trimmed.length > 9) return (digits: null, problem: 'Too large');
+  if (parseCount(trimmed) == null) {
+    return (digits: null, problem: numberTooLargeMessage);
+  }
   return (digits: trimmed, problem: null);
 }
 
@@ -489,7 +492,7 @@ class _NumberFieldState extends State<NumberField> {
 
   void _onFocus() {
     final text = _show(
-      int.tryParse(_c.text.replaceAll(',', '')),
+      parseCount(_c.text.replaceAll(',', '')),
       _focus.hasFocus,
     );
     if (text != _c.text) _c.text = text;
@@ -503,7 +506,7 @@ class _NumberFieldState extends State<NumberField> {
       (old.focusNode ?? _own)?.removeListener(_onFocus);
       _focus.addListener(_onFocus);
     }
-    final typed = int.tryParse(_c.text.replaceAll(',', ''));
+    final typed = parseCount(_c.text.replaceAll(',', ''));
     if (typed != widget.value) {
       _c.text = _show(widget.value, _focus.hasFocus);
     }
@@ -550,7 +553,7 @@ class _NumberFieldState extends State<NumberField> {
       ),
       decoration: deco,
       onChanged: (s) => widget.onChanged(
-        s.isEmpty ? null : int.tryParse(s.replaceAll(',', '')),
+        s.isEmpty ? null : parseCount(s.replaceAll(',', '')),
       ),
     );
     final name = widget.semanticLabel;

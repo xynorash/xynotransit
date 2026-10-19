@@ -3,9 +3,11 @@
 Choices made where the spec was silent.
 
 - Floreal is renamed to Xynotransit everywhere, including the metric label "BSC Xynotransit Mada" and the eyebrow code XNT-LOG-02.
-- Fonts are bundled in assets/fonts instead of loaded at runtime with google_fonts.
+- Fonts are bundled in assets/fonts instead of loaded at runtime with google_fonts. Glyphs the bundled fonts lack (for example CJK, Arabic or Cyrillic names) come from fonts.gstatic.com at runtime; the nginx content security policy allows that host on purpose. Without network those letters show as boxes.
 - DM Sans uses static instances cut from the variable font at opsz 14.
-- PNG export is a ZIP with one PNG per slide.
+- PNG export is a ZIP with one PNG per slide. PPTX slides are full-bleed pictures of 3840 x 2160 (twice the 1920 x 1080 slide, for sharp projection), and the speaker notes hold the full content of the slide, one fact per line, so the notes stand in for the picture.
+- A cover or divider with more team pills than fit ends with one last pill reading "+N more".
+- A bar chart slide lays its totals out 3 to a row for up to 6 counts and 4 to a row for 7 and 8 counts.
 - A meeting date control was added for controllers because period.meeting_date had no UI.
 - A demo mode with an in-memory backend was added so the app runs without a server. It is on when API_BASE_URL is not set.
 - The axum API (xynotransit-api) replaced the Supabase backend of the spec. What that changed:
@@ -17,7 +19,7 @@ Choices made where the spec was silent.
 - An ensure period endpoint (POST /api/periods/ensure) lets any member open a new period. The start month is normalised to the first of the month.
 - Closed period rule: when a period is closed, only a controller can send or change reports in it. A period is closed with SQL, there is no UI for it.
 - Sending a report validates in plain words, and sending again replaces the earlier report, never duplicates it.
-- Slides use the spec fallback layout (chip mode, 24px) for 6 targets, so two-line targets are tight.
+- Slides never draw text below 20 px (18 px for the value labels of the bars). Up to 6 targets sit in one column. 7 to 10 targets, and 6 targets that are too long for one column at 20 px, switch to a two-column grid of compact cards; a text that still does not fit ends with an ellipsis on the slide (the full text stays in the alt text and notes).
 - The emails in the seed files are placeholders (name@xynotransit.example).
 - Nobody is controller until BOOTSTRAP_CONTROLLER_EMAIL is set on the API. It creates the person when missing (name from BOOTSTRAP_CONTROLLER_NAME, else the capitalised part of the email before the @) and promotes and activates it when present.
 - A magic link is valid 15 minutes, works once, and at most 5 links per person per hour are sent.
@@ -37,15 +39,17 @@ Choices made where the spec was silent.
 - The catalog hides other people's emails from employees (their own stays visible); managers get all emails.
 - The catalog is dynamic: managers create teams, people, seats, counts and targets in the People screen. A fresh install has an empty catalog.
 - The seed files moved to xynotransit-db/examples/ and are no longer loaded automatically.
-- A seat has at most 8 counts (series colours repeat from a palette of 8) and 20 targets. 8 keeps slide A readable.
+- A seat has at most 8 counts (series colours repeat from a palette of 8) and 10 targets. 8 counts keep slide A readable; 10 targets fit the two-column grid at 20 px.
 - The 70 character note limit stays, so slides never overflow. Notes are free text with no suggestion chips; the note_suggestion table is kept but unused.
 - Target comments are optional free text. They are shown on the manager Overview ("What people wrote"), not on the slides.
 - The last active manager cannot be demoted or deactivated.
 - Editing counts or targets retires the old row and adds a new one (a rename of a count keeps its row). Old reports keep the wording and counts they were answered against.
-- Deactivating a person or seat deletes nothing. Old reports stay and still count in totals; inactive seats are not expected in new periods.
+- Deactivating a person or seat deletes nothing. Old reports stay and still count in totals. A seat is expected to report only when the seat and its person are both active; the Overview tiles, the Reports table and the API count it the same way. The person dialog says what saving an inactive person does and how to undo it (turn Active on again and save).
 - Summary: only submitted reports count; volume is the sum of all counts; counts with the same name (ignoring case) are added across seats; expected for older periods in the trend is the active seats now.
 - Demo mode lets people, teams, seats and definitions be edited too, in memory only.
-- Manager routes: /manager is Overview, /manager/reports is the old dashboard, /manager/people is People.
+- Manager routes: /manager is Overview, /manager/reports is Reports (slides, the received table and exports), /manager/deck is Deck text, /manager/people is People.
+- Export data (CSV) on the Reports page downloads the shown period's sent reports as one long table (Period, Team, Person, Role, Seat, Type, Item, Month, Value, Status, Text, Sent at). Types: Count (one row per count and month), Target (status and comment), Note (one row per note) and Missing (a seat with no sent report). The file is UTF-8 with a byte order mark so Excel reads accents, lines end with CRLF, cells follow RFC 4180 quoting, and a text cell that starts with = + - @ or a tab gets a leading apostrophe so a spreadsheet never runs it as a formula. The name is Xynotransit_reports_<period>.csv.
+- Large lists: the People screen builds only the rows near the screen, with search, team filter and sort; the Overview people table shows 100 rows and a button for more, with search and Missing only; deleting a team asks first.
 - Slide words are customizable. Every text a manager may want to change is a field (see the README, "Deck text"); the words in the code are only the defaults.
 - Words are stored per period. A period without its own words inherits the latest earlier period's (by start month), else the built-in defaults.
 - Words are frozen into each generated deck (deck_run.texts), like the data. Editing words later never changes an existing deck; the manager gets a notice and regenerates. Decks made before this feature read as the defaults.

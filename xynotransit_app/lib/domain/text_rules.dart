@@ -58,6 +58,26 @@ String trimText(String s) {
 /// Length in characters (code points), as the server counts. Not UTF-16 units.
 int charCount(String s) => s.runes.length;
 
+/// The first [max] characters (code points) of [s]. Never cuts a pair of
+/// UTF-16 units in two, so an emoji is kept whole or dropped whole.
+String cutChars(String s, int max) {
+  if (max <= 0) return '';
+  var n = 0;
+  var i = 0;
+  while (i < s.length && n < max) {
+    final u = s.codeUnitAt(i);
+    final pair =
+        u >= 0xD800 &&
+        u <= 0xDBFF &&
+        i + 1 < s.length &&
+        s.codeUnitAt(i + 1) >= 0xDC00 &&
+        s.codeUnitAt(i + 1) <= 0xDFFF;
+    i += pair ? 2 : 1;
+    n++;
+  }
+  return s.substring(0, i);
+}
+
 /// True when [s] has a control or invisible character: the server's list.
 bool hasHiddenChars(String s) =>
     s.runes.any((c) => isControlRune(c) || isInvisibleRune(c));

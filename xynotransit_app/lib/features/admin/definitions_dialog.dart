@@ -6,6 +6,7 @@ import '../../core/theme/tokens.dart';
 import '../../core/widgets.dart';
 import '../../domain/admin.dart';
 import '../../domain/catalog.dart';
+import '../../domain/text_rules.dart';
 import 'admin_providers.dart';
 
 /// One line being edited. [id] is null for a new one.
@@ -81,7 +82,7 @@ class _DefinitionsEditorState extends ConsumerState<DefinitionsEditor> {
   String? _countError(int i) {
     final t = _counts[i].text;
     if (t.isEmpty) return _tried ? 'Give this count a name.' : null;
-    if (t.length > DefinitionRules.maxMetricLabel) {
+    if (charCount(t) > DefinitionRules.maxMetricLabel) {
       return 'Use ${DefinitionRules.maxMetricLabel} characters or fewer.';
     }
     final low = t.toLowerCase();
@@ -96,7 +97,7 @@ class _DefinitionsEditorState extends ConsumerState<DefinitionsEditor> {
   String? _targetError(int i) {
     final t = _targets[i].text;
     if (t.isEmpty) return _tried ? 'Write the target.' : null;
-    if (t.length > DefinitionRules.maxKpiText) {
+    if (charCount(t) > DefinitionRules.maxKpiText) {
       return 'Use ${DefinitionRules.maxKpiText} characters or fewer.';
     }
     return null;
@@ -396,7 +397,7 @@ class _DefinitionsEditorState extends ConsumerState<DefinitionsEditor> {
     final t = context.tokens;
     final n = i + 1;
     final r = rows[i];
-    final len = r.controller.text.trim().length;
+    final len = charCount(r.controller.text.trim());
     final field = Semantics(
       label: '${noun[0].toUpperCase()}${noun.substring(1)} $n',
       textField: true,

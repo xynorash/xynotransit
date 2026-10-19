@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::snapshot::{month_at, month_long};
 
-use crate::rules::msg;
+use crate::rules::{fold_spaces, msg};
 pub use crate::rules::{
     COMMENT_MAX_CHARS, KPI_STATUSES, NOTES_PER_KIND, NOTE_KINDS, NOTE_MAX_CHARS,
     REPORTER_MAX_CHARS, VALUE_MAX, VALUE_MIN,
@@ -51,16 +51,17 @@ impl ReporterIn {
     /// The three words, trimmed.
     pub fn trimmed(&self) -> (String, String, String) {
         (
-            self.name.trim().to_string(),
-            self.country.trim().to_string(),
-            self.role.trim().to_string(),
+            fold_spaces(&self.name),
+            fold_spaces(&self.country),
+            fold_spaces(&self.role),
         )
     }
 }
 
 /// Problems of one reporter field: empty, too long (in characters), or not plain text.
 fn field_problem(value: &str, what: &str) -> Option<String> {
-    let t = value.trim();
+    let folded = fold_spaces(value);
+    let t = folded.as_str();
     if t.is_empty() {
         Some(msg::REPORTER_EMPTY.replace("{what}", what))
     } else if t.chars().count() > REPORTER_MAX_CHARS {
@@ -196,11 +197,12 @@ pub fn validate(
     if left > 0 {
         problems.push(msg::KPIS_LEFT.replace("{left}", &left.to_string()));
     }
-    if input
-        .kpis
-        .iter()
-        .any(|k| k.comment.as_deref().map_or(0, |c| c.trim().chars().count()) > COMMENT_MAX_CHARS)
-    {
+    if input.kpis.iter().any(|k| {
+        k.comment
+            .as_deref()
+            .map_or(0, |c| fold_spaces(c).chars().count())
+            > COMMENT_MAX_CHARS
+    }) {
         problems.push(msg::COMMENT_LONG.to_string());
     }
 
@@ -238,13 +240,13 @@ pub fn validate(
             problems.push(msg::NOTE_SAME_NUMBER.to_string());
         }
     }
-    if input.notes.iter().any(|n| n.text.trim().is_empty()) {
+    if input.notes.iter().any(|n| fold_spaces(&n.text).is_empty()) {
         problems.push(msg::NOTE_EMPTY.to_string());
     }
     if input
         .notes
         .iter()
-        .any(|n| n.text.trim().chars().count() > NOTE_MAX_CHARS)
+        .any(|n| fold_spaces(&n.text).chars().count() > NOTE_MAX_CHARS)
     {
         problems.push(msg::NOTE_LONG.to_string());
     }
@@ -453,6 +455,27 @@ mod tests {
             position,
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn reporter_words_fold_lookalike_spaces() {
+        let r = ReporterIn {
+            name: " Ana\u{00A0}\u{00A0}Rova ".into(),
+            country: "Costa\u{3000}Rica".into(),
+            role: "Import\u{2003}desk".into(),
+        };
+        assert_eq!(
+            r.trimmed(),
+            ("Ana Rova".into(), "Costa Rica".into(), "Import desk".into())
+        );
+        assert!(
+            reporter_problems(Some(&ReporterIn {
+                name: "\u{00A0}\u{3000}".into(),
+                ..r.clone()
+            }))
+            .len()
+                == 1
+        );
     }
 
     #[test]

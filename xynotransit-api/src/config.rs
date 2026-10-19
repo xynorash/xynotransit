@@ -2,6 +2,17 @@
 
 use std::net::SocketAddr;
 
+/// How the API talks to the mail server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmtpSecurity {
+    /// Plain text, for a local catcher such as Mailpit.
+    None,
+    /// Starts plain, then upgrades the connection (usually port 587).
+    StartTls,
+    /// Encrypted from the first byte (usually port 465).
+    Tls,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
@@ -9,6 +20,9 @@ pub struct Config {
     pub public_url: String,
     pub smtp_host: String,
     pub smtp_port: u16,
+    pub smtp_security: SmtpSecurity,
+    /// Both set or both empty.
+    pub smtp_credentials: Option<(String, String)>,
     pub mail_from: String,
     pub bind: SocketAddr,
     pub bootstrap_controller_email: Option<String>,
@@ -40,6 +54,22 @@ impl Config {
             Some(p) => p.parse::<u16>().map_err(|_| "SMTP_PORT must be a number")?,
             None => 1025,
         };
+        let smtp_security = match non_empty("SMTP_TLS").map(|v| v.to_ascii_lowercase()) {
+            None => SmtpSecurity::None,
+            Some(v) => match v.as_str() {
+                "none" => SmtpSecurity::None,
+                "starttls" => SmtpSecurity::StartTls,
+                "tls" => SmtpSecurity::Tls,
+                _ => return Err("SMTP_TLS must be none, starttls or tls".into()),
+            },
+        };
+        // Spaces around a user name are never meant; the password is kept as typed.
+        let smtp_credentials = match (non_empty("SMTP_USERNAME"), get("SMTP_PASSWORD")) {
+            (Some(u), Some(p)) if !p.is_empty() => Some((u, p)),
+            (None, None) => None,
+            (None, Some(p)) if p.is_empty() => None,
+            _ => return Err("SMTP_USERNAME and SMTP_PASSWORD must be set together".into()),
+        };
         let bind = non_empty("BIND").unwrap_or_else(|| "0.0.0.0:8081".into());
         let bind = bind
             .parse::<SocketAddr>()
@@ -55,6 +85,8 @@ impl Config {
             public_url,
             smtp_host: non_empty("SMTP_HOST").unwrap_or_else(|| "mailpit".into()),
             smtp_port,
+            smtp_security,
+            smtp_credentials,
             mail_from: non_empty("MAIL_FROM")
                 .unwrap_or_else(|| "Xynotransit <no-reply@xynotransit.local>".into()),
             bind,
@@ -126,6 +158,49 @@ mod tests {
             c.bootstrap_controller_email.as_deref(),
             Some("boss@example.org")
         );
+    }
+
+    #[test]
+    fn smtp_security_and_credentials_are_checked() {
+        let base = [
+            ("DATABASE_URL", "postgres://x"),
+            ("JWT_SECRET", "0123456789012345678901234567890123"),
+        ];
+        let with = |extra: &[(&'static str, &'static str)]| {
+            let mut p = base.to_vec();
+            p.extend_from_slice(extra);
+            Config::from_lookup(lookup(&p))
+        };
+        let c = with(&[]).unwrap();
+        assert_eq!(c.smtp_security, SmtpSecurity::None);
+        assert!(c.smtp_credentials.is_none());
+        let c = with(&[
+            ("SMTP_TLS", "StartTLS"),
+            ("SMTP_USERNAME", "apikey"),
+            ("SMTP_PASSWORD", "s3 cret"),
+        ])
+        .unwrap();
+        assert_eq!(c.smtp_security, SmtpSecurity::StartTls);
+        assert_eq!(
+            c.smtp_credentials,
+            Some(("apikey".to_string(), "s3 cret".to_string()))
+        );
+        assert_eq!(
+            with(&[("SMTP_TLS", "tls")]).unwrap().smtp_security,
+            SmtpSecurity::Tls
+        );
+        assert!(with(&[("SMTP_TLS", "yes")]).is_err());
+        assert!(with(&[("SMTP_USERNAME", "u")]).is_err());
+        assert!(with(&[("SMTP_PASSWORD", "p")]).is_err());
+        // Empty values (as an env file template leaves them) mean "not set".
+        assert!(with(&[
+            ("SMTP_USERNAME", ""),
+            ("SMTP_PASSWORD", ""),
+            ("SMTP_TLS", "")
+        ])
+        .unwrap()
+        .smtp_credentials
+        .is_none());
     }
 
     #[test]

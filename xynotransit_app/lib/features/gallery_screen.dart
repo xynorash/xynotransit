@@ -20,7 +20,10 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   late final Future<List<SlideSpec>> _slides = _build();
 
   Future<List<SlideSpec>> _build() async {
-    final catalog = await ref.read(catalogProvider.future);
+    // Not catalogProvider.future: nothing else listens to that provider on
+    // this route, so it would never produce a value and the page would wait
+    // for ever.
+    final catalog = await ref.read(repositoryProvider).loadCatalog();
     final repo = MemoryRepository(
       catalog: catalog,
       currentUser: () => DemoAuth.controller,
@@ -38,6 +41,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
       body: FutureBuilder<List<SlideSpec>>(
         future: _slides,
         builder: (context, snap) {
+          if (snap.hasError) {
+            return const Center(
+              child: Text('The slides could not be built. Reload the page.'),
+            );
+          }
           final slides = snap.data;
           if (slides == null) {
             return const Center(child: CircularProgressIndicator());

@@ -34,6 +34,8 @@ services:
       LOG_MAGIC_LINKS: ${LOG_MAGIC_LINKS:-true}
       BIND: 0.0.0.0:8081
       RUST_LOG: ${RUST_LOG:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      SHUTDOWN_GRACE_SECS: ${SHUTDOWN_GRACE_SECS:-8}
     depends_on:
       db:
         condition: service_healthy
@@ -41,6 +43,7 @@ services:
         condition: service_started
     expose:
       - "8081"
+    stop_grace_period: 15s
     restart: unless-stopped
 
   mailpit:

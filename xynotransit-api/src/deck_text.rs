@@ -139,7 +139,8 @@ pub fn check(field: &Field, value: &str) -> Result<String, String> {
     } else {
         value
     };
-    let v = value.trim();
+    let folded = crate::rules::fold_spaces(value);
+    let v = folded.as_str();
     if v.is_empty() && !field.can_be_empty {
         return Err(format!("{} cannot be empty.", field.label));
     }

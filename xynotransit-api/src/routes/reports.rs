@@ -252,7 +252,7 @@ async fn send(
         let comment = k
             .comment
             .as_deref()
-            .map(str::trim)
+            .map(crate::rules::fold_spaces)
             .filter(|c| !c.is_empty());
         sqlx::query(
             "insert into report_kpi_result (report_id, assignment_id, kpi_def_id, status, comment)
@@ -262,7 +262,7 @@ async fn send(
         .bind(assignment_id)
         .bind(k.kpi_def_id)
         .bind(&k.status)
-        .bind(comment)
+        .bind(comment.as_deref())
         .execute(&mut *tx)
         .await?;
     }
@@ -273,7 +273,7 @@ async fn send(
         .bind(report_id)
         .bind(&n.kind)
         .bind(n.position)
-        .bind(n.text.trim())
+        .bind(crate::rules::fold_spaces(&n.text))
         .execute(&mut *tx)
         .await?;
     }

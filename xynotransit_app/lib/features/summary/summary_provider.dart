@@ -132,16 +132,7 @@ final writingsProvider = Provider<Writings>((ref) {
   return Writings(notes: notes, comments: comments);
 });
 
-String _nameOf(Catalog c, Assignment a) {
-  for (final p in c.persons) {
-    if (p.id == a.personId) return p.fullName;
-  }
-  return 'Someone';
-}
+String _nameOf(Catalog c, Assignment a) =>
+    c.personById(a.personId)?.fullName ?? 'Someone';
 
-String _teamName(Catalog c, Assignment a) {
-  for (final t in c.teams) {
-    if (t.id == a.teamId) return t.name;
-  }
-  return '';
-}
+String _teamName(Catalog c, Assignment a) => c.teamById(a.teamId)?.name ?? '';

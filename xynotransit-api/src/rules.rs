@@ -170,9 +170,38 @@ pub fn is_invisible(c: char) -> bool {
         | '\u{FFA0}' | '\u{FFF9}'..='\u{FFFB}' | '\u{E0000}'..='\u{E0FFF}')
 }
 
-/// Trim, then require 1..=max characters on one line.
+/// Unicode space separators (category Zs): no-break space, ideographic space, en/em spaces ...
+fn is_space_separator(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0020}' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+    )
+}
+
+/// Trim, turn every Unicode space separator into a plain space and collapse runs of spaces to
+/// one, so "Ana  Rova" and "Ana\u{00A0}Rova" are the same name. Line breaks are left alone.
+pub fn fold_spaces(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_space = false;
+    for c in s.trim().chars() {
+        if is_space_separator(c) {
+            if !prev_space {
+                out.push(' ');
+            }
+            prev_space = true;
+        } else {
+            out.push(c);
+            prev_space = false;
+        }
+    }
+    out
+}
+
+/// Fold spaces, then require 1..=max characters on one line.
 pub fn clean_line(s: &str, max: usize, empty: &str, long: &str) -> Result<String, ApiError> {
-    let t = s.trim();
+    let folded = fold_spaces(s);
+    let t = folded.as_str();
     if t.is_empty() {
         return Err(ApiError::bad(empty));
     }
@@ -352,6 +381,12 @@ mod tests {
         assert!(clean_line("   ", 60, "e", "l").is_err());
         assert!(clean_line("a\nb", 60, "e", "l").is_err());
         assert_eq!(clean_line("  hi  ", 60, "e", "l").unwrap(), "hi");
+        assert_eq!(
+            clean_line("Ana\u{00A0}\u{3000} Rova\u{2003}", 60, "e", "l").unwrap(),
+            "Ana Rova"
+        );
+        assert!(clean_line("\u{00A0}\u{3000}", 60, "e", "l").is_err());
+        assert_eq!(fold_spaces(" a\u{2009}\u{2009}b\nc  d "), "a b\nc d");
     }
 
     #[test]

@@ -1,0 +1,109 @@
+# Xynotransit production stack: Caddy (automatic HTTPS) -> web (nginx + the app) -> api -> db.
+# Uses the images that CI publishes to ghcr.io; nothing is built on the server.
+#
+#   cp .env.prod.example .env.prod      # fill it in (see ../docs/DEPLOY.md)
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+#
+# Only Caddy publishes ports (80 and 443). The database and the API are reachable only from
+# inside the Docker network. There is no Mailpit: sign-in emails go through your SMTP server.
+# The project name matches the dev stack, so scripts/backup.sh and scripts/restore.sh find the
+# database container (xynotransit-db-db-1) without any setting.
+name: xynotransit-db
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: ghcr.io/xynorash/xynotransit/db:${IMAGE_TAG:-latest}
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+    volumes:
+      - pgdata:/var/lib/postgres/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h /tmp -U xynotransit -d xynotransit"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *logging
+
+  api:
+    image: ghcr.io/xynorash/xynotransit/api:${IMAGE_TAG:-latest}
+    environment:
+      DATABASE_URL: postgres://xynotransit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}@db:5432/xynotransit
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env.prod (openssl rand -hex 32)}
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env.prod (https://your.domain)}
+      SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST in .env.prod}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_TLS: ${SMTP_TLS:-starttls}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:?set MAIL_FROM in .env.prod}
+      BOOTSTRAP_CONTROLLER_EMAIL: ${BOOTSTRAP_CONTROLLER_EMAIL:-}
+      BOOTSTRAP_CONTROLLER_NAME: ${BOOTSTRAP_CONTROLLER_NAME:-}
+      LOG_MAGIC_LINKS: "false"
+      BIND: 0.0.0.0:8081
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SHUTDOWN_GRACE_SECS: "8"
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8081"
+    # The image has its own HEALTHCHECK (xynotransit-api healthcheck).
+    stop_grace_period: 15s
+    restart: unless-stopped
+    logging: *logging
+
+  web:
+    image: ghcr.io/xynorash/xynotransit/web:${IMAGE_TAG:-latest}
+    depends_on:
+      - api
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/index.html || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    logging: *logging
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env.prod (the name people will type)}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  # The data. Back it up with scripts/backup.sh, not by copying this volume.
+  pgdata:
+  # Certificates. Keep it: Let's Encrypt limits how often a certificate can be issued.
+  caddy_data:
+  caddy_config:

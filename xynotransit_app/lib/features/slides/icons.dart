@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../domain/enums.dart';
+
 enum NoteIcon { check, warning, bulb }
 
 /// Stroke icons drawn on a 24 unit grid and scaled to [size].
@@ -79,4 +81,81 @@ class NoteIconPainter extends CustomPainter {
   @override
   bool shouldRepaint(NoteIconPainter old) =>
       old.icon != icon || old.color != color;
+}
+
+/// A shape for each answer, so Met, Partly and Missed differ without colour:
+/// a tick, a half-filled circle and a cross. Null (not answered) has none.
+class StatusGlyph extends StatelessWidget {
+  const StatusGlyph(this.status, this.color, {super.key, this.size = 20});
+
+  final KpiStatus? status;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = status;
+    if (s == null) return const SizedBox.shrink();
+    return ExcludeSemantics(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: CustomPaint(painter: StatusGlyphPainter(s, color)),
+      ),
+    );
+  }
+}
+
+class StatusGlyphPainter extends CustomPainter {
+  const StatusGlyphPainter(this.status, this.color);
+
+  final KpiStatus status;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24);
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    switch (status) {
+      case KpiStatus.met:
+        canvas.drawPath(
+          Path()
+            ..moveTo(4, 12.5)
+            ..lineTo(9.5, 18)
+            ..lineTo(20, 6),
+          stroke,
+        );
+      case KpiStatus.partly:
+        canvas.drawCircle(const Offset(12, 12), 9, stroke..strokeWidth = 2.6);
+        canvas.drawPath(
+          Path()
+            ..moveTo(12, 3)
+            ..arcToPoint(
+              const Offset(12, 21),
+              radius: const Radius.circular(9),
+              clockwise: false,
+            )
+            ..close(),
+          Paint()..color = color,
+        );
+      case KpiStatus.missed:
+        canvas.drawPath(
+          Path()
+            ..moveTo(5, 5)
+            ..lineTo(19, 19)
+            ..moveTo(19, 5)
+            ..lineTo(5, 19),
+          stroke,
+        );
+    }
+  }
+
+  @override
+  bool shouldRepaint(StatusGlyphPainter old) =>
+      old.status != status || old.color != color;
 }

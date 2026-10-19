@@ -585,13 +585,15 @@ async fn a_deactivated_person_cannot_sign_in_or_use_a_token() {
         assert_eq!(s, StatusCode::UNAUTHORIZED, "{uri}");
         assert_eq!(v["error"], "Please sign in.");
     }
-    // Their seat is untouched.
+    // Their seat is untouched (still active), but the default view hides it with its person.
     let cat = catalog(&app, &t, "").await;
     assert!(cat["assignments"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|a| a["id"] == A_BEN));
+        .all(|a| a["id"] != A_BEN));
+    let cat = catalog(&app, &t, "?include_inactive=true").await;
+    assert_eq!(seat(&cat, A_BEN)["active"], true);
 
     let before = app.state.mailer.sent().len();
     let (s, _) = app
@@ -849,6 +851,99 @@ async fn include_inactive_is_for_controllers_only() {
         .iter()
         .filter(|p| p["id"] != ANA)
         .all(|p| p["email"].is_null()));
+}
+
+#[tokio::test]
+async fn a_seat_of_an_inactive_person_is_hidden_unless_asked_for() {
+    let app = TestApp::new().await;
+    let t = boss(&app).await;
+    let (s, _) = app
+        .call(
+            "PATCH",
+            &format!("/api/persons/{ANA}"),
+            Some(&t),
+            Some(json!({"active": false})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    // The seat itself is still active, but its person is not.
+    let plain = catalog(&app, &t, "").await;
+    assert!(plain["persons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|p| p["id"] != ANA));
+    assert!(plain["assignments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|a| a["person_id"] != ANA));
+    let all = catalog(&app, &t, "?include_inactive=true").await;
+    assert_eq!(seat(&all, A_ANA)["person_id"], ANA);
+    let ben = app.login("ben@example.org").await;
+    let v = catalog(&app, &ben, "").await;
+    assert!(v["assignments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|a| a["person_id"] != ANA));
+}
+
+#[tokio::test]
+async fn lookalike_spaces_fold_to_one_plain_space_and_role_titles_ignore_case() {
+    let app = TestApp::new().await;
+    let t = boss(&app).await;
+    let (s, team) = app
+        .call(
+            "POST",
+            "/api/teams",
+            Some(&t),
+            Some(json!({"name": "  Sea\u{00A0}\u{3000}freight\u{2003} "})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{team}");
+    assert_eq!(team["name"], "Sea freight");
+    // The same name with a no-break space is a case twin of the first team.
+    let (s, _) = app
+        .call(
+            "POST",
+            "/api/teams",
+            Some(&t),
+            Some(json!({"name": "sea\u{00A0}FREIGHT"})),
+        )
+        .await;
+    assert_ne!(s, StatusCode::CREATED);
+    let (s, p) = app
+        .call(
+            "POST",
+            "/api/persons",
+            Some(&t),
+            Some(json!({"full_name": "Zed\u{00A0}\u{00A0}Quill", "email": "zed@example.org", "app_role": "contributor"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{p}");
+    assert_eq!(p["full_name"], "Zed Quill");
+    let body =
+        |title: &str| json!({"person_id": p["id"], "team_id": team["id"], "role_title": title});
+    let (s, seat1) = app
+        .call(
+            "POST",
+            "/api/assignments",
+            Some(&t),
+            Some(body("Import\u{00A0}desk")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{seat1}");
+    assert_eq!(seat1["role_title"], "Import desk");
+    let (s, _) = app
+        .call(
+            "POST",
+            "/api/assignments",
+            Some(&t),
+            Some(body("IMPORT  DESK")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT);
 }
 
 // ---------- counts and targets ----------

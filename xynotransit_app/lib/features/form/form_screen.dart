@@ -637,7 +637,7 @@ class NumbersCard extends ConsumerWidget {
 }
 
 /// The three month boxes of one count. Side by side when there is room,
-/// stacked on phones and at large text, so nine digit numbers always fit.
+/// stacked on phones and at large text, so the largest number always fits.
 class _MonthFields extends ConsumerWidget {
   const _MonthFields({
     required this.months,
@@ -653,8 +653,8 @@ class _MonthFields extends ConsumerWidget {
   final List<int?> values;
   final bool showErrors;
 
-  /// Width of one month box needed to show 999,999,999 at the field's size.
-  static const _needed = 150.0;
+  /// Width of one month box needed to show 1,000,000,000 at the field's size.
+  static const _needed = 182.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

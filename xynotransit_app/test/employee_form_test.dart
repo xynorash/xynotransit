@@ -49,8 +49,14 @@ void main() {
       expect(parseWholeNumber('-5').problem, 'Whole numbers only');
       expect(parseWholeNumber('−5').problem, 'Whole numbers only');
       expect(parseWholeNumber('12a').problem, 'Digits only');
-      expect(parseWholeNumber('1000000000').problem, 'Too large');
+      expect(
+        parseWholeNumber('1000000001').problem,
+        'A number can be at most 1000000000.',
+      );
+      expect(parseWholeNumber('1000000000').digits, '1000000000');
+      expect(parseWholeNumber('1 000 000 000').digits, '1000000000');
       expect(parseWholeNumber('999999999').digits, '999999999');
+      expect(parseWholeNumber('abc').problem, 'Digits only');
     });
   });
 
@@ -61,6 +67,34 @@ void main() {
       await t.pump();
       expect(c.read(formControllerProvider).report!.values['m0']![0], 1234567);
       expect(textOf(t, 0), '1234567');
+    });
+
+    testWidgets('the documented maximum is accepted, one more is refused', (
+      t,
+    ) async {
+      final c = await pumpCustom(t, customCatalog(1));
+      await t.enterText(numberText(0), '1 000 000 000');
+      await t.pump();
+      expect(
+        c.read(formControllerProvider).report!.values['m0']![0],
+        1000000000,
+      );
+      expect(textOf(t, 0), '1000000000');
+      await t.enterText(numberText(0), '1000000001');
+      await t.pump();
+      await t.pump();
+      expect(textOf(t, 0), '1000000000');
+      expect(find.text('A number can be at most 1000000000.'), findsOneWidget);
+      for (final bad in ['12.5', '-5', 'abc']) {
+        await t.enterText(numberText(0), bad);
+        await t.pump();
+        await t.pump();
+        expect(textOf(t, 0), '1000000000');
+        expect(
+          c.read(formControllerProvider).report!.values['m0']![0],
+          1000000000,
+        );
+      }
     });
 
     testWidgets('a decimal or minus sign is refused with a plain message', (
@@ -98,17 +132,17 @@ void main() {
       expect(textOf(t, 0), '1234567');
     });
 
-    testWidgets('nine digits fit on a 360 px phone', (t) async {
+    testWidgets('the largest number fits on a 360 px phone', (t) async {
       await pumpCustom(t, customCatalog(1));
       t.view.physicalSize = const Size(360, 3000);
       await t.pumpAndSettle();
-      await t.enterText(numberText(0), '999999999');
+      await t.enterText(numberText(0), '1000000000');
       await t.enterText(numberText(1), '1');
       await t.pump();
-      expect(textOf(t, 0), '999,999,999');
+      expect(textOf(t, 0), '1,000,000,000');
       final tp = TextPainter(
         text: TextSpan(
-          text: '999,999,999',
+          text: '1,000,000,000',
           style: monoStyle(
             t.element(find.byType(NumberField).first),
             size: 22,

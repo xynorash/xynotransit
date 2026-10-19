@@ -7,6 +7,7 @@ import '../../domain/enums.dart';
 import '../../domain/snapshot.dart';
 import 'canvas.dart';
 import 'fit.dart';
+import 'icons.dart';
 import 'measure.dart';
 import 'palette.dart';
 import 'slide_words.dart';
@@ -194,16 +195,29 @@ class _GridCard extends StatelessWidget {
               color: SlidePalette.statusColor(target.status),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Text(
-              SlidePalette.statusWord(target.status),
-              maxLines: 1,
-              style: st(
-                chipFontSize,
-                weight: FontWeight.w700,
-                color: Colors.white,
-                letterSpacing: 1,
-                height: 1.2,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (target.status != null) ...[
+                  StatusGlyph(
+                    target.status,
+                    Colors.white,
+                    size: chipFontSize * 0.9,
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  SlidePalette.statusWord(target.status),
+                  maxLines: 1,
+                  style: st(
+                    chipFontSize,
+                    weight: FontWeight.w700,
+                    color: Colors.white,
+                    letterSpacing: 1,
+                    height: 1.2,
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 6),
@@ -306,14 +320,22 @@ class _KpiCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'KPI $index · $word',
-                    style: st(
-                      24,
-                      weight: FontWeight.w700,
-                      color: color,
-                      letterSpacing: 2,
-                    ),
+                  Row(
+                    children: [
+                      if (target.status != null) ...[
+                        StatusGlyph(target.status, color, size: 22),
+                        const SizedBox(width: 8),
+                      ],
+                      Text(
+                        'KPI $index · $word',
+                        style: st(
+                          24,
+                          weight: FontWeight.w700,
+                          color: color,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 6),
                   text,
@@ -339,16 +361,28 @@ class _KpiCard extends StatelessWidget {
                       color: color,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Text(
-                      word,
-                      textAlign: TextAlign.center,
-                      style: st(
-                        20,
-                        weight: FontWeight.w700,
-                        color: Colors.white,
-                        letterSpacing: 1,
-                        height: 1.15,
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (target.status != null) ...[
+                          StatusGlyph(target.status, Colors.white, size: 18),
+                          const SizedBox(width: 6),
+                        ],
+                        Flexible(
+                          child: Text(
+                            word,
+                            textAlign: TextAlign.center,
+                            style: st(
+                              20,
+                              weight: FontWeight.w700,
+                              color: Colors.white,
+                              letterSpacing: 1,
+                              height: 1.15,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 16),
