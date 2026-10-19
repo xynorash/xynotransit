@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show ValueNotifier;
+
 import '../../domain/admin.dart';
 import '../../domain/summary.dart';
 import '../../domain/catalog.dart';
@@ -33,6 +35,14 @@ class ApiRepository implements Repository {
   final Duration pollInterval;
   final Duration debounce;
   final _live = <String, LiveChanges>{};
+  final _visibility = createPlatformVisibility();
+
+  /// On while any watched period has live updates down for real.
+  @override
+  final ValueNotifier<bool> liveUpdatesPaused = ValueNotifier(false);
+
+  void _syncPaused() =>
+      liveUpdatesPaused.value = _live.values.any((l) => l.paused.value);
 
   Future<Object?> _catalogData(bool includeInactive) => _api.get(
     '/catalog',
@@ -186,9 +196,8 @@ class ApiRepository implements Repository {
   Future<DeckRun?> _fetchDeck(String periodId) async =>
       parseDeckOrNull(await _api.get('/periods/$periodId/deck'));
 
-  LiveChanges _liveFor(String periodId) => _live.putIfAbsent(
-    periodId,
-    () => LiveChanges(
+  LiveChanges _liveFor(String periodId) => _live.putIfAbsent(periodId, () {
+    final l = LiveChanges(
       source: _sse,
       fetchTicket: () async {
         final j = asJson(await _api.post('/events/ticket'));
@@ -199,8 +208,11 @@ class ApiRepository implements Repository {
       backoff: backoff,
       pollInterval: pollInterval,
       debounce: debounce,
-    ),
-  );
+      visibility: _visibility,
+    );
+    l.paused.addListener(_syncPaused);
+    return l;
+  });
 
   /// The first load may fail loudly. Later refetches keep the last value
   /// when they fail, and the next change or poll tries again. Refetches never

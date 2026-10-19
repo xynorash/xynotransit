@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
+
 import 'dart:async';
 
 import 'package:xynotransit_app/data/api/api_client.dart'
@@ -24,6 +26,9 @@ class _Acting implements Repository {
 
   /// Replaced after a password change: the fresh session.
   AppUser me;
+
+  @override
+  ValueListenable<bool> get liveUpdatesPaused => _r.liveUpdatesPaused;
 
   T _as<T>(T Function() f) => runZoned(f, zoneValues: {_actor: me});
 

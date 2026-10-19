@@ -1,0 +1,69 @@
+# Template for the Netlify front door. Do NOT put a real key in this file.
+# make_netlify_toml.sh fills the two placeholders and writes the result into
+# the build folder (never into git).
+#
+#   __API_ORIGIN__     for example https://84-12-108-224.sslip.io (no trailing slash)
+#   __PROXY_AUTH_KEY__ the shared key, same value as PROXY_AUTH_KEY on the server
+
+# The browser only talks to netlify.app. Netlify forwards /api/* to the server
+# (a status 200 rewrite is a proxy, not a redirect) and adds the key so the
+# server can tell the request came through this front door. A proxied request
+# is cut by Netlify after about 26 seconds; the app reconnects by itself.
+[[redirects]]
+  from = "/api/*"
+  to = "__API_ORIGIN__/api/:splat"
+  status = 200
+  force = true
+  headers = { X-Xt-Proxy-Key = "__PROXY_AUTH_KEY__" }
+
+# Single page app: every other path serves the app.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Same security headers as the nginx image (xynotransit-db/web/security-headers.conf)
+# plus HSTS, which Caddy adds on the Oracle host. The API is reached through
+# 'self', so the CSP names no other origin for it.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    Strict-Transport-Security = "max-age=31536000"
+
+# Entry points are always revalidated. main.dart.js has no hash in its name,
+# so it is revalidated too.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/flutter_service_worker.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/flutter_bootstrap.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/version.json"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/main.dart.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+# canvaskit never changes under the same name (same rule as the nginx image).
+[[headers]]
+  for = "/canvaskit/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

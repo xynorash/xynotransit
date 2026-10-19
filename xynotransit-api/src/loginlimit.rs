@@ -32,6 +32,14 @@
 //! none (everything private, as with Docker NAT or IPv6 through docker-proxy), the header is
 //! unusable or there is no peer, the address is UNKNOWN: the per-address limit is skipped and the
 //! pair uses the constant address `unknown`. IPv6 clients count per /64.
+//!
+//! TRUSTED FRONT DOOR (optional). When PROXY_AUTH_KEY is set and a request carries exactly one
+//! PROXY_AUTH_HEADER line equal to it (constant time compare), the client is the address in
+//! exactly one PROXY_CLIENT_HEADER line, if that parses as a PUBLIC IP (`front_door_addr`). A
+//! wrong, missing or doubled key, an unset PROXY_AUTH_KEY, or a missing, doubled, invalid or
+//! private client header means the rules above apply unchanged. Both headers of a request
+//! without the correct key are ignored completely. Every limit, audit row and trusted address
+//! gets its address from the `ClientAddr` extractor, so they all see the same resolved address.
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -143,6 +151,49 @@ pub fn client_addr(peer: Option<IpAddr>, forwarded_for: Option<&str>) -> Option<
     None
 }
 
+/// Compare two secrets without leaking where they differ or how long the stored one is: both
+/// are hashed to 32 bytes, then compared byte by byte without stopping early.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    use sha2::Digest;
+    let (ha, hb) = (Sha256::digest(a), Sha256::digest(b));
+    ha.iter().zip(hb.iter()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+/// The client address key given by a trusted front door, or `None` when the request does not
+/// carry the correct key or the client header is unusable (the caller then uses the normal rules).
+pub fn front_door_addr(
+    cfg: Option<&crate::config::ProxyAuth>,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    let cfg = cfg?;
+    let mut keys = headers.get_all(&cfg.key_header).iter();
+    let sent = keys.next()?;
+    if keys.next().is_some() || !constant_time_eq(sent.as_bytes(), cfg.key.as_bytes()) {
+        return None;
+    }
+    let mut vals = headers.get_all(&cfg.client_header).iter();
+    let raw = vals.next()?.to_str().ok()?;
+    if vals.next().is_some() {
+        return None;
+    }
+    let ip = raw.trim().parse::<IpAddr>().ok()?;
+    // Same rule as everywhere: only a public address counts.
+    (!is_private(ip) && !not_a_visitor(ip)).then(|| key_of(ip))
+}
+
+/// Addresses that can never be a real visitor (unspecified, broadcast, multicast), even when a
+/// key holder names them.
+fn not_a_visitor(ip: IpAddr) -> bool {
+    let ip = match ip {
+        IpAddr::V6(a) => a.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(a)),
+        v4 => v4,
+    };
+    match ip {
+        IpAddr::V4(a) => a.is_unspecified() || a.is_broadcast() || a.is_multicast(),
+        IpAddr::V6(a) => a.is_unspecified() || a.is_multicast(),
+    }
+}
+
 /// The caller's public address key, or `None` when it cannot be determined.
 pub struct ClientAddr(pub Option<String>);
 
@@ -164,7 +215,10 @@ fn note_unknown() {
 impl FromRequestParts<AppState> for ClientAddr {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, _: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, st: &AppState) -> Result<Self, Self::Rejection> {
+        if let Some(addr) = front_door_addr(st.config.proxy_auth.as_ref(), &parts.headers) {
+            return Ok(ClientAddr(Some(addr)));
+        }
         let peer = parts
             .extensions
             .get::<ConnectInfo<SocketAddr>>()

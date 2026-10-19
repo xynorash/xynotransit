@@ -46,6 +46,7 @@ class TopBar extends ConsumerWidget implements PreferredSizeWidget {
         screen == Screen.employee ? 'Xynotransit' : 'Xynotransit · Manager',
       ),
       actions: [
+        const _LiveNotice(),
         if (isManager)
           for (final (s, label, path) in _sections)
             _NavLink(
@@ -117,6 +118,7 @@ class TopBar extends ConsumerWidget implements PreferredSizeWidget {
         overflow: TextOverflow.ellipsis,
       ),
       actions: [
+        const _LiveNotice(compact: true),
         PopupMenuButton<void>(
           tooltip: 'Menu',
           icon: const Icon(Icons.menu),
@@ -243,6 +245,56 @@ class _NavLink extends StatelessWidget {
         ),
         child: Text(label),
       ),
+    );
+  }
+}
+
+/// A calm note that live updates are paused. It shows only after several
+/// failed tries in a row, never for the normal reconnects.
+class _LiveNotice extends ConsumerWidget {
+  const _LiveNotice({this.compact = false});
+
+  final bool compact;
+
+  static const text = 'Live updates paused, retrying';
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final paused = ref.watch(repositoryProvider).liveUpdatesPaused;
+    return ValueListenableBuilder<bool>(
+      valueListenable: paused,
+      builder: (context, isPaused, _) {
+        if (!isPaused) return const SizedBox.shrink();
+        final color = context.tokens.ink;
+        return Semantics(
+          liveRegion: true,
+          label: text,
+          child: compact
+              ? Tooltip(
+                  message: text,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Icon(Icons.sync_problem, size: 20, color: color),
+                  ),
+                )
+              : ExcludeSemantics(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.sync_problem, size: 18, color: color),
+                        const SizedBox(width: 6),
+                        Text(
+                          text,
+                          style: TextStyle(fontSize: 13, color: color),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+        );
+      },
     );
   }
 }

@@ -40,3 +40,33 @@ class _WebSseSource implements SseSource {
     return c.stream;
   }
 }
+
+PageVisibility createVisibility() => _WebVisibility();
+
+/// The page is hidden when its tab is in the background or the window is
+/// minimised.
+class _WebVisibility implements PageVisibility {
+  @override
+  bool get visible => web.document.visibilityState != 'hidden';
+
+  @override
+  Stream<bool> get changes {
+    late final StreamController<bool> c;
+    JSFunction? handler;
+    c = StreamController<bool>.broadcast(
+      onListen: () {
+        handler = ((web.Event _) {
+          if (!c.isClosed) c.add(visible);
+        }).toJS;
+        web.document.addEventListener('visibilitychange', handler);
+      },
+      onCancel: () {
+        final h = handler;
+        if (h != null) {
+          web.document.removeEventListener('visibilitychange', h);
+        }
+      },
+    );
+    return c.stream;
+  }
+}

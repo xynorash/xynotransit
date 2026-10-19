@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -35,6 +36,20 @@ class FakeSource implements SseSource {
 
 const tick = Duration(milliseconds: 10);
 
+class _Top implements Random {
+  @override
+  int nextInt(int max) => max - 1;
+  @override
+  bool nextBool() => true;
+  @override
+  double nextDouble() => 0.999;
+}
+
+class _Low extends _Top {
+  @override
+  int nextInt(int max) => 0;
+}
+
 Future<void> settle([int ms = 60]) =>
     Future<void>.delayed(Duration(milliseconds: ms));
 
@@ -55,14 +70,23 @@ LiveChanges live(
     },
     pollInterval: poll,
     debounce: tick,
+    healthyAfter: const Duration(milliseconds: 20),
   );
 }
 
 void main() {
-  test('default backoff doubles up to 30 seconds', () {
+  test('default backoff: at once first, then doubles, capped at 15 s', () {
+    // Longest possible wait (random at its top) for each failure count.
+    final top = _Top();
     expect(
-      [for (var i = 0; i < 8; i++) defaultBackoff(i).inSeconds],
-      [1, 2, 4, 8, 16, 30, 30, 30],
+      [for (var i = 0; i < 8; i++) defaultBackoff(i, top).inMilliseconds],
+      [0, 1000, 2000, 4000, 8000, 15000, 15000, 15000],
+    );
+    // Jitter: never below half, never above the full delay.
+    final low = _Low();
+    expect(
+      [for (var i = 0; i < 6; i++) defaultBackoff(i, low).inMilliseconds],
+      [0, 500, 1000, 2000, 4000, 7500],
     );
   });
 

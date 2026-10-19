@@ -30,6 +30,16 @@ It prints only the link. Open it in a browser within 24 hours; it works once. Th
 
 Apply `initdb/10-internal-signin.sql` to a database that already lives (`scripts/migrate.sh`) before starting the new API.
 
+## Netlify in front (trusted front door)
+
+If the office firewall blocks the server's own name, the web app can be served from Netlify, which forwards `/api/*` to this server.
+
+1. Create the key on the server: `openssl rand -hex 32`. Put `PROXY_AUTH_KEY=<key>` in `.env` next to `docker-compose.yml` (it is not in git) and run `docker compose up -d api`. The compose file already passes `PROXY_AUTH_KEY`, `PROXY_AUTH_HEADER` and `PROXY_CLIENT_HEADER` to the API; empty means off. Leave it unset if you do not use Netlify.
+2. Set the same key as the request header `x-xt-proxy-key` on the Netlify `/api/*` rewrite. Without it the API still works, but all visitors count as one address (shared lockouts).
+3. Caddyfile: no change is needed. Caddy passes both headers through and does not add them. Do not add `trusted_proxies` and do not strip these headers.
+4. Check: after sign-in failures from two different browsers, the API must not lock both. In the logs you must NOT see `client address unknown`, and the key never appears in logs.
+5. The live updates stream is cut by Netlify after about 26 seconds; the page must ask for a new ticket and reconnect (details in `xynotransit-api/README.md`, "Live updates").
+
 ## Passwords
 
 Passwords are added next to the sign-in links; links stay the way to get started and to recover.

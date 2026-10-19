@@ -46,3 +46,8 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Netlify front door: a generated netlify.toml carries the proxy key.
+/deploy/netlify/netlify.toml
+netlify.toml
+.netlify/

@@ -36,10 +36,35 @@ Or use the full stack with `docker compose up -d --build` in `xynotransit-db`. T
 | `BOOTSTRAP_CONTROLLER_NAME` | capitalised part of the email before the `@` | Name used only when the person is created. |
 | `INTERNAL_EMAIL_DOMAINS` | `xynotransit.internal` | Comma separated. An address at one of these domains is internal: it never receives mail (see "Sign in without an email"). The first domain is used for addresses the server generates. |
 | `PASSWORD_HASH_MEMORY_KIB`, `PASSWORD_HASH_ITERATIONS` | `19456`, `2` | Argon2id cost of NEW password hashes (parallelism is always 1). The defaults are the OWASP minimum; leave them alone. The test suite sets `64` and `1` so it stays fast; below the minimum the API logs a warning at start. A stored hash carries its own parameters, so changing these never locks anyone out: a hash made with other parameters is made again on the next good sign-in. |
+| `PROXY_AUTH_KEY` | unset | Turns on the trusted front door (see below). At least 32 characters (`openssl rand -hex 32`); shorter makes the API refuse to start. Never logged or printed. |
+| `PROXY_AUTH_HEADER` | `x-xt-proxy-key` | Name of the request header that carries the key. |
+| `PROXY_CLIENT_HEADER` | `x-nf-client-connection-ip` | Name of the request header that carries the visitor address. |
 | `LOG_MAGIC_LINKS` | `false` | Logs links at info level. Dev only. |
 | `RUST_LOG` | `info,sqlx=warn` | Log filter. |
 | `LOG_FORMAT` | text | `json` writes one JSON object per log line. |
 | `SHUTDOWN_GRACE_SECS` | `8` | After SIGTERM, how long requests that are running get to finish (1 to 300). Keep it below the container stop timeout (the compose file sets `stop_grace_period: 15s`; Docker's default is 10 s). |
+
+## Trusted front door (Netlify)
+
+When the web app is served from Netlify, the browser only talks to `https://<site>.netlify.app` and Netlify forwards `/api/*` to this server. Then every connection comes from a Netlify address, so without help all visitors would share one rate limit and one lockout. The trusted front door fixes that.
+
+- Off by default. It is on only when `PROXY_AUTH_KEY` is set (at least 32 characters, generate with `openssl rand -hex 32`).
+- A request is trusted only if it has exactly ONE `PROXY_AUTH_HEADER` line (default `x-xt-proxy-key`) equal to the key (compared in constant time). Then the visitor is the address in exactly ONE `PROXY_CLIENT_HEADER` line (default `x-nf-client-connection-ip`), if it is a valid PUBLIC IP address.
+- Anything else uses the normal rules above unchanged: wrong, missing or repeated key; key not set; client header missing, repeated, not an IP or a private IP. The two headers of a request without the correct key are ignored completely, so a made-up client header cannot dodge or poison anyone's lockout.
+- One resolved address is used everywhere: the pair, address and person counters, `Retry-After`, the audit rows and the "trusted address" memory for sign-in from a new address (all go through `ClientAddr` in `src/loginlimit.rs`).
+- The key is never logged (the settings print it as `<hidden>`, the request logger does not log headers) and never appears in an error body. Tests: `tests/front_door.rs`.
+- **The same key must be configured in Netlify.** In `netlify.toml`, give the `/api/*` rewrite (status 200, to `https://<this server>/api/:splat`) a `headers = { x-xt-proxy-key = "<the key>" }`. If the two keys differ, nothing breaks: the API just falls back to the normal rules and all visitors share one Netlify address. Netlify sets `x-nf-client-connection-ip` itself on every request it handles. Keep the key out of the public repository: set it in the Netlify site settings or only in a local, ignored file, not in a committed `netlify.toml`.
+- Caddy and the `web` nginx pass both headers through unchanged (their defaults), and neither adds them, so the browser path never gets a key. Someone calling the server directly can send any headers, but without the real key they have no effect.
+- To rotate: set a new key on the server and in Netlify, restart the API, redeploy Netlify. Between the two, visitors fall back to the shared-address rules.
+
+### Live updates (`/api/events`) behind a proxy that cuts connections
+
+Netlify ends a proxied request after about 26 seconds. What the server does when that happens:
+
+- The stream is just a response body. When the proxy closes the connection, the server drops the stream: its change subscription and its shutdown subscription are released at once. No task, ticket or other state stays behind. (A person whose epoch changes, or a server shutdown, also ends the stream.)
+- The ticket is single use: it is removed from memory the moment `GET /api/events?ticket=...&period_id=...` starts, and it expires after 60 seconds anyway. A cut stream therefore CANNOT reconnect with the old URL (that gives 401).
+- To reconnect the client must call `POST /api/events/ticket` (with its sign-in token) to get a new ticket, then open a new `GET /api/events` with it. Events that happened while it was disconnected are not replayed, so after every reconnect the page must reload the reports and deck for the period once.
+- The server sends a `ping` comment every 20 seconds, which is inside Netlify's limit, so it does not make a stream last longer than 26 seconds. Expect a reconnect about every 26 seconds, and do not treat it as an error. Some proxies also buffer a streaming answer; whether Netlify delivers events as they happen before the cut must be checked on the real site. If it does not, the page should poll instead.
 
 ## Endpoints
 

@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
+
+import 'package:flutter/foundation.dart' show ValueNotifier;
 
 import 'api_client.dart';
 import 'sse_stub.dart' if (dart.library.js_interop) 'sse_web.dart' as platform;
@@ -30,6 +33,27 @@ abstract class SseSource {
 /// The source for this platform, or null where there is none (polling only).
 SseSource? createPlatformSseSource() => platform.createSseSource();
 
+/// Whether the person can see the page. A hidden tab does not need a live
+/// connection for ever.
+abstract class PageVisibility {
+  bool get visible;
+
+  /// Fires with the new value when the page is shown or hidden.
+  Stream<bool> get changes;
+}
+
+/// The visibility of this platform (always visible where there is no tab).
+PageVisibility createPlatformVisibility() => platform.createVisibility();
+
+/// Always visible, never changes. The default outside a browser and in tests.
+class AlwaysVisible implements PageVisibility {
+  const AlwaysVisible();
+  @override
+  bool get visible => true;
+  @override
+  Stream<bool> get changes => const Stream<bool>.empty();
+}
+
 /// What changed. [all] means "refetch everything": first connection,
 /// reconnection, or a poll.
 enum LiveKind {
@@ -45,15 +69,33 @@ enum LiveKind {
   }
 }
 
-/// Doubling delay, 1 s up to 30 s.
-Duration defaultBackoff(int attempt) {
-  final seconds = 1 << (attempt.clamp(0, 5));
-  return Duration(seconds: seconds > 30 ? 30 : seconds);
+/// How long to wait before the next try, given how many tries in a row have
+/// already failed. The first retry is immediate: a proxy that cuts a quiet
+/// stream every 26 seconds is normal, not an outage. After that the delay
+/// doubles from 1 s up to 15 s, with random jitter (half to full) so many
+/// browsers do not come back at the same moment.
+Duration defaultBackoff(int failures, [Random? random]) {
+  if (failures <= 0) return Duration.zero;
+  final seconds = min(15, 1 << min(failures - 1, 4));
+  final ms = seconds * 1000;
+  final r = random ?? _jitter;
+  return Duration(milliseconds: ms ~/ 2 + r.nextInt(ms ~/ 2 + 1));
 }
 
+final _jitter = Random();
+
 /// Change notifications for one period. Listen to [stream] and refetch when
-/// it fires. Reconnects with backoff. While no connection is up it falls back
-/// to a tick every [pollInterval]. Messages are debounced by [debounce].
+/// it fires. Reconnects quietly with a new ticket each time: at once after a
+/// normal cut, then with backoff while it keeps failing. While no connection
+/// is up it falls back to a tick every [pollInterval]. Messages are debounced
+/// by [debounce].
+///
+/// [paused] turns true after [pausedAfter] failed tries in a row and false
+/// again once a connection has stayed up for [healthyAfter]. A connection that
+/// opened and then lived long enough is a normal cut, not a failure.
+///
+/// While the page is hidden for longer than [hiddenGrace] the connection and
+/// the polling stop; they start again, with a refetch, when it is shown.
 class LiveChanges {
   LiveChanges({
     required this.source,
@@ -63,6 +105,10 @@ class LiveChanges {
     this.pollInterval = const Duration(seconds: 5),
     this.safetyInterval = const Duration(seconds: 60),
     this.debounce = const Duration(milliseconds: 250),
+    this.healthyAfter = const Duration(seconds: 3),
+    this.pausedAfter = 3,
+    this.hiddenGrace = const Duration(minutes: 2),
+    this.visibility = const AlwaysVisible(),
   }) {
     _controller = StreamController<LiveKind>.broadcast(
       onListen: _start,
@@ -83,6 +129,20 @@ class LiveChanges {
   final Duration safetyInterval;
   final Duration debounce;
 
+  /// A connection that stays up this long counts as working.
+  final Duration healthyAfter;
+
+  /// Failed tries in a row before [paused] turns on.
+  final int pausedAfter;
+
+  /// How long a hidden page keeps its connection.
+  final Duration hiddenGrace;
+  final PageVisibility visibility;
+
+  /// True when live updates are down for real (not a normal cut). The app
+  /// shows a calm notice while it is true.
+  final ValueNotifier<bool> paused = ValueNotifier(false);
+
   late final StreamController<LiveKind> _controller;
   Stream<LiveKind> get stream => _controller.stream;
 
@@ -93,6 +153,11 @@ class LiveChanges {
   Timer? _wait;
   Completer<void>? _waiting;
   Completer<void>? _ended;
+  Timer? _healthy;
+  Timer? _hiddenTimer;
+  StreamSubscription<bool>? _visSub;
+  bool _suspended = false;
+  int _failures = 0;
   StreamSubscription<SseEvent>? _sub;
   final _pending = <LiveKind>{};
 
@@ -103,6 +168,14 @@ class LiveChanges {
   void _start() {
     if (_running) return;
     _running = true;
+    _suspended = false;
+    _failures = 0;
+    _visSub = visibility.changes.listen(_onVisible);
+    if (!visibility.visible) _onVisible(false);
+    if (!_suspended) _begin();
+  }
+
+  void _begin() {
     final gen = ++_generation;
     _startPolling();
     if (source != null) unawaited(_loop(gen));
@@ -110,12 +183,26 @@ class LiveChanges {
 
   void _stop() {
     _running = false;
+    _suspended = false;
+    _hiddenTimer?.cancel();
+    _hiddenTimer = null;
+    unawaited(_visSub?.cancel());
+    _visSub = null;
+    _halt();
+    _failures = 0;
+    paused.value = false;
+  }
+
+  /// Drops the connection, the timers and anything waiting.
+  void _halt() {
     _generation++;
     _poll?.cancel();
     _poll = null;
     _debounce?.cancel();
     _debounce = null;
     _pending.clear();
+    _healthy?.cancel();
+    _healthy = null;
     unawaited(_sub?.cancel());
     _sub = null;
     _wait?.cancel();
@@ -124,6 +211,26 @@ class LiveChanges {
     final w = _waiting;
     _waiting = null;
     if (w != null && !w.isCompleted) w.complete();
+  }
+
+  void _onVisible(bool visible) {
+    if (!_running) return;
+    _hiddenTimer?.cancel();
+    _hiddenTimer = null;
+    if (!visible) {
+      _hiddenTimer = Timer(hiddenGrace, () {
+        if (!_running || _suspended) return;
+        _suspended = true;
+        _halt();
+        _failures = 0;
+        paused.value = false;
+      });
+    } else if (_suspended) {
+      _suspended = false;
+      _begin();
+      // With a connection the open event refetches; polling-only needs it now.
+      if (source == null) _emit(LiveKind.all);
+    }
   }
 
   void _startPolling() => _tick(pollInterval);
@@ -146,9 +253,9 @@ class LiveChanges {
   }
 
   Future<void> _loop(int gen) async {
-    var attempt = 0;
     while (_running && gen == _generation) {
       final ended = _ended = Completer<void>();
+      var proved = false;
       try {
         final ticket = await fetchTicket();
         if (!_running || gen != _generation) return;
@@ -159,8 +266,14 @@ class LiveChanges {
                 if (gen != _generation) return;
                 switch (e) {
                   case SseOpened():
-                    attempt = 0;
                     _stopPolling();
+                    // Working only once it has stayed up for a while.
+                    _healthy?.cancel();
+                    _healthy = Timer(healthyAfter, () {
+                      proved = true;
+                      _failures = 0;
+                      paused.value = false;
+                    });
                     // Anything may have changed while we were away.
                     _emit(LiveKind.all);
                   case SseMessage(:final data):
@@ -180,16 +293,25 @@ class LiveChanges {
         // Signed out: nothing to watch any more.
         _poll?.cancel();
         _poll = null;
+        paused.value = false;
         return;
       } on Object {
         // Ticket or connection failed: back off, keep polling meanwhile.
       }
       if (!_running || gen != _generation) return;
+      // A connection that stayed up long enough already reset the count, so
+      // a normal cut retries at once and shows nothing.
+      _healthy?.cancel();
+      _healthy = null;
       unawaited(_sub?.cancel());
       _sub = null;
       _startPolling();
-      await _sleep(backoff(attempt));
-      attempt++;
+      final delay = backoff(_failures);
+      if (!proved) {
+        _failures++;
+        if (_failures >= pausedAfter) paused.value = true;
+      }
+      await _sleep(delay);
     }
   }
 

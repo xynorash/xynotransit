@@ -36,6 +36,61 @@ pub struct Config {
     /// Argon2id parameters for new password hashes. The default is the OWASP minimum; only tests
     /// lower it (PASSWORD_HASH_MEMORY_KIB, PASSWORD_HASH_ITERATIONS).
     pub password_hash: crate::hashing::HashSettings,
+    /// Trusted front door (for example a Netlify rewrite). See `ProxyAuth`.
+    pub proxy_auth: Option<ProxyAuth>,
+}
+
+/// A trusted front door: a proxy that proves itself with a shared key and tells us the visitor's
+/// address in a header. Set by PROXY_AUTH_KEY (at least 32 characters), PROXY_AUTH_HEADER
+/// (default x-xt-proxy-key) and PROXY_CLIENT_HEADER (default x-nf-client-connection-ip).
+#[derive(Clone)]
+pub struct ProxyAuth {
+    pub key: String,
+    pub key_header: axum::http::HeaderName,
+    pub client_header: axum::http::HeaderName,
+}
+
+// Never prints the key (Config derives Debug).
+impl std::fmt::Debug for ProxyAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyAuth")
+            .field("key", &"<hidden>")
+            .field("key_header", &self.key_header)
+            .field("client_header", &self.client_header)
+            .finish()
+    }
+}
+
+/// The trusted front door from the settings, or `None` when PROXY_AUTH_KEY is not set.
+pub fn proxy_auth_from(get: &impl Fn(&str) -> Option<String>) -> Result<Option<ProxyAuth>, String> {
+    let non_empty = |k: &str| {
+        get(k)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let Some(key) = non_empty("PROXY_AUTH_KEY") else {
+        return Ok(None);
+    };
+    if key.chars().count() < 32 {
+        return Err("PROXY_AUTH_KEY must be at least 32 characters (openssl rand -hex 32)".into());
+    }
+    let name = |k: &str, default: &str| -> Result<axum::http::HeaderName, String> {
+        non_empty(k)
+            .unwrap_or_else(|| default.to_string())
+            .to_ascii_lowercase()
+            .parse()
+            .map_err(|_| format!("{k} must be a valid header name"))
+    };
+    let key_header = name("PROXY_AUTH_HEADER", "x-xt-proxy-key")?;
+    let client_header = name("PROXY_CLIENT_HEADER", "x-nf-client-connection-ip")?;
+    if key_header == client_header {
+        return Err("PROXY_AUTH_HEADER and PROXY_CLIENT_HEADER must differ".into());
+    }
+    Ok(Some(ProxyAuth {
+        key,
+        key_header,
+        client_header,
+    }))
 }
 
 /// Domain used for internal addresses when INTERNAL_EMAIL_DOMAINS is not set.
@@ -156,8 +211,10 @@ impl Config {
             parse_internal_domains(non_empty("INTERNAL_EMAIL_DOMAINS").as_deref())?;
 
         let password_hash = password_hash_from(&get)?;
+        let proxy_auth = proxy_auth_from(&get)?;
 
         Ok(Config {
+            proxy_auth,
             password_hash,
             database_url,
             jwt_secret,

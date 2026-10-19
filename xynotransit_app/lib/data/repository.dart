@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
+
 import '../domain/admin.dart';
 import '../domain/catalog.dart';
 import '../domain/deck.dart';
@@ -144,6 +146,10 @@ abstract class Repository {
 
   /// Latest generated deck of the period, live.
   Stream<DeckRun?> watchDeck(String periodId);
+
+  /// True while live updates are down for real (several tries in a row
+  /// failed). A normal reconnect never turns it on. Always false in memory.
+  ValueListenable<bool> get liveUpdatesPaused;
 
   /// Manager only. Freezes the submitted reports into a new deck run.
   /// Works with any number of reports, including none.

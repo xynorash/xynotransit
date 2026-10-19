@@ -112,6 +112,8 @@ password, SMTP settings and the first manager's email.
 put it in cron and copy the dumps off the machine. `scripts/restore.sh` brings one back. Both are
 covered by `scripts/test-backup.sh`.
 
+**Behind a firewall that blocks the server name.** Some offices block free dynamic DNS names such as `sslip.io`. The web app can then be served from Netlify, which forwards `/api/` to the server so the browser only talks to `netlify.app`. Scripts and steps: [`xynotransit_app/docs/DEPLOY.md`](xynotransit_app/docs/DEPLOY.md) (section "Netlify front door").
+
 ## Limits
 
 - Sign-in is by username and password, or by a one-time link. Links (emailed, or made by a manager

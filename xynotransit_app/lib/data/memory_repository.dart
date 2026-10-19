@@ -2,6 +2,8 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show ValueListenable, ValueNotifier;
+
 import '../domain/admin.dart';
 import '../domain/summary.dart';
 import '../domain/summary_compute.dart';
@@ -41,6 +43,9 @@ class _Live<T> {
 /// Runs the whole app without a server. Same rules as the database:
 /// sending replaces, submitting needs every number and every target.
 class MemoryRepository implements Repository {
+  @override
+  final ValueListenable<bool> liveUpdatesPaused = ValueNotifier(false);
+
   MemoryRepository({
     Catalog? catalog,
     required AppUser Function() currentUser,

@@ -69,11 +69,25 @@ impl TestApp {
         Self::build_with(Duration::from_secs(60), true, Some(every)).await
     }
 
+    /// Extra settings (for example PROXY_AUTH_KEY) on top of the test defaults.
+    pub async fn with_env(extra: &[(&str, &str)]) -> Self {
+        Self::build_env(Duration::from_secs(60), true, None, extra).await
+    }
+
     async fn build(ttl: Duration, with_fixture: bool) -> Self {
         Self::build_with(ttl, with_fixture, None).await
     }
 
     async fn build_with(ttl: Duration, with_fixture: bool, recheck: Option<Duration>) -> Self {
+        Self::build_env(ttl, with_fixture, recheck, &[]).await
+    }
+
+    async fn build_env(
+        ttl: Duration,
+        with_fixture: bool,
+        recheck: Option<Duration>,
+        extra: &[(&str, &str)],
+    ) -> Self {
         let admin = admin_url();
         let db_name = format!("xt_test_{}", Uuid::new_v4().simple());
         let mut conn = PgConnection::connect(&admin)
@@ -138,6 +152,10 @@ impl TestApp {
         }
 
         let config = Config::from_lookup(|k| match k {
+            k if extra.iter().any(|(n, _)| *n == k) => extra
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string()),
             "DATABASE_URL" => Some(url.clone()),
             "JWT_SECRET" => Some(SECRET.into()),
             "PUBLIC_URL" => Some("http://127.0.0.1:8080".into()),
