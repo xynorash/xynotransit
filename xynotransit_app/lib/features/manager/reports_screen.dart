@@ -187,7 +187,20 @@ class _TwoColumns extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const PreviewHeader(),
+                // Scrolls by itself when banners and the confirm grow tall.
+                Flexible(
+                  flex: 0,
+                  child: LayoutBuilder(
+                    builder: (context, c) => ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.sizeOf(context).height * 0.6,
+                      ),
+                      child: const SingleChildScrollView(
+                        child: PreviewHeader(),
+                      ),
+                    ),
+                  ),
+                ),
                 Expanded(
                   child: LayoutBuilder(
                     builder: (context, c) => CustomScrollView(

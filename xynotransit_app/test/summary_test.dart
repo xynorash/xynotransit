@@ -240,6 +240,11 @@ void main() {
         periodId: period.id,
         assignmentId: a.id,
         status: ReportStatus.submitted,
+        reporter: const Reporter(
+          name: 'Tester',
+          country: 'Fiji',
+          role: 'Clerk',
+        ),
         values: {
           for (final m in a.metrics) m.id: [1, 2, 3],
         },

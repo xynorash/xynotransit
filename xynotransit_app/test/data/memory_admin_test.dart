@@ -351,8 +351,8 @@ void main() {
         fails('A seat can have 8 counts at most.'),
       );
       await expectLater(
-        save(const [], [for (var i = 0; i < 21; i++) KpiInput(text: 'T$i')]),
-        fails('A seat can have 20 targets at most.'),
+        save(const [], [for (var i = 0; i < 11; i++) KpiInput(text: 'T$i')]),
+        fails('A seat can have at most 10 targets.'),
       );
       await expectLater(
         save(const [MetricInput(label: '  ')]),

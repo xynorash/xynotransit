@@ -226,7 +226,27 @@ void main() {
     final b = slideAltText(ResultsSlideSpec(s));
     expect(
       b,
-      'Rova: results and next priorities. ${s.well.length} highlights, ${s.wrong.length} lowlights, ${s.next.length} priorities for the next three months.',
+      'Rova: results and next priorities. ${s.well.length} Highlights, ${s.wrong.length} Lowlights, ${s.next.length} Next 3 months.',
+    );
+  });
+
+  test('cover alt text has the custom date line, results use column titles', () {
+    final texts = DeckTexts.defaults
+        .withValue('dateText', 'Next Tuesday, 10:00')
+        .withValue('highlightsTitle', 'Good')
+        .withValue('lowlightsTitle', 'Bad')
+        .withValue('nextTitle', 'Plans');
+    final cover = CoverSpec(
+      periodLabel: 'Feb to Apr 2026',
+      meetingDate: DateTime(2026, 6, 9),
+      teamCounts: const [('Mauritius', 1)],
+      texts: texts,
+    );
+    expect(slideAltText(cover), contains('Next Tuesday, 10:00.'));
+    final s = demoSnapshot('rova');
+    expect(
+      slideAltText(ResultsSlideSpec(s, texts: texts)),
+      'Rova: results and next priorities. ${s.well.length} Good, ${s.wrong.length} Bad, ${s.next.length} Plans.',
     );
   });
 

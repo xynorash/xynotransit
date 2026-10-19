@@ -111,7 +111,7 @@ void main() {
     testWidgets('has the form and nothing of the dashboard', (tester) async {
       await pumpApp(tester, demo: true, user: rova, location: '/');
       expect(find.text('Logistics Report Builder'), findsOneWidget);
-      expect(find.text('Period and person'), findsOneWidget);
+      expect(find.text('Who you are'), findsOneWidget);
       expect(find.text('Your numbers, month by month'), findsOneWidget);
       expect(find.text('Send report'), findsOneWidget);
       for (final t in [
@@ -157,7 +157,7 @@ void main() {
       expect(find.text('Export'), findsOneWidget);
       for (final t in [
         'Your numbers, month by month',
-        'Period and person',
+        'Who you are',
         'Choose your name',
         'Send report',
         'Logistics Report Builder',

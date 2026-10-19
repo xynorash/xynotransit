@@ -32,6 +32,9 @@ class KpiFit {
 const kpiGap = 16.0;
 const kpiAreaHeight = 620.0;
 
+/// Width of the two-column grid used for seven to ten targets.
+const kpiGridWidth = 800.0;
+
 const _modes = [(600.0, true), (760.0, true), (760.0, false)];
 const _sizes = [40.0, 36.0, 32.0, 30.0, 28.0, 26.0, 24.0];
 const _fallback = KpiFit(width: 760, label: false, fontSize: 24);

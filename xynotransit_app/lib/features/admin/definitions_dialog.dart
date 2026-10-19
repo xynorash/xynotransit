@@ -237,7 +237,8 @@ class _DefinitionsEditorState extends ConsumerState<DefinitionsEditor> {
             noun: 'count',
             max: DefinitionRules.maxMetrics,
             maxText: DefinitionRules.maxMetricLabel,
-            maxMessage: 'A seat can have 8 counts at most.',
+            maxMessage:
+                'A seat can have ${DefinitionRules.maxMetrics} counts at most.',
             addLabel: 'Add a count',
             multiline: false,
             error: _countError,
@@ -253,7 +254,8 @@ class _DefinitionsEditorState extends ConsumerState<DefinitionsEditor> {
             noun: 'target',
             max: DefinitionRules.maxKpis,
             maxText: DefinitionRules.maxKpiText,
-            maxMessage: 'A seat can have 20 targets at most.',
+            maxMessage:
+                'A seat can have at most ${DefinitionRules.maxKpis} targets.',
             addLabel: 'Add a target',
             multiline: true,
             error: _targetError,

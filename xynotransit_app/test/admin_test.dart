@@ -225,10 +225,13 @@ void main() {
     await tester.pump();
     s.container.read(routerProvider).go('/report');
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Choose your name'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Bob · Clerk').last);
-    await tester.pumpAndSettle();
+    // With a single seat the form picks it by itself.
+    if (find.text('Choose your name').evaluate().isNotEmpty) {
+      await tester.tap(find.text('Choose your name'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Bob · Clerk').last);
+      await tester.pumpAndSettle();
+    }
     for (final l in ['Sea', 'Air', 'Road', 'Rail', 'Post']) {
       expect(find.text(l), findsWidgets, reason: l);
     }
@@ -258,10 +261,13 @@ void main() {
     await tester.pump();
     s.container.read(routerProvider).go('/report');
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Choose your name'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Cleo · Dock').last);
-    await tester.pumpAndSettle();
+    // With a single seat the form picks it by itself.
+    if (find.text('Choose your name').evaluate().isNotEmpty) {
+      await tester.tap(find.text('Choose your name'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cleo · Dock').last);
+      await tester.pumpAndSettle();
+    }
     expect(find.text('Sea'), findsWidgets);
     expect(find.text('Air'), findsNothing);
   });

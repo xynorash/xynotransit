@@ -72,7 +72,7 @@ List<Assignment> allowedAssignments(Catalog catalog, AppUser? user) {
   return id == null ? const [] : catalog.assignmentsOfPerson(id);
 }
 
-/// Keeps the form's person in line with who is signed in: a contributor with one
+/// Keeps the form's person in line with who is signed in: anyone with exactly one
 /// seat gets it pre-selected, and nobody keeps a seat they may not report for.
 class _AutoSelect extends ConsumerWidget {
   const _AutoSelect();
@@ -86,7 +86,7 @@ class _AutoSelect extends ConsumerWidget {
       final allowed = allowedAssignments(catalog, user);
       final current = form.assignmentId;
       final stale = current != null && !allowed.any((a) => a.id == current);
-      final auto = current == null && !user.isController && allowed.length == 1;
+      final auto = current == null && allowed.length == 1;
       if (stale || auto) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           unawaited(

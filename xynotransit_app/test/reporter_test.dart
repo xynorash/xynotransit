@@ -46,7 +46,7 @@ void main() {
     });
 
     test('plain text only', () {
-      for (final bad in ['a\nb', 'a​b', 'a\tb', 'a b', 'a‮b']) {
+      for (final bad in ['a\nb', 'a\u200Bb', 'a\tb', 'a\u00A0b', 'a\u202Eb']) {
         expect(Reporter(name: bad, country: 'c', role: 'r').problems(), [
           'Your name can only use plain text.',
         ], reason: bad.codeUnits.toString());

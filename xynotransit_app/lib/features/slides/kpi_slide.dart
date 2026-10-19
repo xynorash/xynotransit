@@ -23,7 +23,10 @@ class SlideKpi extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = snapshot;
     final w = SlideWords(texts);
-    final fit = fitKpis([for (final t in s.targets) t.text]);
+    final grid = s.targets.length > 6;
+    final fit = grid
+        ? const KpiFit(width: kpiGridWidth, label: false, fontSize: 22)
+        : fitKpis([for (final t in s.targets) t.text]);
     return PersonSlideFrame(
       background: SlidePalette.paper,
       footerColor: SlidePalette.mutedOnLight,
@@ -43,24 +46,136 @@ class SlideKpi extends StatelessWidget {
         children: [
           SizedBox(
             width: fit.width,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (var i = 0; i < s.targets.length; i++) ...[
-                  if (i > 0) const SizedBox(height: kpiGap),
-                  Expanded(
-                    child: _KpiCard(
-                      index: i + 1,
-                      target: s.targets[i],
-                      fit: fit,
-                    ),
+            child: grid
+                ? _KpiGrid(s.targets)
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var i = 0; i < s.targets.length; i++) ...[
+                        if (i > 0) const SizedBox(height: kpiGap),
+                        Expanded(
+                          child: _KpiCard(
+                            index: i + 1,
+                            target: s.targets[i],
+                            fit: fit,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                ],
-              ],
-            ),
           ),
           const SizedBox(width: 32),
           Expanded(child: _Panel(s)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Seven to ten targets: two columns of compact cards, a status chip above
+/// the text. Text is never below 20 px; a text that does not fit is cut with
+/// an ellipsis here (the full text stays in the alt text and notes).
+class _KpiGrid extends StatelessWidget {
+  const _KpiGrid(this.targets);
+
+  final List<SnapshotTarget> targets;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = (targets.length / 2).ceil();
+    final cardHeight = (kpiAreaHeight - (rows - 1) * kpiGap) / rows;
+    final pad = rows <= 4 ? 14.0 : 10.0;
+    final fs = rows <= 4 ? 24.0 : 20.0;
+    const chipFs = 20.0;
+    final chipHeight = chipFs * 1.2 + 6;
+    final lines = math.max(
+      1,
+      ((cardHeight - 2 * pad - chipHeight - 6) / (fs * 1.2)).floor(),
+    );
+    Widget cell(int i) {
+      if (i >= targets.length) return const SizedBox.shrink();
+      return _GridCard(
+        target: targets[i],
+        fontSize: fs,
+        chipFontSize: chipFs,
+        lines: lines,
+        pad: pad,
+      );
+    }
+
+    return Column(
+      children: [
+        for (var r = 0; r < rows; r++) ...[
+          if (r > 0) const SizedBox(height: kpiGap),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: cell(r * 2)),
+                const SizedBox(width: kpiGap),
+                Expanded(child: cell(r * 2 + 1)),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _GridCard extends StatelessWidget {
+  const _GridCard({
+    required this.target,
+    required this.fontSize,
+    required this.chipFontSize,
+    required this.lines,
+    required this.pad,
+  });
+
+  final SnapshotTarget target;
+  final double fontSize;
+  final double chipFontSize;
+  final int lines;
+  final double pad;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(vertical: pad, horizontal: 20),
+      decoration: BoxDecoration(
+        color: SlidePalette.card,
+        border: Border.all(color: SlidePalette.cardBorder),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            decoration: BoxDecoration(
+              color: SlidePalette.statusColor(target.status),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              SlidePalette.statusWord(target.status),
+              maxLines: 1,
+              style: st(
+                chipFontSize,
+                weight: FontWeight.w700,
+                color: Colors.white,
+                letterSpacing: 1,
+                height: 1.2,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            target.text,
+            maxLines: lines,
+            overflow: TextOverflow.ellipsis,
+            style: st(fontSize, weight: FontWeight.w700, height: 1.2),
+          ),
         ],
       ),
     );
@@ -217,7 +332,7 @@ class _Volumes extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (s.metrics.length > 3) return _VolumesMany(s);
+    if (s.metrics.length > 3 || _longestNumber(s) > 7) return _VolumesMany(s);
     final three = s.metrics.length >= 3;
     final bw = three ? 64.0 : 80.0;
     final big = three ? 56.0 : 72.0;
@@ -243,13 +358,17 @@ class _Volumes extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      thousands(s.metrics[i].total),
-                      style: st(
-                        big,
-                        weight: FontWeight.w700,
-                        color: seriesColor(s.metrics[i].series),
-                        height: 1.05,
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        thousands(s.metrics[i].total),
+                        style: st(
+                          big,
+                          weight: FontWeight.w700,
+                          color: seriesColor(s.metrics[i].series),
+                          height: 1.05,
+                        ),
                       ),
                     ),
                     Text(
@@ -281,6 +400,12 @@ class _Volumes extends StatelessWidget {
     );
   }
 }
+
+/// Characters of the longest number shown on the bars, separators included.
+int _longestNumber(ReportSnapshot s) => s.metrics
+    .expand((m) => m.values)
+    .map((v) => thousands(v).length)
+    .fold<int>(1, math.max);
 
 class _MonthGroup extends StatelessWidget {
   const _MonthGroup({
@@ -458,12 +583,9 @@ class _VolumesMany extends StatelessWidget {
     final gap = n <= 5 ? 8.0 : 6.0;
     final gw = (box.maxWidth - 2 * 24) / 3;
     final bw = math.min(64.0, ((gw - 8 - gap * (n - 1)) / n).floorToDouble());
-    final rotated = n >= 5;
-    final labelSize = n == 4 ? 22.0 : (n <= 6 ? 18.0 : 16.0);
-    final longest = s.metrics
-        .expand((m) => m.values)
-        .map((v) => thousands(v).length)
-        .fold<int>(1, math.max);
+    final rotated = n >= 5 || _longestNumber(s) > 7;
+    final labelSize = n <= 4 ? 22.0 : (n <= 6 ? 18.0 : 16.0);
+    final longest = _longestNumber(s);
     final labelHeight = rotated
         ? longest * 0.62 * labelSize + 6
         : labelSize * 1.4;

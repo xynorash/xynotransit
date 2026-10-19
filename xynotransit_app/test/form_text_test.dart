@@ -70,10 +70,8 @@ Future<ProviderContainer> pumpCustom(
   await tester.pumpAndSettle();
   container.read(routerProvider).go('/report');
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Choose your name'));
-  await tester.pumpAndSettle();
-  await tester.tap(find.text('Ana · Clerk').last);
-  await tester.pumpAndSettle();
+  // One seat: it is selected by itself and no chooser is shown.
+  expect(find.text('Reporting for'), findsNothing);
   return container;
 }
 

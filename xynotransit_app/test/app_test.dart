@@ -102,9 +102,11 @@ void main() {
     tester,
   ) async {
     await pumpApp(tester);
-    expect(find.text('Period and person'), findsOneWidget);
+    expect(find.text('Who you are'), findsOneWidget);
     expect(
-      find.text('Choose your name to see the fields for your role.'),
+      find.text(
+        'Choose who you are reporting for to see the fields for the role.',
+      ),
       findsOneWidget,
     );
     expect(find.text('Your numbers, month by month'), findsNothing);
@@ -244,6 +246,11 @@ void main() {
       values: demo.values,
       kpis: demo.kpis,
       notes: demo.notes,
+      reporter: const Reporter(
+        name: 'Rado',
+        country: 'Madagascar',
+        role: 'Declarant',
+      ),
     );
     await h.repo.sendReport(fresh);
     await tester.pump();
@@ -267,8 +274,10 @@ void main() {
     );
     await tester.tap(find.text('Choose your name'));
     await tester.pumpAndSettle();
-    expect(find.text('Tahina · Declarant export').last, findsOneWidget);
-    expect(find.text('Tahina · BSC creation').last, findsOneWidget);
+    // Two seats: a chooser by role title, no names of other people.
+    expect(find.text('Reporting for'), findsOneWidget);
+    expect(find.text('Declarant export').last, findsOneWidget);
+    expect(find.text('BSC creation').last, findsOneWidget);
     expect(find.text('Rova · Import'), findsNothing);
     await tester.tapAt(const Offset(5, 5));
     await tester.pumpAndSettle();
@@ -289,6 +298,13 @@ void main() {
       ),
     );
     expect(find.text('Your numbers, month by month'), findsOneWidget);
+    // One seat: no chooser, the three identity fields start from the profile.
+    expect(find.text('Reporting for'), findsNothing);
+    String typed(String key) =>
+        tester.widget<TextField>(find.byKey(ValueKey(key))).controller!.text;
+    expect(typed('reporter-name'), 'Rova');
+    expect(typed('reporter-country'), 'Tana');
+    expect(typed('reporter-role'), 'Import');
     // Rova already sent: banner and prefilled numbers.
     expect(
       find.textContaining('You already sent this report on'),
@@ -333,6 +349,7 @@ void main() {
         values: src.values,
         kpis: src.kpis,
         notes: src.notes,
+        reporter: const Reporter(name: 'Rova', country: 'Tana', role: 'Import'),
       ),
     );
     await tester.pumpAndSettle();
@@ -447,5 +464,79 @@ void main() {
       ),
     );
     expect(again.controller!.text, '42');
+  });
+
+  testWidgets(
+    'name, country and role are text fields prefilled from the seat',
+    (tester) async {
+      await pumpApp(tester);
+      await choosePerson(tester, 'Rova · Import');
+      expect(find.text('Reporting for'), findsOneWidget);
+      for (final k in ['reporter-name', 'reporter-country', 'reporter-role']) {
+        expect(find.byKey(ValueKey(k)), findsOneWidget);
+      }
+      expect(find.text('0/80'), findsNothing);
+      expect(find.text('4/80'), findsNWidgets(2));
+      expect(find.text('6/80'), findsOneWidget);
+    },
+  );
+
+  testWidgets('typed identity is sent and comes back', (tester) async {
+    final h = await pumpApp(tester);
+    await choosePerson(tester, 'Rova · Import');
+    await fillRova(tester);
+    await tester.enterText(
+      find.byKey(const ValueKey('reporter-name')),
+      ' R. B ',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('reporter-country')),
+      'Madagascar',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('reporter-role')),
+      'Import lead',
+    );
+    await tester.pump();
+    await tester.tap(find.text('Send report'));
+    await tester.pumpAndSettle();
+    final p = await h.repo.ensurePeriod(MemoryRepository.demoStart);
+    final saved = (await h.repo.getReport(p.id, 'rova'))!;
+    expect(
+      saved.reporter,
+      const Reporter(name: 'R. B', country: 'Madagascar', role: 'Import lead'),
+    );
+  });
+
+  testWidgets('an empty name, country or role blocks sending in plain words', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    await choosePerson(tester, 'Rova · Import');
+    await fillRova(tester);
+    await tester.enterText(find.byKey(const ValueKey('reporter-name')), '');
+    await tester.enterText(
+      find.byKey(const ValueKey('reporter-country')),
+      '  ',
+    );
+    await tester.pump();
+    await tester.tap(find.text('Send report'));
+    await tester.pumpAndSettle();
+    expect(find.text('Enter your name.'), findsWidgets);
+    expect(find.text('Enter your country.'), findsWidgets);
+    expect(find.text('Enter your role.'), findsNothing);
+  });
+
+  testWidgets('the identity is kept in the draft', (tester) async {
+    final h = await pumpApp(tester);
+    await choosePerson(tester, 'Rova · Import');
+    await tester.enterText(
+      find.byKey(const ValueKey('reporter-country')),
+      'Kenya',
+    );
+    await tester.pump();
+    final prefs = h.container.read(prefsProvider);
+    final raw = prefs.getKeys().where((k) => k.startsWith('draft/')).first;
+    expect(prefs.getString(raw), contains('Kenya'));
   });
 }
