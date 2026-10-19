@@ -1,0 +1,9 @@
+# Automatic HTTPS (Let's Encrypt) for the host name in DOMAIN. Needs ports 80 and 443 reachable.
+{$DOMAIN} {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy web:80 {
+		# Server-sent events (live table updates) must not be buffered.
+		flush_interval -1
+	}
+}

@@ -1,0 +1,104 @@
+# Xynotransit on one small VM (tested target: 1 GB RAM, x86_64): Caddy (automatic HTTPS) in front of
+# nginx (web app + API proxy), the API, Postgres, and optionally Mailpit as a mail sink.
+#
+#   cp .env.example .env     fill it in (secrets: openssl rand -hex 32)
+#   docker compose up -d
+#
+# Only Caddy publishes ports (80, 443). Mailpit's UI is bound to the VM's loopback: reach it with
+#   ssh -L 8025:127.0.0.1:8025 <user>@<server>   then open http://127.0.0.1:8025
+name: xynotransit
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    mem_limit: 80m
+
+  web:
+    image: ${WEB_IMAGE:-xynotransit-web:release}
+    restart: unless-stopped
+    depends_on:
+      - api
+    mem_limit: 40m
+
+  api:
+    image: ${API_IMAGE:-xynotransit-api:release}
+    restart: unless-stopped
+    stop_grace_period: 15s
+    environment:
+      DATABASE_URL: postgres://xynotransit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/xynotransit
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      PUBLIC_URL: https://${DOMAIN}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_TLS: ${SMTP_TLS:-none}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-Xynotransit <no-reply@xynotransit.local>}
+      BOOTSTRAP_CONTROLLER_EMAIL: ${BOOTSTRAP_CONTROLLER_EMAIL:-}
+      BOOTSTRAP_CONTROLLER_NAME: ${BOOTSTRAP_CONTROLLER_NAME:-}
+      LOG_MAGIC_LINKS: ${LOG_MAGIC_LINKS:-false}
+      INTERNAL_EMAIL_DOMAINS: ${INTERNAL_EMAIL_DOMAINS:-xynotransit.internal}
+      BIND: 0.0.0.0:8081
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8081"
+    mem_limit: 120m
+
+  db:
+    image: ${DB_IMAGE:-xynotransit-db:release}
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    # Small-memory settings for a 1 GB machine.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - max_connections=30
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - effective_cache_size=256MB
+    volumes:
+      - pgdata:/var/lib/postgres/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h /tmp -U xynotransit -d xynotransit"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+    mem_limit: 320m
+
+  # Catches sign-in emails until real SMTP is configured. Turn it off by removing
+  # COMPOSE_PROFILES=mailpit from .env once SMTP_* point at a real mail service.
+  mailpit:
+    image: axllent/mailpit
+    profiles: ["mailpit"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+    mem_limit: 60m
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
