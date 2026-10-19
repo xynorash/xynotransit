@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -6,10 +7,13 @@ import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xml/xml.dart';
+import 'package:xynotransit_app/core/format.dart';
 import 'package:xynotransit_app/domain/deck.dart';
 import 'package:xynotransit_app/domain/deck_text.dart';
 import 'package:xynotransit_app/domain/period.dart';
+import 'package:xynotransit_app/domain/snapshot.dart';
 import 'package:xynotransit_app/features/export/deck_export.dart';
+import 'package:xynotransit_app/features/export/deck_render.dart';
 import 'package:xynotransit_app/features/export/pptx.dart';
 import 'package:xynotransit_app/features/export/rasterizer.dart';
 import 'package:xynotransit_app/features/slides/alt_text.dart';
@@ -271,4 +275,279 @@ void main() {
     expect(data.getUint32(16), slideWidth.toInt());
     expect(data.getUint32(20), slideHeight.toInt());
   });
+
+  group('file names', () {
+    final p = Period(
+      id: 'p',
+      startMonth: DateTime(2026, 2),
+      meetingDate: DateTime(2026, 6, 9),
+    );
+    final clean = RegExp(r'^[A-Za-z0-9_]+_2026-06-09$');
+
+    test('titles with illegal characters give a clean name', () {
+      for (final title in [
+        'a/b\\c',
+        'Q2: review',
+        'say "hello"',
+        'line one\nline two\r\nline three',
+        'tab\there',
+        '<tag> | pipe * star ? mark',
+        '../../etc/passwd',
+        'CON',
+        '   spaces   ',
+        '山田太郎の会議',
+        'مرحبا',
+        'emoji 🚚 trip',
+        '.hidden',
+        'trailing dot.',
+      ]) {
+        final name = deckFileBase(p, title: title);
+        expect(name, matches(clean), reason: '"$title" gave "$name"');
+        expect(name.length, lessThanOrEqualTo(60 + 1 + 10), reason: name);
+      }
+    });
+
+    test('accents become plain letters, not underscores', () {
+      expect(
+        deckFileBase(p, title: "Réunion Côte d'Ivoire Zoé Ñandú"),
+        'Reunion_Cote_d_Ivoire_Zoe_Nandu_2026-06-09',
+      );
+      expect(deckFileBase(p, title: 'Straße Ærø'), 'Strasse_Aero_2026-06-09');
+    });
+
+    test('a very long title is cut at 60 characters without a trailing _', () {
+      final name = deckFileBase(p, title: 'Word ' * 40);
+      expect(name, matches(clean));
+      final slug = name.substring(0, name.length - '_2026-06-09'.length);
+      expect(slug.length, lessThanOrEqualTo(60));
+      expect(slug, isNot(endsWith('_')));
+    });
+
+    test('a title with no usable letters falls back to the default name', () {
+      for (final t in ['山田', '???', '', '   ', '\n']) {
+        expect(
+          deckFileBase(p, title: t),
+          'Xynotransit_Regional_Logistics_Meeting_2026-06-09',
+          reason: '"$t"',
+        );
+      }
+    });
+  });
+
+  group('speaker notes', () {
+    test('a KPI slide lists every target with its status and every number', () {
+      final s = demoSnapshot('rova');
+      final notes = slideNotes(KpiSlideSpec(s)).split('\n');
+      expect(notes.first, slideAltText(KpiSlideSpec(s)));
+      for (var i = 0; i < s.targets.length; i++) {
+        expect(
+          notes.any((l) => l.startsWith('${i + 1}. ${s.targets[i].text}: ')),
+          isTrue,
+          reason: 'target ${i + 1}',
+        );
+      }
+      for (final m in s.metrics) {
+        final line = notes.firstWhere((l) => l.startsWith('${m.label}: Feb '));
+        for (var i = 0; i < 3; i++) {
+          expect(
+            line,
+            contains('${s.months[i].short} ${thousands(m.values[i])}'),
+          );
+        }
+        expect(line, contains('(total ${thousands(m.total)})'));
+      }
+    });
+
+    test('numbers in notes and alt text have thousands separators', () {
+      final s = ReportSnapshot(
+        assignmentCode: 'x',
+        name: 'Big',
+        role: 'r',
+        team: 't',
+        periodLabel: 'Feb to Apr 2026',
+        months: const [
+          MonthRef(offset: 0, year: 2026, month: 2),
+          MonthRef(offset: 1, year: 2026, month: 3),
+          MonthRef(offset: 2, year: 2026, month: 4),
+        ],
+        metrics: [
+          SnapshotMetric(
+            key: 'k',
+            label: 'Boxes',
+            series: 0,
+            values: const [1000000000, 12345, 7],
+          ),
+        ],
+        targets: const [SnapshotTarget(text: 'On time', status: null)],
+        well: const [],
+        wrong: const [],
+        next: const [],
+      );
+      final alt = slideAltText(KpiSlideSpec(s));
+      expect(alt, contains('Boxes: 1,000,012,352.'));
+      final notes = slideNotes(KpiSlideSpec(s));
+      expect(notes, contains('Feb 1,000,000,000, Mar 12,345, Apr 7'));
+      expect(notes, contains('1. On time: not answered.'));
+    });
+
+    test('a results slide gives the full text of every note', () {
+      final s = demoSnapshot('rova');
+      final notes = slideNotes(ResultsSlideSpec(s));
+      for (final n in [...s.well, ...s.wrong, ...s.next]) {
+        expect(notes, contains(n));
+      }
+      final texts = DeckTexts.defaults
+          .withValue('highlightsTitle', 'Good')
+          .withValue('emptyNote', 'Left blank');
+      final empty = ReportSnapshot(
+        assignmentCode: 'x',
+        name: 'N',
+        role: 'r',
+        team: 't',
+        periodLabel: 'p',
+        months: s.months,
+        metrics: const [],
+        targets: const [],
+        well: const [],
+        wrong: const [],
+        next: const ['Only this'],
+      );
+      final custom = slideNotes(ResultsSlideSpec(empty, texts: texts))
+          .split('\n');
+      expect(custom, contains('Good: Left blank'));
+      expect(custom, contains('Next 3 months: Only this'));
+    });
+
+    test('cover and divider notes list the teams and the people', () {
+      final cover = slideNotes(
+        const CoverSpec(
+          periodLabel: 'Feb to Apr 2026',
+          meetingDate: null,
+          teamCounts: [('Kenya', 2), ('Tana', 7)],
+        ),
+      );
+      expect(cover, contains('Teams: Kenya · 2; Tana · 7.'));
+      final divider = slideNotes(
+        const DividerSpec(
+          team: 'Kenya',
+          periodLabel: 'Feb to Apr 2026',
+          index: 1,
+          total: 2,
+          people: ['Zoé · Driver', 'Ali · Clerk'],
+        ),
+      );
+      expect(divider, contains('Reports: Zoé · Driver; Ali · Clerk.'));
+    });
+  });
+
+  testWidgets(
+    'the demo deck exports to PDF, PPTX and PNG zip that open in other tools',
+    (tester) async {
+      final items = [
+        for (var i = 0; i < catalog.assignments.length; i++)
+          DeckItem(
+            reportId: catalog.assignments[i].code,
+            sort: i,
+            snapshot: demoSnapshot(catalog.assignments[i].code),
+          ),
+      ];
+      final run = DeckRun(
+        id: 'r',
+        periodId: testPeriod.id,
+        generatedAt: DateTime(2026, 6, 1),
+        expectedCount: items.length,
+        includedCount: items.length,
+        items: items,
+        texts: DeckTexts.defaults,
+      );
+      final specs = buildDeck(run, testPeriod);
+      late BuildContext ctx;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (c) {
+              ctx = c;
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+      Future<List<Uint8List>> render(double ratio) async {
+        final f = renderDeckPngs(ctx, specs, pixelRatio: ratio);
+        // The render waits for frames: keep pumping until it is done.
+        var done = false;
+        unawaited(f.whenComplete(() => done = true));
+        while (!done) {
+          await tester.pump(const Duration(milliseconds: 16));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)),
+          );
+        }
+        return f;
+      }
+
+      final small = await render(1);
+      final big = await render(pptxPixelRatio);
+      expect(small, hasLength(34));
+      final dims = ByteData.sublistView(big.first);
+      expect([dims.getUint32(16), dims.getUint32(20)], [3840, 2160]);
+
+      final dir = Directory('/tmp/xt-slides-export')
+        ..createSync(recursive: true);
+      final title = deckTitleOf(specs);
+      final base = deckFileBase(testPeriod, title: meetingTitleOf(specs));
+      final pdf = (await tester.runAsync(() => buildPdf(small, title: title)))!;
+      final pptx = buildPptx(pptxSlidesFor(specs, big), title: title);
+      final zip = buildPngZip(small, pngNames(small.length));
+      File('${dir.path}/$base.pdf').writeAsBytesSync(pdf);
+      File('${dir.path}/$base.pptx').writeAsBytesSync(pptx);
+      File('${dir.path}/$base.zip').writeAsBytesSync(zip);
+      for (final b in [pdf, pptx, zip]) {
+        expect(b.length, lessThan(25 * 1024 * 1024));
+      }
+      expect(ZipDecoder().decodeBytes(zip).files, hasLength(34));
+
+      final python = File('/tmp/xt-slides-venv/bin/python');
+      if (!python.existsSync()) {
+        markTestSkipped('no python-pptx venv at /tmp/xt-slides-venv');
+        return;
+      }
+      final r = await tester.runAsync(
+        () => Process.run(python.path, [
+          '-I',
+          '-c',
+          '''
+import sys
+from pptx import Presentation
+from pptx.util import Emu
+p = Presentation(sys.argv[1])
+assert p.slide_width == 12192000 and p.slide_height == 6858000, "size"
+assert len(p.slides) == 34, len(p.slides)
+for i, s in enumerate(p.slides, 1):
+    pics = [x for x in s.shapes if x.shape_type == 13]
+    assert len(pics) == 1, (i, "pictures")
+    pic = pics[0]
+    assert (pic.left, pic.top, pic.width, pic.height) == (0, 0, 12192000, 6858000), (i, "full bleed")
+    assert pic.image.size == (3840, 2160), (i, pic.image.size)
+    descr = pic._element.nvPicPr.cNvPr.get("descr")
+    assert descr and len(descr) > 10, (i, "alt text")
+    assert s.shapes.title is not None and s.shapes.title.text_frame.text, (i, "title")
+    notes = s.notes_slide.notes_text_frame.text
+    assert notes.startswith(descr), (i, "notes start with the alt text")
+    assert "\\n" in notes or i in (1, 34), (i, "notes have lines")
+print("ok", len(p.slides))
+''',
+          '${dir.path}/$base.pptx',
+        ]),
+      );
+      expect(r!.stderr, isEmpty);
+      expect(r.stdout, contains('ok 34'));
+      final info = await tester.runAsync(
+        () => Process.run('pdfinfo', ['${dir.path}/$base.pdf']),
+      );
+      expect(info!.stdout, matches(RegExp(r'Pages:\s+34')));
+      expect(info.stdout, matches(RegExp(r'Page size:\s+1920 x 1080 pts')));
+    },
+    timeout: const Timeout(Duration(minutes: 8)),
+  );
 }

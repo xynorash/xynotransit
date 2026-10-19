@@ -41,6 +41,7 @@ class EmployeeScreen extends ConsumerWidget {
                     alignment: Alignment.centerLeft,
                     child: TextLinkButton(
                       label: '‹ Back to the dashboard',
+                      flush: true,
                       onPressed: () => context.go('/manager/reports'),
                     ),
                   ),

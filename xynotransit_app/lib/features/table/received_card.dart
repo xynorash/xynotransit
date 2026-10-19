@@ -11,6 +11,7 @@ import '../../domain/deck.dart';
 import '../../domain/enums.dart';
 import '../../domain/report.dart';
 import '../form/form_controller.dart';
+import 'csv_button.dart';
 
 /// "Reports received": progress bar, live table and who is still missing.
 class ReceivedCard extends ConsumerStatefulWidget {
@@ -115,7 +116,16 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
           ),
           const SizedBox(height: 12),
           _ProgressBar(fraction: progress.fraction),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: CsvExportButton(
+              period: period,
+              catalog: catalog,
+              reports: reports,
+            ),
+          ),
+          const SizedBox(height: 12),
           if (rows.isEmpty)
             DashedBox(
               child: Text(

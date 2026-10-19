@@ -22,8 +22,7 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/summary", get(get_summary))
 }
 
-const DEFAULT_TREND: i64 = 6;
-const MAX_TREND: i64 = 24;
+use crate::rules::{msg, TREND_DEFAULT as DEFAULT_TREND, TREND_MAX as MAX_TREND};
 
 async fn get_summary(
     user: AuthUser,
@@ -34,7 +33,7 @@ async fn get_summary(
     let period_id = q
         .get("period_id")
         .and_then(|s| Uuid::parse_str(s.trim()).ok())
-        .ok_or_else(|| ApiError::bad("Choose a period."))?;
+        .ok_or_else(|| ApiError::bad(msg::CHOOSE_PERIOD))?;
     let trend = match q.get("trend") {
         None => DEFAULT_TREND,
         Some(s) => s
@@ -42,7 +41,7 @@ async fn get_summary(
             .parse::<i64>()
             .ok()
             .filter(|n| (1..=MAX_TREND).contains(n))
-            .ok_or_else(|| ApiError::bad("The trend must be a number from 1 to 24."))?,
+            .ok_or_else(|| ApiError::bad(msg::TREND_RANGE))?,
     };
 
     let shown: Option<(Uuid, NaiveDate)> =
@@ -70,7 +69,7 @@ async fn get_summary(
             .fetch_all(&st.pool)
             .await?;
     let seats: Vec<(Uuid, String, String, i32, bool)> = sqlx::query_as(
-        "select a.id, p.full_name, a.role_title, a.team_id::int, a.active
+        "select a.id, p.full_name, a.role_title, a.team_id::int, (a.active and p.active)
          from assignment a
          join team t on t.id = a.team_id
          join person p on p.id = a.person_id
@@ -92,16 +91,30 @@ async fn get_summary(
     .fetch_all(&st.pool)
     .await?;
     let values: Vec<(Uuid, Uuid, String, i32, i64)> = sqlx::query_as(
-        "select r.period_id, r.assignment_id, min(m.label), v.month_offset::int, sum(v.value)::bigint
+        // The shown name of a count is chosen by rule, not by alphabet (which depends on the database
+        // collation): a live name wins over a retired one, then the lower series, then the id.
+        "select r.period_id, r.assignment_id,
+                (array_agg(m.label order by (m.retired_at is not null), m.series, m.id))[1],
+                v.month_offset::int, sum(v.value)::bigint
          from report r
          join report_metric_value v on v.report_id = r.id
          join metric_def m on m.id = v.metric_def_id
          join assignment a on a.id = r.assignment_id
          join team t on t.id = a.team_id
-         where r.status = 'submitted' and r.period_id = any($1)
+         where r.status = 'submitted' and r.period_id = $1
          group by r.period_id, r.assignment_id, lower(m.label), v.month_offset,
                   t.sort, t.id, a.sort, a.code
          order by t.sort, t.id, a.sort, a.code, min(m.series), lower(m.label), v.month_offset",
+    )
+    .bind(shown_id)
+    .fetch_all(&st.pool)
+    .await?;
+    // The trend only needs one total per period, not the detail of every count.
+    let volumes: Vec<(Uuid, i64)> = sqlx::query_as(
+        "select r.period_id, sum(v.value)::bigint
+         from report r join report_metric_value v on v.report_id = r.id
+         where r.status = 'submitted' and r.period_id = any($1)
+         group by r.period_id",
     )
     .bind(&period_ids)
     .fetch_all(&st.pool)
@@ -151,6 +164,7 @@ async fn get_summary(
                 total,
             })
             .collect(),
+        volumes,
     };
     Ok(Json(summary::build(&input)))
 }

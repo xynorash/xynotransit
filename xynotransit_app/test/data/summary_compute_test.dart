@@ -231,11 +231,9 @@ void main() {
         's1': [m('m9', 'Old', 5)],
       },
     );
-    expect(s.metrics.map((x) => (x.label, x.total)), [
-      ('Sea', 6),
-      ('Old', 3),
-      ('Air', 0),
-    ]);
+    // 'Air' is defined on a seat but nobody sent numbers for it: it is not
+    // listed (the API lists only counts that have numbers).
+    expect(s.metrics.map((x) => (x.label, x.total)), [('Sea', 6), ('Old', 3)]);
     expect(s.people[0].volumeTotal, 9);
   });
 
@@ -249,7 +247,7 @@ void main() {
     expect(s.submitted, 0);
     expect(s.metRate, 0);
     expect(s.trend.single.submissionRate, 0);
-    expect(s.metrics.every((x) => x.total == 0), isTrue);
+    expect(s.metrics, isEmpty, reason: 'no numbers, no counts listed');
   });
 
   test('toJson then fromJson keeps every number', () {

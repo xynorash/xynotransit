@@ -1,3 +1,5 @@
+import 'text_rules.dart';
+
 /// Where in the deck a text field is used. Groups the editor.
 enum DeckTextGroup {
   cover('Cover'),
@@ -276,15 +278,32 @@ class DeckTexts {
     for (final m in _token.allMatches(template)) m[1]!,
   };
 
+  /// The value as it is stored: line breaks as plain line feeds (only where
+  /// line breaks are allowed), then trimmed like the server trims.
+  static String normalise(DeckTextField field, String value) {
+    var v = value;
+    if (field.multiline && v.contains('\r')) {
+      v = v.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    }
+    return trimText(v);
+  }
+
   /// Plain-words problems with [value] for [field], or null when it is fine.
+  /// Same order and words as the server.
   static String? check(DeckTextField field, String value) {
-    final v = value.trim();
+    final v = normalise(field, value);
     if (v.isEmpty && !field.canBeEmpty) {
       return '${field.label} cannot be empty.';
     }
-    if (v.runes.length > field.maxLength) {
+    if (charCount(v) > field.maxLength) {
       return '${field.label} can be at most ${field.maxLength} characters.';
     }
+    final hidden = v.runes.any(
+      (c) =>
+          isInvisibleRune(c) ||
+          (isControlRune(c) && !(field.multiline && (c == 10 || c == 13))),
+    );
+    if (hidden) return 'Use plain text in ${field.label}.';
     for (final t in tokensIn(v)) {
       if (!field.tokens.contains(t)) {
         final allowed = field.tokens.isEmpty

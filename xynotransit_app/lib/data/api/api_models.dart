@@ -11,12 +11,26 @@ import '../../domain/period.dart';
 import '../../domain/report.dart';
 import '../../domain/snapshot.dart';
 import '../../domain/summary.dart';
+import '../../domain/text_rules.dart';
 import '../repository.dart';
 
 typedef Json = Map<String, dynamic>;
 
 RepositoryException _unreadable() =>
     const RepositoryException('The server sent an answer the app cannot read.');
+
+/// Runs a parser. Whatever goes wrong inside it (a field of the wrong type, a
+/// missing field, a bad date) is one readable failure, never a raw TypeError
+/// that no screen knows how to show.
+T _guard<T>(T Function() parse) {
+  try {
+    return parse();
+  } on RepositoryException {
+    rethrow;
+  } on Object {
+    throw _unreadable();
+  }
+}
 
 /// A JSON object, or a readable failure.
 Json asJson(Object? data) {
@@ -34,24 +48,29 @@ List<Json> rowsOf(Object? data) => [
 /// A timestamp as local time. Offsets such as +03:00 or Z are honoured.
 DateTime parseTime(Object? s) => DateTime.parse(s! as String).toLocal();
 
+/// A calendar date (no time, no zone). A date only text keeps its day. A
+/// timestamp keeps the day it was written with, whatever the offset: the
+/// sender said "1 February", and converting 2026-02-01T00:00:00+14:00 to UTC
+/// first would make it 31 January.
 DateTime? _dateOrNull(Object? s) {
   if (s is! String || s.isEmpty) return null;
-  final d = DateTime.parse(s);
-  // A date only value has no zone; a full timestamp keeps its calendar day.
+  final text = s.trim();
+  final day = text.length > 10 ? text.substring(0, 10) : text;
+  final d = DateTime.parse(day);
   return DateTime(d.year, d.month, d.day);
 }
 
 AppRole parseRole(Object? s) =>
     s == 'controller' ? AppRole.controller : AppRole.contributor;
 
-AppUser parseUser(Object? data) {
+AppUser parseUser(Object? data) => _guard(() {
   final j = asJson(data);
   return AppUser(
     personId: j['person_id'] as String?,
     role: parseRole(j['role']),
     label: (j['label'] as String?) ?? 'Signed in',
   );
-}
+});
 
 Map<String, Object?> userToJson(AppUser u) => {
   'person_id': u.personId,
@@ -59,7 +78,7 @@ Map<String, Object?> userToJson(AppUser u) => {
   'label': u.label,
 };
 
-Team parseTeam(Object? data) {
+Team parseTeam(Object? data) => _guard(() {
   final t = asJson(data);
   return Team(
     id: '${t['id']}',
@@ -67,9 +86,9 @@ Team parseTeam(Object? data) {
     name: t['name'] as String,
     sort: (t['sort'] as num).toInt(),
   );
-}
+});
 
-Person parsePerson(Object? data) {
+Person parsePerson(Object? data) => _guard(() {
   final p = asJson(data);
   return Person(
     id: '${p['id']}',
@@ -78,9 +97,9 @@ Person parsePerson(Object? data) {
     appRole: parseRole(p['app_role']),
     active: p['active'] as bool? ?? true,
   );
-}
+});
 
-Assignment parseAssignment(Object? data) {
+Assignment parseAssignment(Object? data) => _guard(() {
   final a = asJson(data);
   return Assignment(
     id: '${a['id']}',
@@ -108,19 +127,23 @@ Assignment parseAssignment(Object? data) {
         ),
     ]..sort((a, b) => a.sort.compareTo(b.sort)),
   );
-}
+});
 
-Catalog parseCatalog(Object? data) {
+Catalog parseCatalog(Object? data) => _guard(() {
   final j = asJson(data);
   return Catalog(
     teams: [for (final t in rowsOf(j['teams'])) parseTeam(t)],
     persons: [for (final p in rowsOf(j['persons'])) parsePerson(p)],
     assignments: [for (final a in rowsOf(j['assignments'])) parseAssignment(a)],
   );
-}
+});
 
 /// Body of POST /teams and PATCH /teams/{id}.
-Map<String, Object?> teamToJson(String name) => {'name': name.trim()};
+Map<String, Object?> teamToJson(String name) => {'name': _line(name)};
+
+/// Trimmed the way the server and the in-memory demo trim, with odd spaces
+/// made plain.
+String _line(String s) => trimText(plainSpaces(s));
 
 /// Body of POST /persons and PATCH /persons/{id}. The email is lowercased here
 /// too, the server does it as well.
@@ -130,8 +153,8 @@ Map<String, Object?> personToJson({
   required AppRole role,
   required bool active,
 }) => {
-  'full_name': fullName.trim(),
-  'email': email.trim().toLowerCase(),
+  'full_name': _line(fullName),
+  'email': trimText(email).toLowerCase(),
   'app_role': role.name,
   'active': active,
 };
@@ -144,7 +167,7 @@ Map<String, Object?> assignmentToJson({
 }) => {
   'person_id': personId,
   'team_id': teamId,
-  'role_title': roleTitle.trim(),
+  'role_title': _line(roleTitle),
 };
 
 /// Body of PUT /assignments/{id}/definitions. Entries without an id are new.
@@ -154,10 +177,10 @@ Map<String, Object?> definitionsToJson({
 }) => {
   'metrics': [
     for (final m in metrics)
-      {if (m.id != null) 'id': m.id, 'label': m.label.trim()},
+      {if (m.id != null) 'id': m.id, 'label': _line(m.label)},
   ],
   'kpis': [
-    for (final k in kpis) {if (k.id != null) 'id': k.id, 'text': k.text.trim()},
+    for (final k in kpis) {if (k.id != null) 'id': k.id, 'text': _line(k.text)},
   ],
 };
 
@@ -178,7 +201,7 @@ NoteKind? _noteKind(Object? s) {
   return null;
 }
 
-Period parsePeriod(Object? data) {
+Period parsePeriod(Object? data) => _guard(() {
   final j = asJson(data);
   return Period(
     id: '${j['id']}',
@@ -186,9 +209,9 @@ Period parsePeriod(Object? data) {
     meetingDate: _dateOrNull(j['meeting_date']),
     status: j['status'] == 'closed' ? PeriodStatus.closed : PeriodStatus.open,
   );
-}
+});
 
-Report parseReport(Object? data) {
+Report parseReport(Object? data) => _guard(() {
   final j = asJson(data);
   final values = <String, List<int?>>{};
   for (final v in rowsOf(j['values'])) {
@@ -240,11 +263,10 @@ Report parseReport(Object? data) {
     notes: notes,
     reporter: Reporter.fromJson(j['reporter']),
   );
-}
+});
 
-List<Report> parseReports(Object? data) => [
-  for (final r in rowsOf(data)) parseReport(r),
-];
+List<Report> parseReports(Object? data) =>
+    _guard(() => [for (final r in rowsOf(data)) parseReport(r)]);
 
 /// The body of PUT /periods/{id}/reports/{assignment_id}. Only typed numbers
 /// are sent; the server decides whether the report is complete.
@@ -272,14 +294,14 @@ Map<String, Object?> reportToJson(Report r) => {
 };
 
 String? _commentOrNull(String? c) {
-  final t = c?.trim();
+  final t = c == null ? null : trimText(c);
   return (t == null || t.isEmpty) ? null : t;
 }
 
 /// Null for JSON `null` (no deck generated yet).
 DeckRun? parseDeckOrNull(Object? data) => data == null ? null : parseDeck(data);
 
-DeckRun parseDeck(Object? data) {
+DeckRun parseDeck(Object? data) => _guard(() {
   final j = asJson(data);
   return DeckRun(
     id: '${j['id']}',
@@ -297,10 +319,10 @@ DeckRun parseDeck(Object? data) {
     ],
     texts: DeckTexts.fromJson(j['texts'] is Map ? asJson(j['texts']) : null),
   );
-}
+});
 
 /// Answer of GET and PUT /periods/{id}/deck-text.
-DeckTextsState parseDeckTextsState(Object? data) {
+DeckTextsState parseDeckTextsState(Object? data) => _guard(() {
   final j = asJson(data);
   return DeckTextsState(
     texts: DeckTexts.fromJson(
@@ -308,4 +330,4 @@ DeckTextsState parseDeckTextsState(Object? data) {
     ),
     inheritedFrom: j['inherited_from'] as String?,
   );
-}
+});

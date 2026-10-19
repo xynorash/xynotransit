@@ -114,7 +114,7 @@ void main() {
 
     await choosePerson(tester, 'Rova · Import');
     expect(find.text('Your numbers, month by month'), findsOneWidget);
-    expect(find.text('KPI: did you reach your targets?'), findsOneWidget);
+    expect(find.text('Did you reach your targets?'), findsOneWidget);
     expect(find.text('What to tell the meeting'), findsOneWidget);
     expect(find.text('Send report'), findsOneWidget);
   });
@@ -123,7 +123,7 @@ void main() {
     await pumpApp(tester);
     await choosePerson(tester, 'Shalini · Shipping clerk');
     expect(find.text('Your numbers, month by month'), findsNothing);
-    expect(find.text('KPI: did you reach your targets?'), findsOneWidget);
+    expect(find.text('Did you reach your targets?'), findsOneWidget);
   });
 
   testWidgets('the form header reads as specified', (tester) async {
@@ -185,7 +185,10 @@ void main() {
       await tester.tap(find.text('Send report'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('Sent. Choose the same name'), findsOneWidget);
+      expect(
+        find.textContaining('Sent. The summary is at the top'),
+        findsOneWidget,
+      );
       expect(
         find.textContaining('You already sent this report on'),
         findsOneWidget,
@@ -431,7 +434,10 @@ void main() {
     h.repo.offline = false;
     await tester.pump(const Duration(seconds: 16));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Sent. Choose the same name'), findsOneWidget);
+    expect(
+      find.textContaining('Sent. The summary is at the top'),
+      findsOneWidget,
+    );
     await goTo(tester, h, '/manager/reports');
     expect(find.text('1 of 14 · Feb to Apr 2026'), findsOneWidget);
   });

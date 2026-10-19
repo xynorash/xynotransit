@@ -14,6 +14,7 @@ import 'rasterizer.dart';
 Future<List<Uint8List>> renderDeckPngs(
   BuildContext context,
   List<SlideSpec> specs, {
+  double pixelRatio = 1,
   bool Function()? isActive,
   void Function(int done, int total)? onProgress,
 }) async {
@@ -21,7 +22,9 @@ Future<List<Uint8List>> renderDeckPngs(
   for (var i = 0; i < specs.length; i++) {
     if (isActive != null && !isActive()) break;
     onProgress?.call(i, specs.length);
-    pngs.add(await slideToPng(context, slideFor(specs[i])));
+    pngs.add(
+      await slideToPng(context, slideFor(specs[i]), pixelRatio: pixelRatio),
+    );
   }
   return pngs;
 }
@@ -31,8 +34,9 @@ List<PptxSlide> pptxSlidesFor(List<SlideSpec> specs, List<Uint8List> pngs) => [
   for (var i = 0; i < specs.length; i++)
     PptxSlide(
       png: pngs[i],
+      title: slideTitle(specs[i]),
       altText: slideAltText(specs[i]),
-      notes: slideAltText(specs[i]),
+      notes: slideNotes(specs[i]),
     ),
 ];
 

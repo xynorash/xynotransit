@@ -54,7 +54,7 @@ class FormHeader extends StatelessWidget {
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 58 * 10.5),
           child: Text(
-            'Fill in this form once for the three months. The controller builds the '
+            'Fill in this form once for the three months. Your manager builds the '
             'meeting slides when everyone has sent theirs.',
             style: bodyStyle(context, color: t.muted),
           ),
@@ -106,7 +106,11 @@ class FormCards extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final form = ref.watch(formControllerProvider);
+    final form = ref.watch(
+      formControllerProvider.select(
+        (f) => (hasPerson: f.hasPerson, assignmentId: f.assignmentId),
+      ),
+    );
     final catalog = ref.watch(catalogProvider).value;
     final a = form.hasPerson && catalog != null
         ? catalog.assignmentById(form.assignmentId)
@@ -116,6 +120,7 @@ class FormCards extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const _AutoSelect(),
+        if (a != null) ...[const SentCard(), const ProgressCard()],
         const PeriodPersonCard(),
         if (a != null) ...[
           if (a.hasCounts) ...[
@@ -163,50 +168,61 @@ class _PeriodFieldsState extends ConsumerState<PeriodFields> {
   @override
   Widget build(BuildContext context) {
     final start = ref.watch(periodSelectionProvider);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Labeled(
-            label: 'First month of the three',
-            child: DropdownButtonFormField<int>(
-              initialValue: start.month,
-              isExpanded: true,
-              decoration: xInput(context),
-              items: [
-                for (var m = 1; m <= 12; m++)
-                  DropdownMenuItem(value: m, child: Text(monthLong[m - 1])),
-              ],
-              onChanged: (m) {
-                if (m != null) _setStart(start.year, m);
-              },
-            ),
-          ),
-        ),
-        const SizedBox(width: 14),
-        SizedBox(
-          width: 110,
-          child: Labeled(
-            label: 'Year',
-            child: TextField(
-              controller: _year,
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(4),
-              ],
-              decoration: xInput(context),
-              style: bodyStyle(context),
-              onChanged: (s) {
-                final y = int.tryParse(s);
-                if (y != null && y >= 2024 && y <= 2100) {
-                  _setStart(y, start.month);
-                }
-              },
-            ),
-          ),
-        ),
-      ],
+    final month = Labeled(
+      label: 'First month of the three',
+      mergeChild: true,
+      child: DropdownButtonFormField<int>(
+        initialValue: start.month,
+        isExpanded: true,
+        decoration: xInput(context),
+        items: [
+          for (var m = 1; m <= 12; m++)
+            DropdownMenuItem(value: m, child: Text(monthLong[m - 1])),
+        ],
+        onChanged: (m) {
+          if (m != null) _setStart(start.year, m);
+        },
+      ),
+    );
+    final year = Labeled(
+      label: 'Year',
+      child: TextField(
+        controller: _year,
+        keyboardType: TextInputType.number,
+        inputFormatters: [
+          FilteringTextInputFormatter.digitsOnly,
+          LengthLimitingTextInputFormatter(4),
+        ],
+        decoration: xInput(context),
+        style: bodyStyle(context),
+        onChanged: (s) {
+          final y = int.tryParse(s);
+          if (y != null && y >= 2024 && y <= 2100) {
+            _setStart(y, start.month);
+          }
+        },
+      ),
+    );
+    // Side by side when the longest month name and the year fit, else stacked
+    // (large text, narrow phones).
+    final scale = MediaQuery.textScalerOf(context).scale(1);
+    return LayoutBuilder(
+      builder: (context, box) {
+        if (scale > 1.3 || box.maxWidth < 300) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [month, const SizedBox(height: 12), year],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: month),
+            const SizedBox(width: 14),
+            SizedBox(width: 110, child: year),
+          ],
+        );
+      },
     );
   }
 }
@@ -218,7 +234,16 @@ class PeriodPersonCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
     final start = ref.watch(periodSelectionProvider);
-    final form = ref.watch(formControllerProvider);
+    final form = ref.watch(
+      formControllerProvider.select(
+        (f) => (
+          hasPerson: f.hasPerson,
+          assignmentId: f.assignmentId,
+          epoch: f.epoch,
+          sentAt: f.sentAt,
+        ),
+      ),
+    );
     final catalog = ref.watch(catalogProvider).value;
     final user = ref.watch(userProvider).value;
     final allowed = catalog == null
@@ -241,6 +266,7 @@ class PeriodPersonCard extends ConsumerWidget {
           if (showChooser && catalog != null) ...[
             Labeled(
               label: 'Reporting for',
+              mergeChild: true,
               child: _SeatChooser(
                 catalog: catalog,
                 allowed: allowed,
@@ -378,14 +404,24 @@ class IdentityFields extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final epoch = ref.watch(formControllerProvider.select((f) => f.epoch));
-    final problems = ref.watch(
-      formControllerProvider.select((f) => f.problems),
+    final attempted = ref.watch(
+      formControllerProvider.select((f) => f.attempted),
     );
+    // Typing rebuilds this only while errors are shown, to keep them live.
+    final live = attempted
+        ? ref.watch(
+            formControllerProvider.select(
+              (f) => f.report?.reporter ?? const Reporter(),
+            ),
+          )
+        : null;
     final r =
         ref.read(formControllerProvider).report?.reporter ?? const Reporter();
     final ctl = ref.read(formControllerProvider.notifier);
+    final focus = ref.read(fieldFocusProvider);
     String? errorFor(String field) {
-      for (final p in problems) {
+      if (live == null) return null;
+      for (final p in live.problems()) {
         if (p.toLowerCase().contains('your $field')) return p;
       }
       return null;
@@ -398,6 +434,7 @@ class IdentityFields extends ConsumerWidget {
           key: ValueKey('$epoch-name'),
           label: 'Name',
           fieldKey: const ValueKey('reporter-name'),
+          focusNode: focus.node('name'),
           initial: r.name,
           error: errorFor('name'),
           onChanged: (v) => ctl.setReporter(name: v),
@@ -407,6 +444,7 @@ class IdentityFields extends ConsumerWidget {
           key: ValueKey('$epoch-country'),
           label: 'Country',
           fieldKey: const ValueKey('reporter-country'),
+          focusNode: focus.node('country'),
           initial: r.country,
           error: errorFor('country'),
           onChanged: (v) => ctl.setReporter(country: v),
@@ -416,6 +454,7 @@ class IdentityFields extends ConsumerWidget {
           key: ValueKey('$epoch-role'),
           label: 'Role',
           fieldKey: const ValueKey('reporter-role'),
+          focusNode: focus.node('role'),
           initial: r.role,
           error: errorFor('role'),
           onChanged: (v) => ctl.setReporter(role: v),
@@ -433,10 +472,12 @@ class _IdentityField extends StatefulWidget {
     required this.initial,
     required this.onChanged,
     this.error,
+    this.focusNode,
   });
 
   final String label;
   final Key fieldKey;
+  final FocusNode? focusNode;
   final String initial;
   final String? error;
   final ValueChanged<String> onChanged;
@@ -473,42 +514,27 @@ class _IdentityFieldState extends State<_IdentityField> {
     );
     return Labeled(
       label: widget.label,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: TextField(
-              key: widget.fieldKey,
-              controller: _c,
-              maxLength: Reporter.maxLength,
-              maxLengthEnforcement: MaxLengthEnforcement.enforced,
-              inputFormatters: [FilteringTextInputFormatter.deny(_invisible)],
-              keyboardType: TextInputType.text,
-              style: bodyStyle(context),
-              decoration: deco,
-              onChanged: (v) {
-                setState(() {});
-                widget.onChanged(v);
-              },
-            ),
+      child: TextField(
+        key: widget.fieldKey,
+        controller: _c,
+        focusNode: widget.focusNode,
+        maxLength: Reporter.maxLength,
+        maxLengthEnforcement: MaxLengthEnforcement.enforced,
+        inputFormatters: [FilteringTextInputFormatter.deny(_invisible)],
+        keyboardType: TextInputType.text,
+        textInputAction: TextInputAction.next,
+        style: bodyStyle(context),
+        decoration: deco.copyWith(
+          suffixIconConstraints: const BoxConstraints(),
+          suffixIcon: Padding(
+            padding: const EdgeInsetsDirectional.only(start: 8, end: 12),
+            child: CharCounter(length: _c.text.length, max: Reporter.maxLength),
           ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 52,
-            height: 46,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Semantics(
-                label: '${_c.text.length} of ${Reporter.maxLength} characters',
-                excludeSemantics: true,
-                child: Text(
-                  '${_c.text.length}/${Reporter.maxLength}',
-                  style: monoStyle(context, size: 12, color: t.muted),
-                ),
-              ),
-            ),
-          ),
-        ],
+        ),
+        onChanged: (v) {
+          setState(() {});
+          widget.onChanged(v);
+        },
       ),
     );
   }
@@ -521,11 +547,23 @@ class NumbersCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final form = ref.watch(formControllerProvider);
+    // Only what this card shows is watched, so typing in a note does not
+    // rebuild the numbers.
+    final epoch = ref.watch(formControllerProvider.select((f) => f.epoch));
+    final attempted = ref.watch(
+      formControllerProvider.select((f) => f.attempted),
+    );
+    final values = ref.watch(
+      formControllerProvider.select(
+        (f) => f.report?.values ?? const <String, List<int?>>{},
+      ),
+    );
     final period = ref.watch(periodProvider).value;
     final start = ref.watch(periodSelectionProvider);
     final months = (period ?? Period(id: '', startMonth: start)).months;
-    final report = form.report!;
+    int total(String id) =>
+        [for (final v in values[id] ?? const <int?>[]) v ?? 0]
+            .fold(0, (a, b) => a + b);
     final t = context.tokens;
     return StepCard(
       step: 2,
@@ -572,51 +610,21 @@ class NumbersCard extends ConsumerWidget {
                       Semantics(
                         liveRegion: true,
                         child: Text(
-                          'Total ${thousands(report.totalOf(assignment.metrics[i].id))}',
+                          'Total ${thousands(total(assignment.metrics[i].id))}',
                           style: monoStyle(context),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      for (var m = 0; m < 3; m++) ...[
-                        if (m > 0) const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              ExcludeSemantics(
-                                child: Text(
-                                  months[m].short,
-                                  style: monoStyle(context, size: 13),
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Semantics(
-                                label:
-                                    '${assignment.metrics[i].label}, ${months[m].long}',
-                                textField: true,
-                                child: NumberField(
-                                  key: ValueKey(
-                                    '${form.epoch}-${assignment.metrics[i].id}-$m',
-                                  ),
-                                  value:
-                                      (report.values[assignment
-                                          .metrics[i]
-                                          .id] ??
-                                      const [null, null, null])[m],
-                                  onChanged: (v) => ref
-                                      .read(formControllerProvider.notifier)
-                                      .setValue(assignment.metrics[i].id, m, v),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ],
+                  _MonthFields(
+                    months: months,
+                    metric: assignment.metrics[i],
+                    epoch: epoch,
+                    values:
+                        values[assignment.metrics[i].id] ??
+                        const [null, null, null],
+                    showErrors: attempted,
                   ),
                 ],
               ),
@@ -628,6 +636,100 @@ class NumbersCard extends ConsumerWidget {
   }
 }
 
+/// The three month boxes of one count. Side by side when there is room,
+/// stacked on phones and at large text, so nine digit numbers always fit.
+class _MonthFields extends ConsumerWidget {
+  const _MonthFields({
+    required this.months,
+    required this.metric,
+    required this.epoch,
+    required this.values,
+    required this.showErrors,
+  });
+
+  final List<MonthRef> months;
+  final MetricDef metric;
+  final int epoch;
+  final List<int?> values;
+  final bool showErrors;
+
+  /// Width of one month box needed to show 999,999,999 at the field's size.
+  static const _needed = 150.0;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ctl = ref.read(formControllerProvider.notifier);
+    final focus = ref.read(fieldFocusProvider);
+    Widget field(int m) => NumberField(
+      key: ValueKey('$epoch-${metric.id}-$m'),
+      semanticLabel: '${metric.label}, ${months[m].long}',
+      focusNode: focus.node(numberFieldId(metric.id, m)),
+      value: m < values.length ? values[m] : null,
+      errorText: showErrors && (m >= values.length || values[m] == null)
+          ? 'Enter a number'
+          : null,
+      onChanged: (v) => ctl.setValue(metric.id, m, v),
+    );
+    return LayoutBuilder(
+      builder: (context, box) {
+        final stacked = box.maxWidth < _needed * 3 + 20;
+        if (stacked) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var m = 0; m < 3; m++) ...[
+                if (m > 0) const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 56,
+                      height: 46,
+                      child: Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: ExcludeSemantics(
+                          child: Text(
+                            months[m].short,
+                            style: monoStyle(context, size: 13),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(child: field(m)),
+                  ],
+                ),
+              ],
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var m = 0; m < 3; m++) ...[
+              if (m > 0) const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ExcludeSemantics(
+                      child: Text(
+                        months[m].short,
+                        style: monoStyle(context, size: 13),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    field(m),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
 class KpiCard extends ConsumerWidget {
   const KpiCard({super.key, required this.assignment});
 
@@ -635,12 +737,19 @@ class KpiCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final form = ref.watch(formControllerProvider);
-    final report = form.report!;
+    final epoch = ref.watch(formControllerProvider.select((f) => f.epoch));
+    final attempted = ref.watch(
+      formControllerProvider.select((f) => f.attempted),
+    );
+    final kpis = ref.watch(
+      formControllerProvider.select(
+        (f) => f.report?.kpis ?? const <String, KpiResult>{},
+      ),
+    );
     final t = context.tokens;
     return StepCard(
       step: 3,
-      title: 'KPI: did you reach your targets?',
+      title: 'Did you reach your targets?',
       hint: 'Over the three months. Partly means reached for some shipments, not all.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -678,10 +787,16 @@ class KpiCard extends ConsumerWidget {
                           if (j > 0) const SizedBox(width: 6),
                           Expanded(
                             child: _Segment(
+                              focusNode: j == 0
+                                  ? ref
+                                        .read(fieldFocusProvider)
+                                        .node(
+                                          targetFieldId(assignment.kpis[i].id),
+                                        )
+                                  : null,
                               status: s,
                               selected:
-                                  report.kpis[assignment.kpis[i].id]?.status ==
-                                  s,
+                                  kpis[assignment.kpis[i].id]?.status == s,
                               onTap: () => ref
                                   .read(formControllerProvider.notifier)
                                   .setKpi(assignment.kpis[i].id, s),
@@ -690,11 +805,22 @@ class KpiCard extends ConsumerWidget {
                         ],
                       ],
                     ),
+                    if (attempted && kpis[assignment.kpis[i].id] == null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          'Choose Met, Partly or Missed',
+                          style: bodyStyle(
+                            context,
+                            size: 14,
+                            color: t.bad,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
                     const SizedBox(height: 10),
                     _CountedField(
-                      key: ValueKey(
-                        '${form.epoch}-comment-${assignment.kpis[i].id}',
-                      ),
+                      key: ValueKey('$epoch-comment-${assignment.kpis[i].id}'),
                       initial: ref
                           .read(formControllerProvider.notifier)
                           .kpiComment(assignment.kpis[i].id),
@@ -727,8 +853,10 @@ class _CountedField extends StatefulWidget {
     required this.semanticLabel,
     required this.onChanged,
     this.multiline = false,
+    this.focusNode,
   });
 
+  final FocusNode? focusNode;
   final String initial;
   final int maxLength;
   final String hint;
@@ -753,12 +881,15 @@ class _CountedFieldState extends State<_CountedField> {
 
   @override
   Widget build(BuildContext context) {
-    final t = context.tokens;
     final field = Semantics(
       label: widget.semanticLabel,
       textField: true,
       child: TextField(
         controller: _c,
+        focusNode: widget.focusNode,
+        textInputAction: widget.multiline
+            ? TextInputAction.newline
+            : TextInputAction.next,
         maxLength: widget.maxLength,
         maxLengthEnforcement: MaxLengthEnforcement.enforced,
         minLines: widget.multiline ? 2 : 1,
@@ -767,60 +898,64 @@ class _CountedFieldState extends State<_CountedField> {
             ? TextInputType.multiline
             : TextInputType.text,
         style: bodyStyle(context),
-        decoration: xInput(context, hint: widget.hint),
+        decoration: widget.multiline
+            ? xInput(context, hint: widget.hint)
+            : xInput(context, hint: widget.hint).copyWith(
+                suffixIconConstraints: const BoxConstraints(),
+                suffixIcon: Padding(
+                  padding: const EdgeInsetsDirectional.only(start: 8, end: 12),
+                  child: CharCounter(
+                    length: _c.text.length,
+                    max: widget.maxLength,
+                  ),
+                ),
+              ),
         onChanged: (v) {
           setState(() {});
           widget.onChanged(v);
         },
       ),
     );
-    final counter = Semantics(
-      liveRegion: false,
-      label: '${_c.text.length} of ${widget.maxLength} characters',
-      excludeSemantics: true,
-      child: Text(
-        '${_c.text.length}/${widget.maxLength}',
-        style: monoStyle(context, size: 12, color: t.muted),
-      ),
-    );
+    final counter = CharCounter(length: _c.text.length, max: widget.maxLength);
     if (widget.multiline) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           field,
           const SizedBox(height: 4),
-          Align(alignment: Alignment.centerRight, child: counter),
+          Align(alignment: AlignmentDirectional.centerEnd, child: counter),
         ],
       );
     }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Expanded(child: field),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 52,
-          child: Align(alignment: Alignment.centerRight, child: counter),
-        ),
-      ],
-    );
+    return field;
   }
 }
 
-class _Segment extends StatelessWidget {
+class _Segment extends StatefulWidget {
   const _Segment({
     required this.status,
     required this.selected,
     required this.onTap,
+    this.focusNode,
   });
 
   final KpiStatus status;
   final bool selected;
   final VoidCallback onTap;
+  final FocusNode? focusNode;
+
+  @override
+  State<_Segment> createState() => _SegmentState();
+}
+
+class _SegmentState extends State<_Segment> {
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final status = widget.status;
+    final selected = widget.selected;
     final label = switch (status) {
       KpiStatus.met => 'Met',
       KpiStatus.partly => 'Partly',
@@ -832,17 +967,23 @@ class _Segment extends StatelessWidget {
       checked: selected,
       label: label,
       excludeSemantics: true,
-      onTap: onTap,
+      onTap: widget.onTap,
       child: Material(
         color: selected ? t.statusFill(status.name) : t.bg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
-          side: selected ? BorderSide.none : BorderSide(color: t.line),
+          side: _focused
+              ? BorderSide(color: t.accent, width: 3)
+              : selected
+              ? BorderSide.none
+              : BorderSide(color: t.line),
         ),
         child: InkWell(
-          onTap: onTap,
+          focusNode: widget.focusNode,
+          onTap: widget.onTap,
+          onFocusChange: (f) => setState(() => _focused = f),
           borderRadius: BorderRadius.circular(10),
-          focusColor: t.accent.withValues(alpha: 0.25),
+          focusColor: t.accent.withValues(alpha: 0.12),
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 46),
             child: Center(
@@ -869,7 +1010,15 @@ class NotesCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final form = ref.watch(formControllerProvider);
+    final epoch = ref.watch(formControllerProvider.select((f) => f.epoch));
+    final countsKey = ref.watch(
+      formControllerProvider.select(
+        (f) => [
+          for (final k in NoteKind.values) (f.report?.notesOf(k).length ?? 0),
+        ].join(','),
+      ),
+    );
+    final counts = [for (final c in countsKey.split(',')) int.parse(c)];
     return StepCard(
       step: 4,
       title: 'What to tell the meeting',
@@ -881,9 +1030,9 @@ class NotesCard extends ConsumerWidget {
           for (final (i, kind) in NoteKind.values.indexed) ...[
             if (i > 0) const SizedBox(height: 22),
             NoteBox(
-              key: ValueKey('${form.epoch}-${kind.name}'),
+              key: ValueKey('$epoch-${kind.name}'),
               kind: kind,
-              count: form.report!.notesOf(kind).length,
+              count: counts[i],
             ),
           ],
         ],
@@ -930,6 +1079,9 @@ class NoteBox extends ConsumerWidget {
           const SizedBox(height: 8),
           _CountedField(
             key: ValueKey('${kind.name}-point-$i'),
+            focusNode: ref
+                .read(fieldFocusProvider)
+                .node('note:${kind.name}:$i'),
             initial: ctl.noteLine(kind, i),
             maxLength: NoteRules.maxLength,
             hint: 'Point ${i + 1}',
@@ -938,6 +1090,403 @@ class NoteBox extends ConsumerWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// One required part of the form, for the progress summary.
+class PartProgress {
+  const PartProgress(this.part, this.label, this.left, this.firstId);
+
+  final FormPart part;
+  final String label;
+
+  /// How many things are still missing in this part.
+  final int left;
+
+  /// Control to jump to: the first missing one, else the first of the part.
+  final String firstId;
+
+  bool get done => left == 0;
+}
+
+/// The required parts of the form and how far each one is. Parts the seat does
+/// not have (no counts, no targets) are left out.
+List<PartProgress> partsOf(Report r, Assignment a) {
+  final gaps = formGaps(r, a);
+  int left(FormPart p) => gaps.where((g) => g.part == p).length;
+  String first(FormPart p, String fallback) {
+    for (final g in gaps) {
+      if (g.part == p) return g.fieldId;
+    }
+    return fallback;
+  }
+
+  return [
+    PartProgress(
+      FormPart.who,
+      'About you',
+      left(FormPart.who),
+      first(FormPart.who, 'name'),
+    ),
+    if (a.hasCounts)
+      PartProgress(
+        FormPart.numbers,
+        'Numbers',
+        left(FormPart.numbers),
+        first(FormPart.numbers, numberFieldId(a.metrics.first.id, 0)),
+      ),
+    if (a.kpis.isNotEmpty)
+      PartProgress(
+        FormPart.targets,
+        'Targets',
+        left(FormPart.targets),
+        first(FormPart.targets, targetFieldId(a.kpis.first.id)),
+      ),
+  ];
+}
+
+/// "2 of 3 parts done", one button per part that jumps to what is missing,
+/// and when the draft was last kept on this device.
+class ProgressCard extends ConsumerWidget {
+  const ProgressCard({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = context.tokens;
+    final form = ref.watch(formControllerProvider);
+    final catalog = ref.watch(catalogProvider).value;
+    final r = form.report;
+    final a = r == null || catalog == null
+        ? null
+        : catalog.assignmentById(form.assignmentId);
+    if (r == null || a == null || form.phase == SendPhase.sent) {
+      return const SizedBox.shrink();
+    }
+    final parts = partsOf(r, a);
+    final done = parts.where((p) => p.done).length;
+    final focus = ref.read(fieldFocusProvider);
+    final notes = NoteKind.values.fold<int>(
+      0,
+      (n, k) => n + r.notesOf(k).length,
+    );
+    final saved = form.draftSavedAt;
+    final all = done == parts.length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: XCard(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Semantics(
+              liveRegion: true,
+              container: true,
+              child: Text(
+                all
+                    ? 'All $done parts done. You can send your report.'
+                    : '$done of ${parts.length} parts done',
+                style: bodyStyle(
+                  context,
+                  size: 17,
+                  weight: FontWeight.w700,
+                  color: all ? t.ok : t.ink,
+                  height: 1.3,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final p in parts)
+                  _PartChip(
+                    part: p,
+                    onTap: () => focus.focus(
+                      p.firstId,
+                      animate: !reducedMotion(context),
+                    ),
+                  ),
+                _PartChip(
+                  label: notes == 0
+                      ? 'Notes: optional'
+                      : 'Notes: $notes ${notes == 1 ? 'point' : 'points'}',
+                  done: notes > 0,
+                  semantics: notes == 0
+                      ? 'Notes, optional, none yet'
+                      : 'Notes, $notes ${notes == 1 ? 'point' : 'points'} added',
+                  onTap: () => focus.focus(
+                    'note:${NoteKind.values.first.name}:0',
+                    animate: !reducedMotion(context),
+                  ),
+                ),
+              ],
+            ),
+            if (form.notice != null) ...[
+              const SizedBox(height: 10),
+              SoftBanner(
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    form.notice!,
+                    style: bodyStyle(context, size: 15, height: 1.4),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Text(
+              saved == null
+                  ? 'Your answers are kept on this device as you type.'
+                  : 'Draft saved on this device at ${hourMinute(saved)}.',
+              style: bodyStyle(context, size: 14, color: t.muted, height: 1.3),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PartChip extends StatelessWidget {
+  const _PartChip({
+    this.part,
+    this.label,
+    this.done,
+    this.semantics,
+    required this.onTap,
+  }) : assert(part != null || label != null);
+
+  final PartProgress? part;
+  final String? label;
+  final bool? done;
+  final String? semantics;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final p = part;
+    final isDone = p?.done ?? done ?? false;
+    final text = p == null
+        ? label!
+        : p.done
+        ? '${p.label}: done'
+        : '${p.label}: ${p.left} left';
+    final spoken =
+        semantics ??
+        (p == null
+            ? text
+            : p.done
+            ? '${p.label}, done'
+            : '${p.label}, ${p.left} left. Go to it');
+    return Semantics(
+      button: true,
+      label: spoken,
+      excludeSemantics: true,
+      onTap: onTap,
+      child: Material(
+        color: isDone ? t.flash : t.soft,
+        shape: StadiumBorder(side: BorderSide(color: isDone ? t.ok : t.line)),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          focusColor: t.accent.withValues(alpha: 0.2),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isDone ? Icons.check_circle : Icons.radio_button_unchecked,
+                    size: 18,
+                    color: isDone ? t.ok : t.muted,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      text,
+                      style: bodyStyle(
+                        context,
+                        size: 15,
+                        weight: FontWeight.w500,
+                        height: 1.2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// After Send: what went in, and a way back to editing.
+class SentCard extends ConsumerStatefulWidget {
+  const SentCard({super.key});
+
+  @override
+  ConsumerState<SentCard> createState() => _SentCardState();
+}
+
+class _SentCardState extends ConsumerState<SentCard> {
+  final _focus = FocusNode(debugLabel: 'sent-heading');
+  final _key = GlobalKey();
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    ref.listen(formControllerProvider.select((f) => f.phase), (prev, next) {
+      if (next == SendPhase.sent && prev != SendPhase.sent) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final c = _key.currentContext;
+          if (c == null) return;
+          unawaited(
+            Scrollable.ensureVisible(
+              c,
+              duration: reducedMotion(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 250),
+            ),
+          );
+          _focus.requestFocus();
+        });
+      }
+    });
+    final form = ref.watch(formControllerProvider);
+    final catalog = ref.watch(catalogProvider).value;
+    final r = form.report;
+    final a = r == null || catalog == null
+        ? null
+        : catalog.assignmentById(form.assignmentId);
+    if (form.phase != SendPhase.sent || r == null || a == null) {
+      return const SizedBox.shrink();
+    }
+    final sent = form.sentAt;
+    var met = 0, partly = 0, missed = 0;
+    for (final k in a.kpis) {
+      switch (r.kpis[k.id]?.status) {
+        case KpiStatus.met:
+          met++;
+        case KpiStatus.partly:
+          partly++;
+        case KpiStatus.missed:
+          missed++;
+        case null:
+      }
+    }
+    final notes = NoteKind.values.fold<int>(
+      0,
+      (n, k) => n + r.notesOf(k).length,
+    );
+    final who = r.reporter ?? const Reporter();
+    final lines = <String>[
+      '${who.name.trim()}, ${who.country.trim()}, ${who.role.trim()}',
+      for (final m in a.metrics)
+        '${m.label}: ${thousands(r.totalOf(m.id))} in total',
+      if (a.kpis.isNotEmpty)
+        'Targets: $met met, $partly partly, $missed missed',
+      '$notes ${notes == 1 ? 'note' : 'notes'}',
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Container(
+        key: _key,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: t.flash,
+          border: Border.all(color: t.ok, width: 1.5),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Semantics(
+          liveRegion: true,
+          container: true,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  ExcludeSemantics(
+                    child: Icon(Icons.check_circle, color: t.ok, size: 26),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Focus(
+                      focusNode: _focus,
+                      child: Semantics(
+                        header: true,
+                        child: Text(
+                          sent == null
+                              ? 'Report sent'
+                              : 'Report sent, ${shortDate(sent)} at ${hourMinute(sent)}',
+                          style: bodyStyle(
+                            context,
+                            size: 20,
+                            weight: FontWeight.w700,
+                            height: 1.25,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'This is what went in:',
+                style: bodyStyle(
+                  context,
+                  size: 15,
+                  color: t.muted,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 4),
+              for (final l in lines)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    l,
+                    style: bodyStyle(context, size: 16, height: 1.4),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              Text(
+                'To change it later, open this page again and send again. The new report replaces this one.',
+                style: bodyStyle(
+                  context,
+                  size: 15,
+                  color: t.muted,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: GhostButton(
+                  label: 'Edit again',
+                  onPressed: () {
+                    ref.read(formControllerProvider.notifier).editAgain();
+                    ref.read(fieldFocusProvider).focus('name');
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -955,23 +1504,35 @@ class _SubmitRowState extends ConsumerState<SubmitRow> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final form = ref.watch(formControllerProvider);
+    final form = ref.watch(
+      formControllerProvider.select(
+        (f) => (phase: f.phase, problems: f.problems, message: f.message),
+      ),
+    );
+    // A failed Send moves focus to the first thing that is missing and the page
+    // follows; the list below stays for screen readers and for an overview.
     ref.listen(formControllerProvider.select((f) => f.problems), (prev, next) {
-      if (next.isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (next.isEmpty) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final f = ref.read(formControllerProvider);
+        final catalog = ref.read(catalogProvider).value;
+        final r = f.report;
+        final a = r == null || catalog == null
+            ? null
+            : catalog.assignmentById(f.assignmentId);
+        final gaps = r == null || a == null
+            ? const <FormGap>[]
+            : formGaps(r, a);
+        final moved =
+            gaps.isNotEmpty &&
+            ref
+                .read(fieldFocusProvider)
+                .focus(gaps.first.fieldId, animate: !reducedMotion(context));
+        if (!moved) {
           final c = _errorKey.currentContext;
-          if (c != null) {
-            unawaited(
-              Scrollable.ensureVisible(
-                c,
-                duration: reducedMotion(context)
-                    ? Duration.zero
-                    : const Duration(milliseconds: 250),
-              ),
-            );
-          }
-        });
-      }
+          if (c != null) unawaited(Scrollable.ensureVisible(c));
+        }
+      });
     });
     final sending = form.phase == SendPhase.sending;
     return Column(
@@ -1040,14 +1601,23 @@ class _SubmitRowState extends ConsumerState<SubmitRow> {
                       ref.read(formControllerProvider.notifier).send(),
                     ),
             ),
-            Semantics(liveRegion: true, child: _status(context, form)),
+            Semantics(
+              liveRegion: form.phase != SendPhase.sent,
+              child: _status(context, (
+                phase: form.phase,
+                message: form.message,
+              )),
+            ),
           ],
         ),
       ],
     );
   }
 
-  Widget _status(BuildContext context, FormModel form) {
+  Widget _status(
+    BuildContext context,
+    ({SendPhase phase, String? message}) form,
+  ) {
     final t = context.tokens;
     final base = bodyStyle(context, size: 16, color: t.muted, height: 1.4);
     return switch (form.phase) {
@@ -1061,9 +1631,7 @@ class _SubmitRowState extends ConsumerState<SubmitRow> {
               text: 'Sent.',
               style: base.copyWith(color: t.ok, fontWeight: FontWeight.w700),
             ),
-            const TextSpan(
-              text: ' Choose the same name and period to change it later.',
-            ),
+            const TextSpan(text: ' The summary is at the top of the page.'),
           ],
         ),
       ),

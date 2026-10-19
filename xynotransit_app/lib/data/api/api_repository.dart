@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import '../../domain/admin.dart';
 import '../../domain/summary.dart';
@@ -8,6 +9,7 @@ import '../../domain/deck.dart';
 import '../../domain/deck_text.dart';
 import '../../domain/period.dart';
 import '../../domain/report.dart';
+import '../../domain/text_rules.dart';
 import '../repository.dart';
 import 'api_client.dart';
 import 'api_models.dart';
@@ -32,14 +34,46 @@ class ApiRepository implements Repository {
   final Duration debounce;
   final _live = <String, LiveChanges>{};
 
+  Future<Object?> _catalogData(bool includeInactive) => _api.get(
+    '/catalog',
+    query: includeInactive ? {'include_inactive': 'true'} : null,
+  );
+
   @override
   Future<Catalog> loadCatalog({bool includeInactive = false}) async =>
-      parseCatalog(
-        await _api.get(
-          '/catalog',
-          query: includeInactive ? {'include_inactive': 'true'} : null,
-        ),
-      );
+      parseCatalog(await _catalogData(includeInactive));
+
+  /// A read whose last good answer is kept on this device. When the network is
+  /// down the kept answer is used, so the app can still open and the form can
+  /// still be filled in (sending waits in the queue). [fromCache] says which.
+  Future<T> _cachedRead<T>(
+    String key,
+    Future<Object?> Function() fetch,
+    T Function(Object?) parse, {
+    void Function(bool fromCache)? onSource,
+  }) async {
+    try {
+      final data = await fetch();
+      final value = parse(data);
+      try {
+        await _api.tokens.cache(key, jsonEncode(data));
+      } on Object {
+        // A full or blocked store only costs the offline start.
+      }
+      onSource?.call(false);
+      return value;
+    } on NetworkException {
+      final raw = _api.tokens.cached(key);
+      if (raw == null) rethrow;
+      try {
+        final value = parse(jsonDecode(raw));
+        onSource?.call(true);
+        return value;
+      } on Object {
+        throw const NetworkException();
+      }
+    }
+  }
 
   final _catalogChanged = StreamController<void>.broadcast();
 
@@ -73,12 +107,34 @@ class ApiRepository implements Repository {
       busy = false;
     }
 
+    Timer? refresh;
     out = StreamController<Catalog>(
       onListen: () async {
         sub = _catalogChanged.stream.listen((_) => unawaited(refetch()));
         try {
-          final first = await loadCatalog(includeInactive: includeInactive);
+          var stale = false;
+          final first = await _cachedRead(
+            includeInactive ? 'catalog/all' : 'catalog',
+            () => _catalogData(includeInactive),
+            parseCatalog,
+            onSource: (fromCache) => stale = fromCache,
+          );
           if (!disposed) out.add(first);
+          // The first catalog came from this device: keep asking until the
+          // server answers, then show the live one.
+          if (stale && !disposed) {
+            refresh = Timer.periodic(pollInterval, (t) async {
+              try {
+                final live = await loadCatalog(
+                  includeInactive: includeInactive,
+                );
+                t.cancel();
+                if (!disposed) out.add(live);
+              } on Object {
+                // Still offline: try again at the next tick.
+              }
+            });
+          }
         } on Object catch (e) {
           if (disposed) return;
           out.addError(e);
@@ -87,6 +143,7 @@ class ApiRepository implements Repository {
       },
       onCancel: () {
         disposed = true;
+        refresh?.cancel();
         return sub?.cancel();
       },
     );
@@ -100,21 +157,25 @@ class ApiRepository implements Repository {
   }
 
   @override
-  Future<Period> ensurePeriod(DateTime startMonth) async => parsePeriod(
-    await _api.post(
-      '/periods/ensure',
-      body: {
-        'start_month': Period.dateOnly(
-          DateTime(startMonth.year, startMonth.month),
-        ),
-      },
-    ),
-  );
+  Future<Period> ensurePeriod(DateTime startMonth) {
+    final first = DateTime(startMonth.year, startMonth.month);
+    return _cachedRead(
+      'period/${Period.dateOnly(first)}',
+      () => _api.post(
+        '/periods/ensure',
+        // Creating the period twice is the same as once.
+        idempotent: true,
+        body: {'start_month': Period.dateOnly(first)},
+      ),
+      parsePeriod,
+    );
+  }
 
   @override
   Future<void> setMeetingDate(String periodId, DateTime? date) async {
     await _api.patch(
       '/periods/$periodId',
+      idempotent: true,
       body: {'meeting_date': date == null ? null : Period.dateOnly(date)},
     );
   }
@@ -221,6 +282,8 @@ class ApiRepository implements Repository {
   Future<Report> sendReport(Report report) async => parseReport(
     await _api.put(
       '/periods/${report.periodId}/reports/${report.assignmentId}',
+      // Sending replaces the earlier report, so sending twice equals once.
+      idempotent: true,
       body: reportToJson(report),
     ),
   );
@@ -296,7 +359,7 @@ class ApiRepository implements Repository {
           '/assignments/$id',
           body: {
             'team_id': teamId,
-            'role_title': roleTitle.trim(),
+            'role_title': trimText(plainSpaces(roleTitle)),
             'active': active,
           },
         ),
@@ -342,8 +405,11 @@ class ApiRepository implements Repository {
       );
 
   @override
-  Future<DeckTextsState> loadDeckTexts(String periodId) async =>
-      parseDeckTextsState(await _api.get('/periods/$periodId/deck-text'));
+  Future<DeckTextsState> loadDeckTexts(String periodId) => _cachedRead(
+    'deck-text/$periodId',
+    () => _api.get('/periods/$periodId/deck-text'),
+    parseDeckTextsState,
+  );
 
   @override
   Future<DeckTextsState> saveDeckTexts(
@@ -352,6 +418,7 @@ class ApiRepository implements Repository {
   ) async => parseDeckTextsState(
     await _api.put(
       '/periods/$periodId/deck-text',
+      idempotent: true,
       body: {'settings': texts.toJson()},
     ),
   );

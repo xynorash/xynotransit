@@ -10,8 +10,13 @@ class PptxSlide {
     required this.png,
     required this.altText,
     required this.notes,
+    this.title = '',
   });
   final Uint8List png;
+
+  /// Slide title for the outline view and screen readers. It sits behind the
+  /// picture, so it is never seen on the slide.
+  final String title;
   final String altText;
   final String notes;
 }
@@ -76,14 +81,28 @@ String _theme(String name) {
       '</a:fmtScheme></a:themeElements></a:theme>';
 }
 
+String _titleXml(String title) => title.isEmpty
+    ? ''
+    : '<p:sp><p:nvSpPr><p:cNvPr id="3" name="Title"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+          '<p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>'
+          '<p:spPr><a:xfrm><a:off x="457200" y="228600"/><a:ext cx="11277600" cy="685800"/></a:xfrm></p:spPr>'
+          '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>${_esc(title)}</a:t></a:r></a:p></p:txBody></p:sp>';
+
 String _slideXml(int n, PptxSlide s) =>
     '$_xmlHead<p:sld xmlns:a="$_nsA" xmlns:r="$_nsR" xmlns:p="$_nsP"><p:cSld><p:spTree>$_grp'
+    '${_titleXml(s.title)}'
     '<p:pic><p:nvPicPr><p:cNvPr id="2" name="Slide $n" descr="${_esc(s.altText)}"/>'
     '<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
     '<p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>'
     '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="$slideCx" cy="$slideCy"/></a:xfrm>'
     '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
     '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>';
+
+/// One paragraph per line of [text].
+String _paragraphs(String text) => [
+  for (final line in text.split('\n'))
+    '<a:p><a:r><a:rPr lang="en-US"/><a:t>${_esc(line)}</a:t></a:r></a:p>',
+].join();
 
 String _notesXml(String text) =>
     '$_xmlHead<p:notes xmlns:a="$_nsA" xmlns:r="$_nsR" xmlns:p="$_nsP"><p:cSld><p:spTree>$_grp'
@@ -92,7 +111,7 @@ String _notesXml(String text) =>
     '<p:spPr/></p:sp>'
     '<p:sp><p:nvSpPr><p:cNvPr id="3" name="Notes Placeholder 2"/>'
     '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>'
-    '<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>${_esc(text)}</a:t></a:r></a:p></p:txBody></p:sp>'
+    '<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>${_paragraphs(text)}</p:txBody></p:sp>'
     '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>';
 
 const _notesMaster =

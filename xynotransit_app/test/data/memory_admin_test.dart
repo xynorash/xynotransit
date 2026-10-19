@@ -85,8 +85,14 @@ void main() {
       expect(t.name, 'Port Louis');
       expect(t.code, 'port-louis');
       expect(t.sort, 5);
-      final again = await repo.saveTeam(name: 'Port louis');
+      // Same slug, different name: the code gets a number.
+      final again = await repo.saveTeam(name: 'Port-Louis');
       expect(again.code, 'port-louis-2');
+      // Same name ignoring case is refused, like the server does.
+      await expectLater(
+        repo.saveTeam(name: 'port louis'),
+        fails('That team name is already used.'),
+      );
       await repo.saveTeam(id: t.id, name: 'Harbour');
       var c = await repo.loadCatalog();
       expect(c.teams.firstWhere((x) => x.id == t.id).name, 'Harbour');
@@ -96,9 +102,18 @@ void main() {
     });
 
     test('name rules and the delete guard', () async {
-      const bad = 'Give the team a name of 1 to 60 characters.';
-      await expectLater(repo.saveTeam(name: '   '), fails(bad));
-      await expectLater(repo.saveTeam(name: 'x' * 61), fails(bad));
+      await expectLater(
+        repo.saveTeam(name: '   '),
+        fails('Enter a team name.'),
+      );
+      await expectLater(
+        repo.saveTeam(name: 'x' * 61),
+        fails('A team name can have at most 60 characters.'),
+      );
+      await expectLater(
+        repo.saveTeam(name: 'a\u200Bb'),
+        fails('Use plain text on one line.'),
+      );
       await expectLater(
         repo.deleteTeam('tana'),
         fails('Move or remove the seats of this team first.'),
@@ -238,7 +253,7 @@ void main() {
         repo.saveAssignment(
           personId: p.id,
           teamId: 'abe',
-          roleTitle: 'planner',
+          roleTitle: ' Planner ',
         ),
         fails('That person already has this role in this team.'),
       );
@@ -257,11 +272,11 @@ void main() {
       );
       await expectLater(
         repo.saveAssignment(personId: p.id, teamId: 'nowhere', roleTitle: 'X'),
-        fails('That team does not exist.'),
+        fails('Choose a team.'),
       );
       await expectLater(
         repo.saveAssignment(personId: p.id, teamId: 'abe', roleTitle: ''),
-        throwsA(isA<RepositoryException>()),
+        fails('Enter a role title.'),
       );
     });
   });
@@ -348,7 +363,7 @@ void main() {
       ]) => repo.saveDefinitions(rova.id, metrics: m, kpis: k);
       await expectLater(
         save([for (var i = 0; i < 9; i++) MetricInput(label: 'C$i')]),
-        fails('A seat can have 8 counts at most.'),
+        fails('A seat can have at most 8 counts.'),
       );
       await expectLater(
         save(const [], [for (var i = 0; i < 11; i++) KpiInput(text: 'T$i')]),
@@ -356,23 +371,23 @@ void main() {
       );
       await expectLater(
         save(const [MetricInput(label: '  ')]),
-        fails('Each count needs a name of 1 to 60 characters.'),
+        fails('Give every count a name.'),
       );
       await expectLater(
         save([MetricInput(label: 'x' * 61)]),
-        fails('Each count needs a name of 1 to 60 characters.'),
+        fails('A count name can have at most 60 characters.'),
       );
       await expectLater(
         save(const [MetricInput(label: 'Sea'), MetricInput(label: ' sea ')]),
-        fails('Two counts of this seat have the same name.'),
+        fails('Two counts have the same name. Give each count its own name.'),
       );
       await expectLater(
         save(const [], [KpiInput(text: 'x' * 201)]),
-        fails('Each target needs a text of 1 to 200 characters.'),
+        fails('A target can have at most 200 characters.'),
       );
       await expectLater(
         save(const [MetricInput(id: 'not-mine', label: 'A')]),
-        fails('Some of the counts or targets do not belong to this seat.'),
+        fails('One of the counts or targets does not belong to this seat.'),
       );
       // Nothing was changed by the refused calls.
       expect((await seat('rova')).metrics, hasLength(2));
@@ -400,51 +415,51 @@ void main() {
       period = await repo.ensurePeriod(MemoryRepository.demoStart);
     });
 
-    test(
-      'values of a retired count are ignored, new counts are required',
-      () async {
-        final rova = (await repo.loadCatalog()).assignmentByCode('rova')!;
-        final old = (await repo.getReport(period.id, rova.id))!;
-        final saved = await repo.saveDefinitions(
-          rova.id,
-          metrics: [
-            MetricInput(id: rova.metrics[1].id, label: rova.metrics[1].label),
-            const MetricInput(label: 'Courier'),
-          ],
-          kpis: [for (final k in rova.kpis) KpiInput(id: k.id, text: k.text)],
-        );
-        // The old report still has its numbers, including the retired count.
-        final stored = (await repo.getReport(period.id, rova.id))!;
-        expect(stored.values.keys, containsAll(old.values.keys));
-        // Sending it again needs the new count.
-        await expectLater(
-          repo.sendReport(stored),
-          fails(
-            'Enter a number for "Courier" in Feb.'.replaceAll(
-              'Feb',
-              period.months[0].long,
-            ),
-          ),
-        );
-        final newId = saved.metrics[1].id;
-        final fixed = stored.copyWith(
-          values: {
-            ...stored.values,
-            newId: [1, 2, 3],
-          },
-        );
-        final sent = await repo.sendReport(fixed);
-        expect(sent.isSubmitted, isTrue);
-        // The deck only holds the current counts.
-        final cat = await repo.loadCatalog();
-        final run = await repo.generateDeck(period, cat);
-        final item = run.items.firstWhere((i) => i.reportId == sent.id);
-        expect(item.snapshot.metrics.map((m) => m.label), [
-          'Sea imports (IM5)',
-          'Courier',
-        ]);
-      },
-    );
+    test('a retired count is refused until the report is reconciled, new counts are required', () async {
+      final rova = (await repo.loadCatalog()).assignmentByCode('rova')!;
+      final old = (await repo.getReport(period.id, rova.id))!;
+      final saved = await repo.saveDefinitions(
+        rova.id,
+        metrics: [
+          MetricInput(id: rova.metrics[1].id, label: rova.metrics[1].label),
+          const MetricInput(label: 'Courier'),
+        ],
+        kpis: [for (final k in rova.kpis) KpiInput(id: k.id, text: k.text)],
+      );
+      // The old report still has its numbers, including the retired count.
+      final stored = (await repo.getReport(period.id, rova.id))!;
+      expect(stored.values.keys, containsAll(old.values.keys));
+      // The server refuses numbers of a count that is gone (same words here),
+      // which is why drafts are reconciled before they go back on the form.
+      await expectLater(
+        repo.sendReport(stored),
+        fails('One of the numbers does not belong to this report.'),
+      );
+      // Reconciled, it only lacks the new count.
+      await expectLater(
+        repo.sendReport(stored.reconcile(saved)),
+        fails('Enter a number for "Courier" in ${period.months[0].long}.'),
+      );
+      final newId = saved.metrics[1].id;
+      final fixed = stored
+          .reconcile(saved)
+          .copyWith(
+            values: {
+              ...stored.reconcile(saved).values,
+              newId: [1, 2, 3],
+            },
+          );
+      final sent = await repo.sendReport(fixed);
+      expect(sent.isSubmitted, isTrue);
+      // The deck only holds the current counts.
+      final cat = await repo.loadCatalog();
+      final run = await repo.generateDeck(period, cat);
+      final item = run.items.firstWhere((i) => i.reportId == sent.id);
+      expect(item.snapshot.metrics.map((m) => m.label), [
+        'Sea imports (IM5)',
+        'Courier',
+      ]);
+    });
 
     test('a retired target is not asked for any more', () async {
       final rova = (await repo.loadCatalog()).assignmentByCode('rova')!;
@@ -534,7 +549,11 @@ void main() {
         ]);
         expect(s.trend.first.expected, 13);
         expect(s.trend.first.submitted, 0);
-        expect(s.people.any((p) => p.assignmentId == 'shalini'), isFalse);
+        // Not expected any more, but she sent a report: she stays in the list
+        // (the API lists a switched off seat that has a report).
+        final she = s.people.singleWhere((p) => p.assignmentId == 'shalini');
+        expect(she.submitted, isTrue);
+        expect(s.submitted, 14, reason: 'old reports still count');
       },
     );
 

@@ -63,11 +63,15 @@ class ApiAuthService implements AuthService, LinkSignIn {
     }
   }
 
-  /// A call with our token came back 401: forget the sign-in.
+  /// A call with our token came back 401: forget the sign-in. Once only:
+  /// several calls in flight may all come back 401, and the person is told
+  /// a single time.
   void expire() {
     if (_user == null && _tokens.token == null) return;
+    final announce = _user != null;
     unawaited(_tokens.clear());
-    _set(null);
+    _user = null;
+    if (announce) _c.add(null);
   }
 
   @override

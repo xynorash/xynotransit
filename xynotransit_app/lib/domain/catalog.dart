@@ -102,30 +102,64 @@ class Catalog {
     });
   }
 
-  Assignment? assignmentById(String? id) {
+  // Lookups by id are maps built once, so a catalog of hundreds of people
+  // costs one step per question, not a scan of the whole list.
+  late final Map<String, Assignment> _assignmentsById = {
+    for (final a in assignments) a.id: a,
+  };
+  late final Map<String, Assignment> _assignmentsByCode = {
+    for (final a in assignments) a.code: a,
+  };
+  late final Map<String, Team> _teamsById = {for (final t in teams) t.id: t};
+  late final Map<String, Person> _personsById = {
+    for (final p in persons) p.id: p,
+  };
+  late final Map<String, List<Assignment>> _byPerson = _group(
+    (a) => a.personId,
+  );
+  late final Map<String, List<Assignment>> _byTeam = _group((a) => a.teamId);
+
+  Map<String, List<Assignment>> _group(String Function(Assignment) key) {
+    final m = <String, List<Assignment>>{};
     for (final a in assignments) {
-      if (a.id == id) return a;
+      (m[key(a)] ??= []).add(a);
     }
-    return null;
+    return m;
   }
 
-  Assignment? assignmentByCode(String code) {
-    for (final a in assignments) {
-      if (a.code == code) return a;
-    }
-    return null;
-  }
+  Assignment? assignmentById(String? id) => _assignmentsById[id];
 
-  Team teamOf(Assignment a) => teams.firstWhere((t) => t.id == a.teamId);
+  Assignment? assignmentByCode(String code) => _assignmentsByCode[code];
 
+  Team? teamById(String? id) => _teamsById[id];
+
+  Person? personById(String? id) => _personsById[id];
+
+  Team teamOf(Assignment a) =>
+      _teamsById[a.teamId] ??
+      (throw StateError('No team ${a.teamId} for seat ${a.code}'));
+
+  /// The person of a seat. A seat whose person the catalog does not list (the
+  /// server hides switched off people) reads as an unknown person instead of
+  /// breaking every screen that shows a name.
   Person personOf(Assignment a) =>
-      persons.firstWhere((p) => p.id == a.personId);
+      _personsById[a.personId] ??
+      Person(id: a.personId, fullName: 'Unknown person', active: false);
 
   List<Assignment> assignmentsOfPerson(String personId) =>
-      assignments.where((a) => a.personId == personId).toList();
+      List.of(_byPerson[personId] ?? const []);
 
   List<Assignment> assignmentsOfTeam(Team t) =>
-      assignments.where((a) => a.teamId == t.id).toList();
+      List.of(_byTeam[t.id] ?? const []);
+
+  /// A seat is expected to report when the seat and its person are both
+  /// switched on (the server counts the same way). A person the catalog does
+  /// not list is a switched off one: the server hides those.
+  bool isExpected(Assignment a) =>
+      a.active && (_personsById[a.personId]?.active ?? false);
+
+  /// How many seats are expected to report in a new period.
+  int get expectedCount => assignments.where(isExpected).length;
 
   /// "Name · Role".
   String labelOf(Assignment a) => '${personOf(a).fullName} · ${a.roleTitle}';

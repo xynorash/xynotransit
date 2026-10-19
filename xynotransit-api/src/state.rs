@@ -6,7 +6,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::{config::Config, mail::Mailer};
@@ -26,6 +26,8 @@ pub struct AppState {
     pub events: broadcast::Sender<ChangeEvent>,
     pub tickets: Arc<Mutex<HashMap<String, (Uuid, Instant)>>>,
     pub ticket_ttl: Duration,
+    /// Turns true when the server is shutting down; event streams end when they see it.
+    pub shutdown: watch::Sender<bool>,
 }
 
 impl AppState {
@@ -38,7 +40,12 @@ impl AppState {
             events,
             tickets: Arc::new(Mutex::new(HashMap::new())),
             ticket_ttl: Duration::from_secs(60),
+            shutdown: watch::channel(false).0,
         }
+    }
+
+    pub fn begin_shutdown(&self) {
+        self.shutdown.send_replace(true);
     }
 
     /// Hand out a single-use ticket bound to one person.

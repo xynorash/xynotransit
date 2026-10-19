@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod model;
+
 use std::time::Duration;
 
 use axum::{
@@ -67,10 +69,14 @@ impl TestApp {
         let mut conn = PgConnection::connect(&admin)
             .await
             .expect("test Postgres must be running (see xynotransit-db)");
-        sqlx::query(&format!("create database {db_name}"))
-            .execute(&mut conn)
-            .await
-            .unwrap();
+        // TEST_TEMPLATE_DB: build the schema from an upgraded copy of a real database instead of
+        // the initdb files (scripts/test-migrations.sh uses it); its rows are removed below.
+        let template = std::env::var("TEST_TEMPLATE_DB").ok();
+        let create = match &template {
+            Some(t) => format!("create database {db_name} template \"{t}\""),
+            None => format!("create database {db_name}"),
+        };
+        sqlx::query(&create).execute(&mut conn).await.unwrap();
         let _ = conn.close().await;
 
         let url = db_url(&admin, &db_name);
@@ -80,15 +86,39 @@ impl TestApp {
             .await
             .unwrap();
         let initdb = concat!(env!("CARGO_MANIFEST_DIR"), "/../xynotransit-db/initdb/");
-        for file in [
-            "01-schema.sql",
-            "02-api.sql",
-            "03-dynamic.sql",
-            "04-deck-text.sql",
-            "05-reporter.sql",
-        ] {
-            let sql = std::fs::read_to_string(format!("{initdb}{file}")).unwrap();
-            sqlx::raw_sql(&sql).execute(&pool).await.unwrap();
+        if template.is_some() {
+            let tables: Vec<String> = sqlx::query_scalar(
+                "select tablename::text from pg_tables
+                 where schemaname = 'public' and tablename <> 'schema_migration'",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("set local xt.allow_deck_delete = 'on'")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query(&format!(
+                "truncate table {} restart identity cascade",
+                tables.join(", ")
+            ))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        } else {
+            // Every file of initdb in name order, exactly like a fresh install.
+            let mut files: Vec<_> = std::fs::read_dir(initdb)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.extension().is_some_and(|x| x == "sql"))
+                .collect();
+            files.sort();
+            for file in files {
+                let sql = std::fs::read_to_string(&file).unwrap();
+                sqlx::raw_sql(&sql).execute(&pool).await.unwrap();
+            }
         }
         if with_fixture {
             sqlx::raw_sql(include_str!("fixture.sql"))
@@ -137,6 +167,42 @@ impl TestApp {
         let status = res.status();
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         (status, bytes.to_vec())
+    }
+
+    /// Any request with any content type and any bytes; returns status, headers and body.
+    pub async fn send(
+        &self,
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+        content_type: Option<&str>,
+        body: Vec<u8>,
+    ) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+        let mut b = Request::builder().method(method).uri(uri);
+        if let Some(t) = token {
+            b = b.header("authorization", format!("Bearer {t}"));
+        }
+        if let Some(c) = content_type {
+            b = b.header("content-type", c);
+        }
+        let res = self
+            .router
+            .clone()
+            .oneshot(b.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        let (status, headers) = (res.status(), res.headers().clone());
+        let bytes = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+        (status, headers, bytes)
+    }
+
+    /// Back to the fixture catalog: the same three people, two teams, no reports.
+    pub async fn reset_fixture(&self) {
+        self.wipe().await;
+        sqlx::raw_sql(include_str!("fixture.sql"))
+            .execute(&self.state.pool)
+            .await
+            .unwrap();
     }
 
     pub async fn call(
@@ -231,6 +297,36 @@ impl TestApp {
             .fetch_one(&self.state.pool)
             .await
             .unwrap()
+    }
+
+    /// Remove every row (also decks), keeping the schema, so one database can serve many cases.
+    pub async fn wipe(&self) {
+        let mut tx = self.state.pool.begin().await.unwrap();
+        sqlx::query("set local xt.allow_deck_delete = 'on'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query(
+            "truncate table team, person, assignment, metric_def, kpi_def, period, report,
+             report_metric_value, report_kpi_result, report_note, deck_run, deck_run_item,
+             deck_text, login_token, login_attempt restart identity cascade",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    /// A token for a person without the magic link round trip (the link flow is rate limited).
+    pub fn token_for(&self, person_id: &str, controller: bool) -> String {
+        let role = if controller {
+            xynotransit_api::auth::Role::Controller
+        } else {
+            xynotransit_api::auth::Role::Contributor
+        };
+        xynotransit_api::auth::issue_jwt(SECRET, person_id.parse().unwrap(), role)
+            .unwrap()
+            .0
     }
 
     pub async fn sql(&self, q: &str) {

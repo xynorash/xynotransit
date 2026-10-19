@@ -11,6 +11,8 @@ import '../domain/enums.dart';
 import '../domain/period.dart';
 import '../domain/report.dart';
 import '../domain/snapshot.dart';
+import '../domain/text_rules.dart';
+import 'api/api_client.dart' show UnauthorizedException;
 import 'demo_data.dart';
 import 'repository.dart';
 import 'seed_data.dart';
@@ -70,6 +72,10 @@ class MemoryRepository implements Repository {
   /// Counts taken off a seat. Old reports still hold their numbers.
   final _retired = <String, List<MetricDef>>{};
 
+  /// Targets taken off a seat, or whose words changed. Old reports still hold
+  /// their answers.
+  final _retiredKpis = <String, List<KpiDef>>{};
+
   /// Every count key ever used on a seat, so a new key never reuses an old one.
   final _keys = <String, Set<String>>{};
   var _kpiSeq = 1000;
@@ -88,6 +94,35 @@ class MemoryRepository implements Repository {
 
   void _requireOnline() {
     if (offline) throw const NetworkException();
+  }
+
+  /// The acting person as the catalog knows them right now, like the API that
+  /// reads the role from the database on every request: a demoted person is an
+  /// employee at once, and a deactivated or unknown person is signed out.
+  AppUser _me() {
+    final u = _currentUser();
+    final id = u.personId;
+    if (id == null) return u;
+    final p = _catalog.personById(id);
+    if (p == null || !p.active) {
+      throw const UnauthorizedException('Please sign in.');
+    }
+    return AppUser(personId: id, role: p.appRole, label: p.fullName);
+  }
+
+  static const _onlyController = 'Only the controller can do this.';
+
+  /// Closes a period, which the app has no button for (an operator does it
+  /// with SQL). Tests use it to prove what a closed period refuses.
+  void closePeriod(String periodId) {
+    final p = _periods[periodId];
+    if (p == null) return;
+    _periods[periodId] = Period(
+      id: p.id,
+      startMonth: p.startMonth,
+      meetingDate: p.meetingDate,
+      status: PeriodStatus.closed,
+    );
   }
 
   Period _periodFor(DateTime start, {DateTime? meeting}) {
@@ -114,16 +149,33 @@ class MemoryRepository implements Repository {
       _catalogLive.watch().map((c) => _viewOf(c, includeInactive));
 
   /// Everyone but a controller, and a controller who did not ask, only sees
-  /// active seats and people (people who still hold a visible seat stay).
+  /// seats that are switched on and belong to people who are switched on, and
+  /// those people. A switched off person is not expected to report and cannot
+  /// sign in, so neither they nor their seats are offered.
   Catalog _viewOf(Catalog c, bool includeInactive) {
-    if (includeInactive && _currentUser().isController) return c;
-    final seats = c.assignments.where((a) => a.active).toList();
-    final used = {for (final a in seats) a.personId};
+    final me = _me();
+    if (includeInactive && me.isController) return c;
+    final on = {
+      for (final p in c.persons)
+        if (p.active) p.id,
+    };
+    final seats = c.assignments
+        .where((a) => a.active && on.contains(a.personId))
+        .toList();
     return Catalog(
       teams: c.teams,
       persons: [
         for (final p in c.persons)
-          if (p.active || used.contains(p.id)) p,
+          if (p.active)
+            // Employees see their own email and nobody else's.
+            me.isController || p.id == me.personId
+                ? p
+                : Person(
+                    id: p.id,
+                    fullName: p.fullName,
+                    appRole: p.appRole,
+                    active: p.active,
+                  ),
       ],
       assignments: seats,
     );
@@ -136,29 +188,52 @@ class MemoryRepository implements Repository {
   @override
   Future<Period> ensurePeriod(DateTime startMonth) async {
     _requireOnline();
-    return _periodFor(startMonth);
+    _me();
+    final d = AdminRules.checkDate(startMonth);
+    if (!d.ok) throw RepositoryException(d.problem!);
+    return _periodFor(DateTime(startMonth.year, startMonth.month));
   }
 
   @override
   Future<void> setMeetingDate(String periodId, DateTime? date) async {
-    _requireOnline();
-    if (!_currentUser().isController) {
-      throw const RepositoryException('Only the controller can do this.');
+    _requireController();
+    var day = date;
+    if (day != null) {
+      final d = AdminRules.checkDate(day);
+      if (!d.ok) throw RepositoryException(d.problem!);
+      day = d.value;
     }
     final p = _periods[periodId];
-    if (p == null) return;
+    if (p == null) {
+      throw const RepositoryException('That period does not exist.');
+    }
     _periods[periodId] = Period(
       id: p.id,
       startMonth: p.startMonth,
-      meetingDate: date,
+      meetingDate: day,
       status: p.status,
     );
   }
 
   Period? periodById(String id) => _periods[id];
 
+  /// Live lists are for the controller, like the API's list and event calls.
+  RepositoryException? _streamRefusal(String periodId) {
+    try {
+      _requireController();
+    } on RepositoryException catch (e) {
+      return e;
+    }
+    if (!_periods.containsKey(periodId)) {
+      return const RepositoryException('That period does not exist.');
+    }
+    return null;
+  }
+
   @override
   Stream<List<Report>> watchReports(String periodId) {
+    final refused = _streamRefusal(periodId);
+    if (refused != null) return Stream.error(refused);
     _liveReports.putIfAbsent(
       periodId,
       () => _Live(List.unmodifiable(_reportsOf(periodId))),
@@ -169,6 +244,13 @@ class MemoryRepository implements Repository {
   @override
   Future<Report?> getReport(String periodId, String assignmentId) async {
     _requireOnline();
+    final me = _me();
+    if (!me.isController) {
+      final owner = _catalog.assignmentById(assignmentId)?.personId;
+      if (owner == null || owner != me.personId) {
+        throw const RepositoryException('You can only see your own report.');
+      }
+    }
     for (final r in _reportsOf(periodId)) {
       if (r.assignmentId == assignmentId) return r;
     }
@@ -178,34 +260,50 @@ class MemoryRepository implements Repository {
   @override
   Future<Report> sendReport(Report report) async {
     _requireOnline();
-    final a = _catalog.assignmentById(report.assignmentId);
-    final period = _periods.values
-        .where((p) => p.id == report.periodId)
-        .firstOrNull;
-    if (a == null || period == null) {
-      throw const RepositoryException('This person or period does not exist.');
+    final me = _me();
+    final period = _periods[report.periodId];
+    if (period == null) {
+      throw const RepositoryException('That period does not exist.');
     }
-    final user = _currentUser();
-    if (!user.isController && user.personId != a.personId) {
+    final a = _catalog.assignmentById(report.assignmentId);
+    if (a == null || !a.active) {
+      throw const RepositoryException('That seat does not exist.');
+    }
+    if (!me.isController && me.personId != a.personId) {
       throw const RepositoryException('You can only send your own report.');
+    }
+    if (period.status == PeriodStatus.closed && !me.isController) {
+      throw const RepositoryException('This period is closed.');
     }
     final problems = report.validate(a, period);
     if (problems.isNotEmpty) throw RepositoryException(problems.first);
-    for (final k in NoteKind.values) {
-      final list = report.notesOf(k);
-      if (list.length > NoteRules.maxCount ||
-          list.any((s) => NoteRules.clean(s) == null)) {
-        throw const RepositoryException(
-          'Notes must be 1 to 70 characters, three at most per box.',
-        );
-      }
-    }
+
     final list = [..._reportsOf(period.id)];
     final i = list.indexWhere((r) => r.assignmentId == report.assignmentId);
-    final saved = report.copyWith(
+    // Stored the way the database stores it: only the seat's counts, three
+    // slots each, trimmed words, empty comments as none.
+    final saved = Report(
       id: i >= 0 ? list[i].id : 'r-${++_seq}',
+      periodId: period.id,
+      assignmentId: a.id,
       status: ReportStatus.submitted,
       submittedAt: _clock(),
+      values: {
+        for (final m in a.metrics)
+          m.id: [for (var s = 0; s < 3; s++) report.values[m.id]?[s]],
+      },
+      kpis: {
+        for (final k in a.kpis)
+          if (report.kpis[k.id] != null)
+            k.id: KpiResult(
+              report.kpis[k.id]!.status,
+              comment: _commentOf(report.kpis[k.id]!.comment),
+            ),
+      },
+      notes: {
+        for (final k in NoteKind.values)
+          k: [for (final t in report.notesOf(k)) trimText(t)],
+      },
       reporter: Reporter.fromJson(report.reporter?.toJson()),
     );
     if (i >= 0) {
@@ -218,45 +316,98 @@ class MemoryRepository implements Repository {
     return saved;
   }
 
+  static String? _commentOf(String? c) {
+    final t = trimText(c ?? '');
+    return t.isEmpty ? null : t;
+  }
+
   @override
   Stream<DeckRun?> watchDeck(String periodId) {
+    final refused = _streamRefusal(periodId);
+    if (refused != null) return Stream.error(refused);
     _liveDecks.putIfAbsent(periodId, () => _Live(null));
     return _liveDecks[periodId]!.watch();
   }
 
+  /// The seat with the counts and targets [r] was answered against: live and
+  /// retired ones that the report has numbers or answers for, in series and
+  /// sort order. A slide shows what the report says, whatever the manager
+  /// changed since. If a retired count and a renumbered live one share a series,
+  /// the series are renumbered in order so no two bars share a colour.
+  Assignment _answeredDefinitions(Assignment a, Report r) {
+    final metrics =
+        <MetricDef>[
+          for (final m in [...a.metrics, ...?_retired[a.id]])
+            if (r.values.containsKey(m.id)) m,
+        ]..sort((x, y) {
+          final c = x.series.compareTo(y.series);
+          return c != 0 ? c : x.id.compareTo(y.id);
+        });
+    final distinct = {for (final m in metrics) m.series};
+    final numbered = distinct.length == metrics.length
+        ? metrics
+        : [
+            for (final (i, m) in metrics.indexed)
+              MetricDef(id: m.id, key: m.key, label: m.label, series: i),
+          ];
+    final kpis =
+        <KpiDef>[
+          for (final k in [...a.kpis, ...?_retiredKpis[a.id]])
+            if (r.kpis.containsKey(k.id)) k,
+        ]..sort((x, y) {
+          final c = x.sort.compareTo(y.sort);
+          return c != 0 ? c : x.id.compareTo(y.id);
+        });
+    return Assignment(
+      id: a.id,
+      code: a.code,
+      personId: a.personId,
+      teamId: a.teamId,
+      roleTitle: a.roleTitle,
+      sort: a.sort,
+      metrics: numbered,
+      kpis: kpis,
+      active: a.active,
+    );
+  }
+
+  /// Builds the deck from what this repository holds, like the server does:
+  /// the catalog and the period passed in are not trusted.
   @override
   Future<DeckRun> generateDeck(Period period, Catalog catalog) async {
-    _requireOnline();
-    if (!_currentUser().isController) {
-      throw const RepositoryException('Only the controller can do this.');
+    _requireController();
+    final known = _periods[period.id];
+    if (known == null) {
+      throw const RepositoryException('That period does not exist.');
     }
+    // A seat is expected when it and its person are switched on, like the server.
+    final seats = _catalog.assignments.where(_catalog.isExpected).toList();
+    final order = {for (var i = 0; i < seats.length; i++) seats[i].id: i};
     // Works with any number of submitted reports, none included.
-    final submitted = _reportsOf(period.id)
-        .where((r) => r.isSubmitted)
-        .toList();
-    final order = {
-      for (var i = 0; i < catalog.assignments.length; i++)
-        catalog.assignments[i].id: i,
-    };
-    submitted.sort(
-      (a, b) =>
-          (order[a.assignmentId] ?? 0).compareTo(order[b.assignmentId] ?? 0),
-    );
+    final submitted =
+        _reportsOf(known.id)
+            .where((r) => r.isSubmitted && order.containsKey(r.assignmentId))
+            .toList()
+          ..sort(
+            (a, b) => order[a.assignmentId]!.compareTo(order[b.assignmentId]!),
+          );
     final items = <DeckItem>[];
     for (var i = 0; i < submitted.length; i++) {
       final r = submitted[i];
-      final a = catalog.assignmentById(r.assignmentId)!;
       items.add(
         DeckItem(
           reportId: r.id!,
-          sort: i,
+          sort: i + 1,
           // Round trip through JSON so the deck holds exactly what the database would hold.
           snapshot: ReportSnapshot.fromJson(
             ReportSnapshot.build(
               report: r,
-              assignment: a,
-              catalog: catalog,
-              period: period,
+              assignment: _answeredDefinitions(
+                _catalog.assignmentById(r.assignmentId)!,
+                r,
+              ),
+              catalog: _catalog,
+              period: known,
             ).toJson(),
           ),
         ),
@@ -264,14 +415,14 @@ class MemoryRepository implements Repository {
     }
     final run = DeckRun(
       id: 'deck-${++_seq}',
-      periodId: period.id,
+      periodId: known.id,
       generatedAt: _clock(),
-      expectedCount: catalog.assignments.length,
+      expectedCount: seats.length,
       includedCount: submitted.length,
       items: items,
-      texts: _effectiveTexts(period.id).texts,
+      texts: _effectiveTexts(known.id).texts,
     );
-    _liveDecks.putIfAbsent(period.id, () => _Live(null)).value = run;
+    _liveDecks.putIfAbsent(known.id, () => _Live(null)).value = run;
     return run;
   }
 
@@ -279,8 +430,8 @@ class MemoryRepository implements Repository {
 
   void _requireController() {
     _requireOnline();
-    if (!_currentUser().isController) {
-      throw const RepositoryException('Only the controller can do this.');
+    if (!_me().isController) {
+      throw const RepositoryException(_onlyController);
     }
   }
 
@@ -297,35 +448,28 @@ class MemoryRepository implements Repository {
     _catalogLive.value = _catalog;
   }
 
-  static String _slug(String s) {
-    final t = s
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
-        .replaceAll(RegExp(r'^-+|-+$'), '');
-    return t.isEmpty ? 'x' : t;
+  static T _ok<T>(Cleaned<T> c) {
+    if (!c.ok) throw RepositoryException(c.problem!);
+    return c.value as T;
   }
 
-  static String _unique(String base, bool Function(String) taken) {
-    var c = base;
-    for (var n = 2; taken(c); n++) {
-      c = '$base-$n';
-    }
-    return c;
-  }
+  static const _noTeam = RepositoryException('That team does not exist.');
+
+  bool _teamNameTaken(String name, String? except) => _catalog.teams.any(
+    (t) => t.id != except && t.name.toLowerCase() == name.toLowerCase(),
+  );
 
   @override
   Future<Team> saveTeam({String? id, required String name}) async {
     _requireController();
-    final n = name.trim();
-    if (n.isEmpty || n.length > 60) {
-      throw const RepositoryException(
-        'Give the team a name of 1 to 60 characters.',
-      );
-    }
+    final n = _ok(AdminRules.cleanTeamName(name));
     final teams = [..._catalog.teams];
+    final i = id == null ? -1 : teams.indexWhere((t) => t.id == id);
+    if (_teamNameTaken(n, id)) {
+      throw const RepositoryException(AdminRules.teamNameTaken);
+    }
     if (id != null) {
-      final i = teams.indexWhere((t) => t.id == id);
-      if (i < 0) throw const RepositoryException('That team does not exist.');
+      if (i < 0) throw _noTeam;
       final t = teams[i];
       teams[i] = Team(id: t.id, code: t.code, name: n, sort: t.sort);
       _setCatalog(teams: teams);
@@ -333,7 +477,7 @@ class MemoryRepository implements Repository {
     }
     final t = Team(
       id: 'team-${++_seq}',
-      code: _unique(_slug(n), (c) => teams.any((x) => x.code == c)),
+      code: uniqueSlug(slugOf(n), (c) => teams.any((x) => x.code == c)),
       name: n,
       sort: teams.fold(0, (m, x) => x.sort > m ? x.sort : m) + 1,
     );
@@ -344,18 +488,14 @@ class MemoryRepository implements Repository {
   @override
   Future<void> deleteTeam(String id) async {
     _requireController();
+    if (!_catalog.teams.any((t) => t.id == id)) throw _noTeam;
     if (_catalog.assignments.any((a) => a.teamId == id)) {
       throw const RepositoryException(
         'Move or remove the seats of this team first.',
       );
     }
-    if (!_catalog.teams.any((t) => t.id == id)) {
-      throw const RepositoryException('That team does not exist.');
-    }
     _setCatalog(teams: _catalog.teams.where((t) => t.id != id).toList());
   }
-
-  static final _emailShape = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
 
   @override
   Future<Person> savePerson({
@@ -366,19 +506,15 @@ class MemoryRepository implements Repository {
     bool active = true,
   }) async {
     _requireController();
-    final name = fullName.trim();
-    if (name.isEmpty || name.length > DefinitionRules.maxName) {
-      throw RepositoryException(
-        'Give the person a name of 1 to ${DefinitionRules.maxName} characters.',
-      );
-    }
-    final mail = email.trim().toLowerCase();
-    if (!_emailShape.hasMatch(mail)) {
-      throw const RepositoryException('Enter a valid email address.');
-    }
+    final name = _ok(AdminRules.cleanPersonName(fullName));
+    final mail = _ok(AdminRules.cleanEmail(email));
     final persons = [..._catalog.persons];
+    final i = id == null ? -1 : persons.indexWhere((p) => p.id == id);
+    if (id != null && i < 0) {
+      throw const RepositoryException('That person does not exist.');
+    }
     if (persons.any((p) => p.id != id && p.email?.toLowerCase() == mail)) {
-      throw const RepositoryException('That email is already used.');
+      throw const RepositoryException(AdminRules.emailTaken);
     }
     final person = Person(
       id: id ?? 'person-${++_seq}',
@@ -387,23 +523,20 @@ class MemoryRepository implements Repository {
       appRole: role,
       active: active,
     );
-    final i = persons.indexWhere((p) => p.id == id);
-    if (id != null && i < 0) {
-      throw const RepositoryException('That person does not exist.');
-    }
+    // Nobody may take the last manager away, by role or by switching them off.
     if (i >= 0) {
+      final cur = persons[i];
+      final was = cur.active && cur.appRole == AppRole.controller;
+      final will = active && role == AppRole.controller;
+      final others = persons.any(
+        (p) => p.id != id && p.active && p.appRole == AppRole.controller,
+      );
+      if (was && !will && !others) {
+        throw const RepositoryException(AdminRules.lastManager);
+      }
       persons[i] = person;
     } else {
       persons.add(person);
-    }
-    final hadManager = _catalog.persons.any(
-      (p) => p.active && p.appRole == AppRole.controller,
-    );
-    final hasManager = persons.any(
-      (p) => p.active && p.appRole == AppRole.controller,
-    );
-    if (hadManager && !hasManager) {
-      throw const RepositoryException('There must be at least one manager.');
     }
     _setCatalog(persons: persons);
     return person;
@@ -418,12 +551,7 @@ class MemoryRepository implements Repository {
     bool active = true,
   }) async {
     _requireController();
-    final role = roleTitle.trim();
-    if (role.isEmpty || role.length > DefinitionRules.maxRoleTitle) {
-      throw RepositoryException(
-        'Give the role a title of 1 to ${DefinitionRules.maxRoleTitle} characters.',
-      );
-    }
+    final role = _ok(AdminRules.cleanRoleTitle(roleTitle));
     final seats = [..._catalog.assignments];
     final i = id == null ? -1 : seats.indexWhere((a) => a.id == id);
     if (id != null && i < 0) {
@@ -432,30 +560,27 @@ class MemoryRepository implements Repository {
     final old = i >= 0 ? seats[i] : null;
     // A seat keeps its person; only the team, the title and the state move.
     final owner = old?.personId ?? personId;
-    if (!_catalog.persons.any((p) => p.id == owner)) {
-      throw const RepositoryException('That person does not exist.');
+    final person = _catalog.personById(owner);
+    if (old == null && person == null) {
+      throw const RepositoryException('Choose a person.');
     }
     if (!_catalog.teams.any((t) => t.id == teamId)) {
-      throw const RepositoryException('That team does not exist.');
+      throw const RepositoryException('Choose a team.');
     }
     final duplicate = seats.any(
       (a) =>
           a.id != id &&
           a.personId == owner &&
           a.teamId == teamId &&
-          a.roleTitle.toLowerCase() == role.toLowerCase(),
+          a.roleTitle == role,
     );
     if (duplicate) {
-      throw const RepositoryException(
-        'That person already has this role in this team.',
-      );
+      throw const RepositoryException(AdminRules.seatTaken);
     }
     final code =
         old?.code ??
-        _unique(
-          _slug(
-            '${_catalog.persons.firstWhere((p) => p.id == owner).fullName}-$role',
-          ),
+        uniqueSlug(
+          slugOf('${person!.fullName} $role'),
           (c) => seats.any((a) => a.code == c),
         );
     final moved = old == null || old.teamId != teamId;
@@ -493,64 +618,32 @@ class MemoryRepository implements Repository {
     required List<KpiInput> kpis,
   }) async {
     _requireController();
+    final problem =
+        AdminRules.checkMetrics(metrics) ?? AdminRules.checkKpis(kpis);
+    if (problem != null) throw RepositoryException(problem);
     final seats = [..._catalog.assignments];
     final i = seats.indexWhere((a) => a.id == assignmentId);
     if (i < 0) throw const RepositoryException('That seat does not exist.');
     final seat = seats[i];
 
-    if (metrics.length > DefinitionRules.maxMetrics) {
-      throw const RepositoryException('A seat can have 8 counts at most.');
-    }
-    if (kpis.length > DefinitionRules.maxKpis) {
-      throw const RepositoryException('A seat can have at most 10 targets.');
-    }
-    final labels = <String>{};
-    for (final m in metrics) {
-      final l = m.label.trim();
-      if (l.isEmpty || l.length > DefinitionRules.maxMetricLabel) {
-        throw const RepositoryException(
-          'Each count needs a name of 1 to 60 characters.',
-        );
-      }
-      if (!labels.add(l.toLowerCase())) {
-        throw const RepositoryException(
-          'Two counts of this seat have the same name.',
-        );
-      }
-    }
-    for (final k in kpis) {
-      final t = k.text.trim();
-      if (t.isEmpty || t.length > DefinitionRules.maxKpiText) {
-        throw const RepositoryException(
-          'Each target needs a text of 1 to 200 characters.',
-        );
-      }
-    }
     final metricById = {for (final m in seat.metrics) m.id: m};
     final kpiById = {for (final k in seat.kpis) k.id: k};
-    const foreign = 'Some of the counts or targets do not belong to this seat.';
-    for (final m in metrics) {
-      if (m.id != null && !metricById.containsKey(m.id)) {
-        throw const RepositoryException(foreign);
-      }
-    }
-    for (final k in kpis) {
-      if (k.id != null && !kpiById.containsKey(k.id)) {
-        throw const RepositoryException(foreign);
-      }
+    if (metrics.any((m) => m.id != null && !metricById.containsKey(m.id)) ||
+        kpis.any((k) => k.id != null && !kpiById.containsKey(k.id))) {
+      throw const RepositoryException(AdminRules.notThisSeat);
     }
 
     final keys = _keys.putIfAbsent(seat.id, () => {});
     final newMetrics = <MetricDef>[];
     for (final (pos, m) in metrics.indexed) {
-      final label = m.label.trim();
+      final label = trimText(m.label);
       final old = m.id == null ? null : metricById[m.id];
       if (old != null) {
         newMetrics.add(
           MetricDef(id: old.id, key: old.key, label: label, series: pos),
         );
       } else {
-        final key = _unique(_slug(label), keys.contains);
+        final key = uniqueSlug(slugOf(label), keys.contains);
         keys.add(key);
         newMetrics.add(
           MetricDef(
@@ -571,7 +664,7 @@ class MemoryRepository implements Repository {
 
     final newKpis = <KpiDef>[];
     for (final (pos, k) in kpis.indexed) {
-      final text = k.text.trim();
+      final text = trimText(k.text);
       final old = k.id == null ? null : kpiById[k.id];
       newKpis.add(
         old != null && old.text == text
@@ -583,6 +676,12 @@ class MemoryRepository implements Repository {
               ),
       );
     }
+    final keptKpis = {for (final k in newKpis) k.id};
+    _retiredKpis[seat.id] = [
+      ...?_retiredKpis[seat.id],
+      for (final k in seat.kpis)
+        if (!keptKpis.contains(k.id)) k,
+    ];
 
     final saved = Assignment(
       id: seat.id,
@@ -603,6 +702,11 @@ class MemoryRepository implements Repository {
   @override
   Future<Summary> loadSummary(String periodId, {int trend = 6}) async {
     _requireController();
+    if (trend < 1 || trend > 24) {
+      throw const RepositoryException(
+        'The trend must be a number from 1 to 24.',
+      );
+    }
     final period = _periods[periodId];
     if (period == null) {
       throw const RepositoryException('That period does not exist.');
@@ -644,7 +748,7 @@ class MemoryRepository implements Repository {
   Future<DeckTextsState> loadDeckTexts(String periodId) async {
     // Every signed-in person reads the words: the live preview needs them.
     _requireOnline();
-    _currentUser();
+    _me();
     if (!_periods.containsKey(periodId)) {
       throw const RepositoryException('That period does not exist.');
     }
@@ -659,10 +763,9 @@ class MemoryRepository implements Repository {
     }
     var clean = DeckTexts.defaults;
     for (final f in deckTextFields) {
-      final v = texts[f.key].trim();
-      final problem = DeckTexts.check(f, v);
+      final problem = DeckTexts.check(f, texts[f.key]);
       if (problem != null) throw RepositoryException(problem);
-      clean = clean.withValue(f.key, v);
+      clean = clean.withValue(f.key, DeckTexts.normalise(f, texts[f.key]));
     }
     _deckTexts[periodId] = clean;
     return DeckTextsState(texts: clean);

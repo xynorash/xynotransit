@@ -126,14 +126,15 @@ void main() {
       final h = await pumpApp(tester, size: size, location: '/manager/reports');
       await sendRova(tester, h);
       final gen = find.text('Generate slides');
-      if (gen.evaluate().isEmpty) {
-        await tester.scrollUntilVisible(
-          gen,
-          300,
-          scrollable: find.byType(Scrollable).first,
-        );
-      }
+      // Scroll in steps until the button is really on screen: it is built
+      // a little before it is visible, and the page above it can be tall.
+      await tester.scrollUntilVisible(
+        gen,
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.ensureVisible(gen);
+      await tester.pumpAndSettle();
       await tester.tap(gen);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);

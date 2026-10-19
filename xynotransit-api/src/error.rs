@@ -18,6 +18,8 @@ pub enum ApiError {
     Conflict(String),
     TooManyRequests(String),
     TooLarge,
+    MethodNotAllowed,
+    UnsupportedMedia,
     Unavailable,
     Internal,
 }
@@ -49,6 +51,14 @@ impl IntoResponse for ApiError {
             ApiError::TooLarge => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "That request is too large.".to_string(),
+            ),
+            ApiError::MethodNotAllowed => (
+                StatusCode::METHOD_NOT_ALLOWED,
+                "That method is not allowed here.".to_string(),
+            ),
+            ApiError::UnsupportedMedia => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "Send the request as JSON.".to_string(),
             ),
             ApiError::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -85,6 +95,9 @@ where
         match Json::<T>::from_request(req, state).await {
             Ok(Json(v)) => Ok(ApiJson(v)),
             Err(rej) if rej.status() == StatusCode::PAYLOAD_TOO_LARGE => Err(ApiError::TooLarge),
+            Err(rej) if rej.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE => {
+                Err(ApiError::UnsupportedMedia)
+            }
             Err(_) => Err(ApiError::bad("That request is not valid.")),
         }
     }

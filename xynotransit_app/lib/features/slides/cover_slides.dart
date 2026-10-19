@@ -2,25 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../../domain/deck_text.dart';
 import 'canvas.dart';
+import 'measure.dart';
 import 'palette.dart';
+import 'pills.dart';
 import 'slide_words.dart';
-
-Widget _pill(String text, Color fill, Color ink) => ConstrainedBox(
-  constraints: const BoxConstraints(maxWidth: slideTextWidth),
-  child: Container(
-    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 28),
-    decoration: BoxDecoration(
-      color: fill,
-      borderRadius: BorderRadius.circular(999),
-    ),
-    child: Text(
-      text,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: st(32, weight: FontWeight.w500, color: ink),
-    ),
-  ),
-);
 
 const _coverSteps = <FitStep>[
   (120, 2),
@@ -33,7 +18,7 @@ const _coverSteps = <FitStep>[
 
 const _dividerSteps = <FitStep>[(140, 2), (110, 2), (90, 3), (72, 3), (60, 3)];
 
-const _dateSteps = <FitStep>[(24, 1), (22, 1), (20, 1), (18, 1)];
+const _dateSteps = smallLineSteps;
 
 /// Big title, then the line under it. Both shrink and wrap to fit.
 class _TitleBlock extends StatelessWidget {
@@ -53,7 +38,37 @@ class _TitleBlock extends StatelessWidget {
   final String subtitle;
   final Color subtitleColor;
 
-  static const _subSteps = <FitStep>[(44, 1), (40, 2), (36, 2), (32, 2)];
+  static const _subSteps = <FitStep>[
+    (44, 1),
+    (40, 2),
+    (36, 2),
+    (32, 2),
+    (28, 3),
+    (24, 3),
+  ];
+
+  /// Height of the block, for the room left to the pills.
+  static double heightOf(
+    String title,
+    List<FitStep> titleSteps,
+    double titleHeight,
+    String subtitle,
+  ) {
+    final t = pickFit(
+      title,
+      slideTextWidth,
+      titleSteps,
+      (z) => st(z, weight: FontWeight.w700, height: titleHeight),
+    );
+    final u = pickFit(subtitle, slideTextWidth, _subSteps, (z) => st(z));
+    return _textHeight(
+          title,
+          st(t.$1, weight: FontWeight.w700, height: titleHeight),
+          t.$2,
+        ) +
+        24 +
+        _textHeight(subtitle, st(u.$1), u.$2);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -88,6 +103,83 @@ class _TitleBlock extends StatelessWidget {
   }
 }
 
+double _textHeight(String text, TextStyle style, int lines) =>
+    measureText(text, style, slideTextWidth, maxLines: lines).height;
+
+/// Room left for the pills once the small line and the title block are placed
+/// in the 792 px high text area, keeping 40 px of air above and below the title.
+double _pillRoom(double small, double block) => 792 - small - block - 80;
+
+/// Cover and dividers share one build: a small line, the title block and the
+/// pills. The pills get the room the other two leave, so nothing overlaps.
+class _PillSlide extends StatelessWidget {
+  const _PillSlide({
+    required this.background,
+    required this.small,
+    required this.smallColor,
+    required this.title,
+    required this.titleColor,
+    required this.titleSteps,
+    required this.subtitle,
+    required this.subtitleColor,
+    required this.pills,
+    required this.pillFill,
+    required this.pillInk,
+  });
+
+  final Color background;
+  final String small;
+  final Color smallColor;
+  final String title;
+  final Color titleColor;
+  final List<FitStep> titleSteps;
+  final String subtitle;
+  final Color subtitleColor;
+  final List<String> pills;
+  final Color pillFill;
+  final Color pillInk;
+
+  @override
+  Widget build(BuildContext context) {
+    TextStyle smallStyle(double z) =>
+        st(z, weight: FontWeight.w700, color: smallColor, letterSpacing: z / 8);
+    final smallFit = pickFit(small, slideTextWidth, _dateSteps, smallStyle);
+    final smallH = _textHeight(small, smallStyle(smallFit.$1), smallFit.$2);
+    final block = _TitleBlock.heightOf(title, titleSteps, 1.05, subtitle);
+    final plan = planPills(pills, maxHeight: _pillRoom(smallH, block));
+    return SlideCanvas(
+      background: background,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(128, 128, 128, 160),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              small,
+              maxLines: smallFit.$2,
+              overflow: TextOverflow.ellipsis,
+              style: smallStyle(smallFit.$1),
+            ),
+            _TitleBlock(
+              title: title,
+              titleColor: titleColor,
+              titleSteps: titleSteps,
+              titleHeight: 1.05,
+              subtitle: subtitle,
+              subtitleColor: subtitleColor,
+            ),
+            Align(
+              alignment: Alignment.bottomLeft,
+              child: PillWrap(plan: plan, fill: pillFill, ink: pillInk),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class SlideCover extends StatelessWidget {
   const SlideCover({
     super.key,
@@ -105,55 +197,18 @@ class SlideCover extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final w = SlideWords(texts);
-    final date = w.dateLine(meetingDate);
-    final dateFit = pickFit(
-      date,
-      slideTextWidth,
-      _dateSteps,
-      (z) => st(z, weight: FontWeight.w700, letterSpacing: z / 8),
-    );
-    return SlideCanvas(
+    return _PillSlide(
       background: SlidePalette.navy,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(128, 128, 128, 160),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              date,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: st(
-                dateFit.$1,
-                weight: FontWeight.w700,
-                color: SlidePalette.orange,
-                letterSpacing: dateFit.$1 / 8,
-              ),
-            ),
-            _TitleBlock(
-              title: w.title(periodLabel),
-              titleColor: SlidePalette.paper,
-              titleSteps: _coverSteps,
-              titleHeight: 1.05,
-              subtitle: w.subtitle(periodLabel),
-              subtitleColor: SlidePalette.panelText,
-            ),
-            Wrap(
-              spacing: 16,
-              runSpacing: 16,
-              children: [
-                for (final (team, n) in teamCounts)
-                  _pill(
-                    w.coverPill(team, n),
-                    SlidePalette.paper,
-                    SlidePalette.navy,
-                  ),
-              ],
-            ),
-          ],
-        ),
-      ),
+      small: w.dateLine(meetingDate),
+      smallColor: SlidePalette.orange,
+      title: w.title(periodLabel),
+      titleColor: SlidePalette.paper,
+      titleSteps: _coverSteps,
+      subtitle: w.subtitle(periodLabel),
+      subtitleColor: SlidePalette.panelText,
+      pills: [for (final (team, n) in teamCounts) w.coverPill(team, n)],
+      pillFill: SlidePalette.paper,
+      pillInk: SlidePalette.navy,
     );
   }
 }
@@ -181,53 +236,18 @@ class SlideDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = people.length;
     final w = SlideWords(texts);
-    final eyebrow = w
-        .dividerEyebrow(team, index, total, k, periodLabel)
-        .toUpperCase();
-    final eyebrowFit = pickFit(
-      eyebrow,
-      slideTextWidth,
-      _dateSteps,
-      (z) => st(z, weight: FontWeight.w700, letterSpacing: z / 8),
-    );
-    return SlideCanvas(
+    return _PillSlide(
       background: SlidePalette.blue,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(128, 128, 128, 160),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              eyebrow,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: st(
-                eyebrowFit.$1,
-                weight: FontWeight.w700,
-                color: SlidePalette.white,
-                letterSpacing: eyebrowFit.$1 / 8,
-              ),
-            ),
-            _TitleBlock(
-              title: w.dividerTitle(team),
-              titleColor: SlidePalette.white,
-              titleSteps: _dividerSteps,
-              titleHeight: 1.05,
-              subtitle: w.dividerSubtitle(team, k),
-              subtitleColor: SlidePalette.white,
-            ),
-            Wrap(
-              spacing: 16,
-              runSpacing: 16,
-              children: [
-                for (final p in people)
-                  _pill(p, SlidePalette.white, SlidePalette.navy),
-              ],
-            ),
-          ],
-        ),
-      ),
+      small: w.dividerEyebrow(team, index, total, k, periodLabel).toUpperCase(),
+      smallColor: SlidePalette.white,
+      title: w.dividerTitle(team),
+      titleColor: SlidePalette.white,
+      titleSteps: _dividerSteps,
+      subtitle: w.dividerSubtitle(team, k),
+      subtitleColor: SlidePalette.white,
+      pills: people,
+      pillFill: SlidePalette.white,
+      pillInk: SlidePalette.navy,
     );
   }
 }

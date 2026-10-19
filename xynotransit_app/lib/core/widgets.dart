@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'format.dart';
 import 'theme/tokens.dart';
 
 TextStyle monoStyle(
@@ -93,6 +94,7 @@ class StepCard extends StatelessWidget {
                   ),
                   child: Text(
                     '$step',
+                    textScaler: TextScaler.noScaling,
                     style: monoStyle(
                       context,
                       size: 13,
@@ -249,25 +251,28 @@ class SmallButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return Semantics(
-      label: semanticLabel,
-      button: true,
-      excludeSemantics: semanticLabel != null,
-      child: FilledButton(
-        onPressed: onPressed,
-        style: _base(
-          context,
-          fill: t.soft,
-          on: t.ink,
-          minHeight: 34,
-          size: 14,
-          hPad: 14,
-          radius: 8,
-          weight: FontWeight.w500,
-        ),
-        child: Text(label),
+    final button = FilledButton(
+      onPressed: onPressed,
+      style: _base(
+        context,
+        fill: t.soft,
+        on: t.ink,
+        minHeight: 34,
+        size: 14,
+        hPad: 14,
+        radius: 8,
+        weight: FontWeight.w500,
       ),
+      child: Text(label),
     );
+    return semanticLabel == null
+        ? button
+        : Semantics(
+            label: semanticLabel,
+            button: true,
+            excludeSemantics: true,
+            child: button,
+          );
   }
 }
 
@@ -277,33 +282,41 @@ class TextLinkButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.semanticLabel,
+    this.flush = false,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final String? semanticLabel;
 
+  /// No side padding, so the text lines up with the content around it.
+  final bool flush;
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return Semantics(
-      label: semanticLabel,
-      button: true,
-      excludeSemantics: semanticLabel != null,
-      child: TextButton(
-        onPressed: onPressed,
-        style: TextButton.styleFrom(
-          minimumSize: const Size(44, 44),
-          foregroundColor: t.accent,
-          textStyle: TextStyle(
-            fontFamily: XynoTokens.sans,
-            fontSize: 15,
-            fontWeight: FontWeight.w500,
-          ),
+    final button = TextButton(
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        minimumSize: const Size(44, 44),
+        padding: flush ? EdgeInsets.zero : null,
+        foregroundColor: t.accent,
+        textStyle: TextStyle(
+          fontFamily: XynoTokens.sans,
+          fontSize: 15,
+          fontWeight: FontWeight.w500,
         ),
-        child: Text(label),
       ),
+      child: Text(label),
     );
+    return semanticLabel == null
+        ? button
+        : Semantics(
+            label: semanticLabel,
+            button: true,
+            excludeSemantics: true,
+            child: button,
+          );
   }
 }
 
@@ -318,7 +331,7 @@ InputDecoration xInput(BuildContext context, {String? hint, String? counter}) {
     filled: true,
     fillColor: t.bg,
     hintText: hint,
-    hintStyle: bodyStyle(context, color: t.muted.withValues(alpha: 0.7)),
+    hintStyle: bodyStyle(context, color: t.muted),
     counterText: counter ?? '',
     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
     constraints: const BoxConstraints(minHeight: 46),
@@ -331,10 +344,19 @@ InputDecoration xInput(BuildContext context, {String? hint, String? counter}) {
 
 /// A label above a field, with the label spoken as the field name.
 class Labeled extends StatelessWidget {
-  const Labeled({super.key, required this.label, required this.child});
+  const Labeled({
+    super.key,
+    required this.label,
+    required this.child,
+    this.mergeChild = false,
+  });
 
   final String label;
   final Widget child;
+
+  /// Join the label and the child into one node. For a drop-down, whose
+  /// button has no name of its own.
+  final bool mergeChild;
 
   @override
   Widget build(BuildContext context) {
@@ -354,24 +376,82 @@ class Labeled extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 6),
-        Semantics(label: label, container: true, child: child),
+        mergeChild
+            ? MergeSemantics(
+                child: Semantics(label: label, child: child),
+              )
+            : Semantics(label: label, container: true, child: child),
       ],
     );
   }
 }
 
+/// Most a count may hold (9 digits). Matches the API.
+const maxCountValue = 999999999;
+
+/// Reads a pasted or typed whole number. Spaces, thin spaces and commas are
+/// thousands separators and are dropped. Returns the digits, or a plain
+/// message when the text is not a whole number from 0 up to [maxCount].
+({String? digits, String? problem}) parseWholeNumber(String raw) {
+  final cleaned = raw.replaceAll(RegExp(r"[\s\u00A0\u202F,'\u2019_]"), '');
+  if (cleaned.isEmpty) return (digits: '', problem: null);
+  if (!RegExp(r'^\d+$').hasMatch(cleaned)) {
+    final decimalOrNegative = RegExp(r'[.\-\u2212]').hasMatch(cleaned);
+    return (
+      digits: null,
+      problem: decimalOrNegative ? 'Whole numbers only' : 'Digits only',
+    );
+  }
+  final trimmed = cleaned.replaceFirst(RegExp(r'^0+(?=\d)'), '');
+  if (trimmed.length > 9) return (digits: null, problem: 'Too large');
+  return (digits: trimmed, problem: null);
+}
+
+class _WholeNumberFormatter extends TextInputFormatter {
+  _WholeNumberFormatter(this.onProblem);
+
+  final ValueChanged<String?> onProblem;
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final r = parseWholeNumber(newValue.text);
+    if (r.problem != null) {
+      onProblem(r.problem);
+      return oldValue;
+    }
+    onProblem(null);
+    if (r.digits == newValue.text) return newValue;
+    return TextEditingValue(
+      text: r.digits!,
+      selection: TextSelection.collapsed(offset: r.digits!.length),
+    );
+  }
+}
+
 /// Whole-number input that keeps its text in sync with an outside value.
+/// Accepts pasted text with spaces or thousands separators, refuses decimals,
+/// minus signs and letters with a plain message, and shows thousands
+/// separators while the field is not being edited.
 class NumberField extends StatefulWidget {
   const NumberField({
     super.key,
     required this.value,
     required this.onChanged,
     this.semanticLabel,
+    this.errorText,
+    this.focusNode,
   });
 
   final int? value;
   final ValueChanged<int?> onChanged;
   final String? semanticLabel;
+
+  /// Shown under the field, for example "Enter a number".
+  final String? errorText;
+  final FocusNode? focusNode;
 
   @override
   State<NumberField> createState() => _NumberFieldState();
@@ -379,43 +459,138 @@ class NumberField extends StatefulWidget {
 
 class _NumberFieldState extends State<NumberField> {
   late final TextEditingController _c = TextEditingController(
-    text: widget.value?.toString() ?? '',
+    text: _show(widget.value, false),
   );
+  FocusNode? _own;
+  String? _problem;
+
+  FocusNode get _focus => widget.focusNode ?? (_own ??= FocusNode());
+
+  late final _formatter = _WholeNumberFormatter((p) {
+    if (p != _problem) {
+      // Called from inside the text input: show it after this frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _problem = p);
+      });
+    }
+  });
+
+  static String _show(int? v, bool focused) => v == null
+      ? ''
+      : focused
+      ? v.toString()
+      : thousands(v);
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(_onFocus);
+  }
+
+  void _onFocus() {
+    final text = _show(
+      int.tryParse(_c.text.replaceAll(',', '')),
+      _focus.hasFocus,
+    );
+    if (text != _c.text) _c.text = text;
+    if (!_focus.hasFocus && _problem != null) setState(() => _problem = null);
+  }
 
   @override
   void didUpdateWidget(NumberField old) {
     super.didUpdateWidget(old);
-    if (int.tryParse(_c.text) != widget.value) {
-      _c.text = widget.value?.toString() ?? '';
+    if (old.focusNode != widget.focusNode) {
+      (old.focusNode ?? _own)?.removeListener(_onFocus);
+      _focus.addListener(_onFocus);
+    }
+    final typed = int.tryParse(_c.text.replaceAll(',', ''));
+    if (typed != widget.value) {
+      _c.text = _show(widget.value, _focus.hasFocus);
     }
   }
 
   @override
   void dispose() {
+    _focus.removeListener(_onFocus);
+    _own?.dispose();
     _c.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    final t = context.tokens;
+    final error = _problem ?? widget.errorText;
+    final deco = xInput(context, hint: '0').copyWith(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+      errorText: error,
+      errorMaxLines: 3,
+      errorStyle: bodyStyle(context, size: 13, color: t.bad, height: 1.25),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: t.bad),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: t.bad, width: 2),
+      ),
+    );
+    final field = TextField(
       controller: _c,
+      focusNode: _focus,
       textAlign: TextAlign.center,
       keyboardType: TextInputType.number,
-      inputFormatters: [
-        FilteringTextInputFormatter.digitsOnly,
-        LengthLimitingTextInputFormatter(9),
-      ],
+      inputFormatters: [_formatter],
+      textInputAction: TextInputAction.next,
       style: monoStyle(
         context,
         size: 22,
         weight: FontWeight.w500,
-        color: context.tokens.ink,
+        color: t.ink,
       ),
-      decoration: xInput(context, hint: '0').copyWith(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+      decoration: deco,
+      onChanged: (s) => widget.onChanged(
+        s.isEmpty ? null : int.tryParse(s.replaceAll(',', '')),
       ),
-      onChanged: (s) => widget.onChanged(int.tryParse(s)),
+    );
+    final name = widget.semanticLabel;
+    // The name joins the field's own node, so it is one text field to a
+    // screen reader, not a wrapper holding another one.
+    return name == null ? field : Semantics(label: name, child: field);
+  }
+}
+
+/// "12/70" under or beside a text box. Turns warning-coloured from 90 percent
+/// of the limit, and says so in words for screen readers.
+class CharCounter extends StatelessWidget {
+  const CharCounter({super.key, required this.length, required this.max});
+
+  final int length;
+  final int max;
+
+  static bool isNear(int length, int max) => length * 10 >= max * 9;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final near = isNear(length, max);
+    final full = length >= max;
+    return Semantics(
+      label: full
+          ? '$length of $max characters, limit reached'
+          : near
+          ? '$length of $max characters, close to the limit'
+          : '$length of $max characters',
+      excludeSemantics: true,
+      child: Text(
+        '$length/$max',
+        style: monoStyle(
+          context,
+          size: 12,
+          weight: near ? FontWeight.w500 : FontWeight.w400,
+          color: near ? t.warn : t.muted,
+        ),
+      ),
     );
   }
 }

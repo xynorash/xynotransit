@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     error::{parse_id, ApiError, ApiJson},
+    rules::{msg, PERIOD_MAX_YEAR, PERIOD_MIN_YEAR},
     state::AppState,
 };
 
@@ -51,10 +52,10 @@ pub async fn find_period(conn: &mut sqlx::PgConnection, id: Uuid) -> Result<Peri
 
 fn parse_date(s: &str) -> Result<NaiveDate, ApiError> {
     let date = NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
-        .map_err(|_| ApiError::bad("Enter a date like 2026-02-01."))?;
+        .map_err(|_| ApiError::bad(msg::DATE_FORMAT))?;
     // Keep dates in a sane range so nobody can fill the table with nonsense.
-    if !(2000..=2100).contains(&date.year()) {
-        return Err(ApiError::bad("Enter a date between 2000 and 2100."));
+    if !(PERIOD_MIN_YEAR..=PERIOD_MAX_YEAR).contains(&date.year()) {
+        return Err(ApiError::bad(msg::DATE_RANGE));
     }
     Ok(date)
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     extract::{Path, State},
@@ -181,9 +181,13 @@ async fn generate(
     let period = find_period(&mut tx, period_id).await?;
     let start: NaiveDate = period.start_month;
 
-    let (expected,): (i64,) = sqlx::query_as("select count(*) from assignment where active")
-        .fetch_one(&mut *tx)
-        .await?;
+    let (expected,): (i64,) = sqlx::query_as(
+        // A seat is expected when it and its person are switched on.
+        "select count(*) from assignment a join person p on p.id = a.person_id
+         where a.active and p.active",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
 
     // Submitted reports in deck order: team, then seat.
     let seats: Vec<SeatRow> = sqlx::query_as(
@@ -192,7 +196,7 @@ async fn generate(
          join assignment a on a.id = r.assignment_id
          join person p on p.id = a.person_id
          join team t on t.id = a.team_id
-         where r.period_id = $1 and r.status = 'submitted' and a.active
+         where r.period_id = $1 and r.status = 'submitted' and a.active and p.active
          order by t.sort, t.id, a.sort, a.code",
     )
     .bind(period_id)
@@ -200,16 +204,19 @@ async fn generate(
     .await?;
     let assignment_ids: Vec<Uuid> = seats.iter().map(|s| s.assignment_id).collect();
 
+    // All definitions, retired ones too: a slide shows the counts and targets the report was
+    // answered against, whatever the manager changed since. Each seat keeps only the ones its
+    // report has an answer for (below).
     let metric_defs: Vec<(Uuid, Uuid, String, String, i16)> = sqlx::query_as(
         "select id, assignment_id, key, label, series from metric_def
-         where assignment_id = any($1) and retired_at is null order by series",
+         where assignment_id = any($1) order by series, id",
     )
     .bind(&assignment_ids)
     .fetch_all(&mut *tx)
     .await?;
     let kpi_defs: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
         "select id, assignment_id, text from kpi_def
-         where assignment_id = any($1) and retired_at is null order by sort, id",
+         where assignment_id = any($1) order by sort, id",
     )
     .bind(&assignment_ids)
     .fetch_all(&mut *tx)
@@ -268,25 +275,51 @@ async fn generate(
             &report["reporter"],
             (&seat.full_name, &seat.role_title, &seat.team),
         );
+        let answered_metrics: HashSet<&str> = report["values"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v["metric_def_id"].as_str())
+            .collect();
+        let answered_kpis: HashSet<&str> = report["kpis"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|k| k["kpi_def_id"].as_str())
+            .collect();
+        let mut metrics: Vec<MetricIn> = metric_defs
+            .iter()
+            .filter(|m| {
+                m.1 == seat.assignment_id && answered_metrics.contains(m.0.to_string().as_str())
+            })
+            .map(|m| MetricIn {
+                key: m.2.clone(),
+                label: m.3.clone(),
+                series: m.4,
+                values: [value_of(m.0, 0), value_of(m.0, 1), value_of(m.0, 2)],
+            })
+            .collect();
+        // A retired count keeps its old series number while the live ones were renumbered, so two
+        // counts can claim the same one. Keep the order and give each its own, so no two bars of
+        // one slide share a colour.
+        let mut seen = HashSet::new();
+        if !metrics.iter().all(|m| seen.insert(m.series)) {
+            for (i, m) in metrics.iter_mut().enumerate() {
+                m.series = i as i16;
+            }
+        }
         let input = SnapshotInput {
             assignment_code: seat.code.clone(),
             name,
             role,
             team,
             start_month: start,
-            metrics: metric_defs
-                .iter()
-                .filter(|m| m.1 == seat.assignment_id)
-                .map(|m| MetricIn {
-                    key: m.2.clone(),
-                    label: m.3.clone(),
-                    series: m.4,
-                    values: [value_of(m.0, 0), value_of(m.0, 1), value_of(m.0, 2)],
-                })
-                .collect(),
+            metrics,
             targets: kpi_defs
                 .iter()
-                .filter(|k| k.1 == seat.assignment_id)
+                .filter(|k| {
+                    k.1 == seat.assignment_id && answered_kpis.contains(k.0.to_string().as_str())
+                })
                 .map(|k| (k.2.clone(), status_of(k.0)))
                 .collect(),
             well: notes_of("well"),
@@ -310,17 +343,19 @@ async fn generate(
     .bind(Value::Object(texts))
     .fetch_one(&mut *tx)
     .await?;
-    for (i, (seat, snap)) in seats.iter().zip(snapshots).enumerate() {
-        sqlx::query(
-            "insert into deck_run_item (deck_run_id, report_id, sort, snapshot) values ($1, $2, $3, $4)",
-        )
-        .bind(run_id)
-        .bind(seat.report_id)
-        .bind(i as i32 + 1)
-        .bind(snap)
-        .execute(&mut *tx)
-        .await?;
-    }
+    // All slides in one statement (a deck can have hundreds).
+    let report_ids: Vec<Uuid> = seats.iter().map(|s| s.report_id).collect();
+    let sorts: Vec<i32> = (1..=seats.len() as i32).collect();
+    sqlx::query(
+        "insert into deck_run_item (deck_run_id, report_id, sort, snapshot)
+         select $1, r, s, j from unnest($2::uuid[], $3::int[], $4::jsonb[]) as t(r, s, j)",
+    )
+    .bind(run_id)
+    .bind(&report_ids)
+    .bind(&sorts)
+    .bind(&snapshots)
+    .execute(&mut *tx)
+    .await?;
 
     let out = deck_json(&mut tx, run_id).await?;
     tx.commit().await?;

@@ -62,5 +62,8 @@ String shortDate(DateTime d) => '${d.day} ${monthShort[d.month - 1]}';
 String shortDateTime(DateTime d) =>
     '${shortDate(d)}, ${_two(d.hour)}:${_two(d.minute)}';
 
+/// "14:05".
+String hourMinute(DateTime d) => '${_two(d.hour)}:${_two(d.minute)}';
+
 String truncate(String s, int max) =>
     s.length <= max ? s : '${s.substring(0, max)}…';

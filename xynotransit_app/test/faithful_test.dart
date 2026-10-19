@@ -22,6 +22,7 @@ import 'package:xynotransit_app/features/slides/alt_text.dart';
 import 'package:xynotransit_app/features/slides/canvas.dart';
 import 'package:xynotransit_app/features/slides/slide_view.dart';
 
+import '../tool/slide_matrix.dart';
 import 'helpers.dart';
 
 /// The preview draws a slide inside a stage with a 1 px border and rounded
@@ -161,6 +162,55 @@ Diff compare(Uint8List preview, Uint8List export) {
   return Diff(pixels, maxDelta);
 }
 
+/// Draws every spec the way the export does and the way the preview does and
+/// compares the pixels.
+Future<void> expectFaithful(
+  WidgetTester tester,
+  List<SlideSpec> specs, {
+  List<String>? names,
+}) async {
+  late BuildContext ctx;
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Builder(
+        builder: (c) {
+          ctx = c;
+          return const SizedBox();
+        },
+      ),
+    ),
+  );
+  final exported = <Uint8List>[];
+  for (final spec in specs) {
+    final f = slideToPng(ctx, slideFor(spec));
+    await tester.pump();
+    await tester.pump();
+    exported.add((await tester.runAsync(() => f))!);
+  }
+  for (var i = 0; i < specs.length; i++) {
+    final image = (await tester.runAsync(() => decode(exported[i])))!;
+    expect([image.width, image.height], [1920, 1080]);
+    final export = (await tester.runAsync(() => rgba(image)))!;
+    final preview = await previewPixels(tester, specs[i]);
+    // Words, colours, sizes and positions are the same. The stage moves the
+    // slide by 1 px inside a clip, which may shade a few anti-aliased edge
+    // pixels differently (under 0.05% of the picture, never more than a few
+    // levels; seen: up to 50 pixels, by 3 to 7 of 255). Anything more fails.
+    final d = compare(preview, export);
+    final what = names?[i] ?? '${specs[i].runtimeType}';
+    expect(
+      d.pixels,
+      lessThanOrEqualTo(1000),
+      reason: 'slide ${i + 1} ($what): $d',
+    );
+    expect(
+      d.maxDelta,
+      lessThanOrEqualTo(24),
+      reason: 'slide ${i + 1} ($what): $d',
+    );
+  }
+}
+
 void main() {
   setUpAll(loadAppFonts);
 
@@ -178,6 +228,30 @@ void main() {
   testWidgets('every slide: the preview and the export draw the same pixels', (
     tester,
   ) async {
+    await expectFaithful(tester, specs);
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  testWidgets(
+    'matrix extremes: the preview and the export draw the same pixels',
+    (tester) async {
+      // Every third case of the slide matrix: long names, many counts, huge
+      // numbers, dense targets, wide letters, maximum length words, pill lists.
+      final cases = [
+        for (final e in slideMatrix().indexed)
+          if (e.$1 % 3 == 0) e.$2,
+      ];
+      await expectFaithful(
+        tester,
+        [for (final c in cases) c.spec],
+        names: [for (final c in cases) c.name],
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 10)),
+  );
+
+  testWidgets('a picture at pixel ratio 2 is 3840 x 2160 and looks the same', (
+    tester,
+  ) async {
     late BuildContext ctx;
     await tester.pumpWidget(
       MaterialApp(
@@ -189,34 +263,41 @@ void main() {
         ),
       ),
     );
-    final exported = <Uint8List>[];
-    for (final spec in specs) {
-      final f = slideToPng(ctx, slideFor(spec));
+    for (final spec in [specs[0], specs[2], specs[3]]) {
+      final one = slideToPng(ctx, slideFor(spec));
       await tester.pump();
       await tester.pump();
-      exported.add((await tester.runAsync(() => f))!);
+      final two = slideToPng(ctx, slideFor(spec), pixelRatio: pptxPixelRatio);
+      await tester.pump();
+      await tester.pump();
+      final oneBytes = (await tester.runAsync(() => one))!;
+      final twoBytes = (await tester.runAsync(() => two))!;
+      final a = (await tester.runAsync(() => decode(oneBytes)))!;
+      final b = (await tester.runAsync(() => decode(twoBytes)))!;
+      expect([a.width, a.height], [1920, 1080]);
+      expect([b.width, b.height], [3840, 2160]);
+      final pa = (await tester.runAsync(() => rgba(a)))!;
+      final pb = (await tester.runAsync(() => rgba(b)))!;
+      // Average the 2 x 2 block of the big picture: it must match the small
+      // one on average (text is drawn finer, so single pixels may differ).
+      var sum = 0.0;
+      for (var y = 0; y < 1080; y += 3) {
+        for (var x = 0; x < 1920; x += 3) {
+          for (var c = 0; c < 3; c++) {
+            var v = 0;
+            for (var dy = 0; dy < 2; dy++) {
+              for (var dx = 0; dx < 2; dx++) {
+                v += pb[((2 * y + dy) * 3840 + 2 * x + dx) * 4 + c];
+              }
+            }
+            sum += ((v / 4) - pa[(y * 1920 + x) * 4 + c]).abs();
+          }
+        }
+      }
+      final mean = sum / (360 * 640 * 3);
+      expect(mean, lessThan(1.5), reason: '${spec.runtimeType}: $mean');
     }
-    for (var i = 0; i < specs.length; i++) {
-      final image = (await tester.runAsync(() => decode(exported[i])))!;
-      expect([image.width, image.height], [1920, 1080]);
-      final export = (await tester.runAsync(() => rgba(image)))!;
-      final preview = await previewPixels(tester, specs[i]);
-      // Words, colours, sizes and positions are the same. The stage moves the
-      // slide by 1 px inside a clip, which may shade a few anti-aliased edge
-      // pixels differently (under 0.05% of the picture, never more than a few levels) (seen: up to 50 pixels, by 3 to 7 of 255). Anything more fails.
-      final d = compare(preview, export);
-      expect(
-        d.pixels,
-        lessThanOrEqualTo(1000),
-        reason: 'slide ${i + 1} (${specs[i].runtimeType}): $d',
-      );
-      expect(
-        d.maxDelta,
-        lessThanOrEqualTo(24),
-        reason: 'slide ${i + 1} (${specs[i].runtimeType}): $d',
-      );
-    }
-  }, timeout: const Timeout(Duration(minutes: 5)));
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   testWidgets('the same words appear in every slide widget', (tester) async {
     // A cheap check that the custom words reach the widgets at all.
@@ -232,7 +313,7 @@ void main() {
     expect(find.text('Your ideas'), findsOneWidget);
   });
 
-  test('PPTX notes and alt text equal slideAltText of the same specs', () {
+  test('PPTX alt text, notes and title come from the same specs and words', () {
     final pngs = [for (var i = 0; i < specs.length; i++) Uint8List(4)];
     final slides = pptxSlidesFor(specs, pngs);
     final archive = ZipDecoder().decodeBytes(
@@ -246,17 +327,27 @@ void main() {
       hasLength(specs.length),
     );
     for (var i = 0; i < specs.length; i++) {
-      final want = slideAltText(specs[i]);
+      final alt = slideAltText(specs[i]);
       final slide = XmlDocument.parse(read('ppt/slides/slide${i + 1}.xml'));
       final descr = slide
           .findAllElements('cNvPr', namespaceUri: '*')
           .firstWhere((e) => e.getAttribute('descr') != null)
           .getAttribute('descr');
-      final notes = XmlDocument.parse(
-        read('ppt/notesSlides/notesSlide${i + 1}.xml'),
-      ).findAllElements('t', namespaceUri: '*').single.innerText;
-      expect(descr, want, reason: 'alt of slide ${i + 1}');
-      expect(notes, want, reason: 'notes of slide ${i + 1}');
+      final title = slide
+          .findAllElements('sp', namespaceUri: '*')
+          .single
+          .findAllElements('t', namespaceUri: '*')
+          .single
+          .innerText;
+      final notes =
+          XmlDocument.parse(read('ppt/notesSlides/notesSlide${i + 1}.xml'))
+              .findAllElements('t', namespaceUri: '*')
+              .map((e) => e.innerText)
+              .join('\n');
+      expect(descr, alt, reason: 'alt of slide ${i + 1}');
+      expect(title, slideTitle(specs[i]), reason: 'title of slide ${i + 1}');
+      expect(notes, slideNotes(specs[i]), reason: 'notes of slide ${i + 1}');
+      expect(notes, startsWith(alt), reason: 'notes of slide ${i + 1}');
     }
     // The words are the custom ones, built from the frozen texts.
     expect(

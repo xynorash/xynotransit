@@ -46,15 +46,28 @@ void main() {
     });
 
     test('plain text only', () {
-      for (final bad in ['a\nb', 'a\u200Bb', 'a\tb', 'a\u00A0b', 'a\u202Eb']) {
+      for (final bad in ['a\nb', 'a\u200Bb', 'a\tb', 'a\u202Eb']) {
         expect(Reporter(name: bad, country: 'c', role: 'r').problems(), [
-          'Your name can only use plain text.',
+          'Your name must be plain text on one line.',
         ], reason: bad.codeUnits.toString());
       }
       expect(
         const Reporter(name: 'Zoë Ñ 中', country: 'c', role: 'r').problems(),
         isEmpty,
       );
+      // Odd spaces (a paste with a non breaking space) are not refused: they
+      // become plain spaces when the report is sent.
+      const pasted = Reporter(
+        name: 'Jean\u00A0Paul',
+        country: 'a\u3000b',
+        role: 'r',
+      );
+      expect(pasted.problems(), isEmpty);
+      expect(pasted.toJson(), {
+        'name': 'Jean Paul',
+        'country': 'a b',
+        'role': 'r',
+      });
     });
 
     test('draft JSON round trip', () {

@@ -22,14 +22,27 @@ final prefsProvider = Provider<SharedPreferences>(
 /// Fixed "today", overridden in tests.
 final clockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
 
+/// The first and last month a period can start in. The server refuses
+/// anything outside the years 2000 to 2100, so the page never asks for it.
+final firstPeriodStart = DateTime(2000);
+final lastPeriodStart = DateTime(2100, 12);
+
+DateTime clampPeriodStart(DateTime start) {
+  final month = DateTime(start.year, start.month);
+  if (month.isBefore(firstPeriodStart)) return firstPeriodStart;
+  if (month.isAfter(lastPeriodStart)) return lastPeriodStart;
+  return month;
+}
+
 /// Start month of the period shown on the page.
 class PeriodSelection extends Notifier<DateTime> {
   @override
-  DateTime build() =>
-      ref.read(initialStartProvider) ??
-      Period.defaultStart(ref.read(clockProvider)());
+  DateTime build() => clampPeriodStart(
+    ref.read(initialStartProvider) ??
+        Period.defaultStart(ref.read(clockProvider)()),
+  );
 
-  void select(DateTime start) => state = DateTime(start.year, start.month);
+  void select(DateTime start) => state = clampPeriodStart(start);
 }
 
 /// Where the first open of the app lands. Demo mode opens on the demo period.

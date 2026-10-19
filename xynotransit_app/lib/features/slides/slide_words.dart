@@ -3,6 +3,7 @@ import 'package:flutter/painting.dart';
 import '../../core/format.dart';
 import '../../domain/deck_text.dart';
 import '../../domain/snapshot.dart';
+import 'measure.dart';
 
 /// The rendered words of a deck. Widgets, alt text and the jump menu all call
 /// these functions, so one rule decides what a slide says.
@@ -108,14 +109,9 @@ FitStep pickFit(
   TextStyle Function(double size) style,
 ) {
   for (final step in steps) {
-    final p = TextPainter(
-      text: TextSpan(text: text, style: style(step.$1)),
-      textDirection: TextDirection.ltr,
-      maxLines: step.$2,
-    )..layout(maxWidth: width);
-    final fits = !p.didExceedMaxLines;
-    p.dispose();
-    if (fits) return step;
+    final m = measureText(text, style(step.$1), width, maxLines: step.$2);
+    // A word longer than the line must not run out of it either.
+    if (!m.exceeded && m.width <= width + 0.5) return step;
   }
   return steps.last;
 }

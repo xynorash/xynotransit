@@ -219,16 +219,33 @@ void main() {
     });
   }
 
-  testWidgets('phone: month inputs stay in 3 columns', (tester) async {
+  testWidgets('phone: month inputs are stacked and fit 999,999,999', (
+    tester,
+  ) async {
+    // Deliberate change: three columns left about 80 px per box on a phone,
+    // too narrow for a nine digit number with separators.
     await pump(tester, size: const Size(360, 800));
     await choose(tester, 'Rova · Import');
     final f = find.byType(NumberField);
     final a = tester.getTopLeft(f.at(0));
     final b = tester.getTopLeft(f.at(1));
-    final c = tester.getTopLeft(f.at(2));
-    expect(b.dy, a.dy);
-    expect(c.dy, a.dy);
-    expect(c.dx, greaterThan(b.dx));
+    expect(b.dy, greaterThan(a.dy));
+    expect(b.dx, a.dx);
+    expect(tester.getSize(f.at(0)).width, greaterThanOrEqualTo(150));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('tablet: month inputs stay in 3 columns', (tester) async {
+    await pump(tester, size: const Size(820, 1180));
+    await choose(tester, 'Rova · Import');
+    final f = find.byType(NumberField);
+    final a = tester.getTopLeft(f.at(0));
+    expect(tester.getTopLeft(f.at(1)).dy, a.dy);
+    expect(tester.getTopLeft(f.at(2)).dy, a.dy);
+    expect(
+      tester.getTopLeft(f.at(2)).dx,
+      greaterThan(tester.getTopLeft(f.at(1)).dx),
+    );
     expect(tester.takeException(), isNull);
   });
 

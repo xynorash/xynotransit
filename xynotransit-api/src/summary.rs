@@ -61,6 +61,10 @@ pub struct SummaryInput {
     pub reports: Vec<ReportIn>,
     /// In deck order, so the first label seen is stable.
     pub values: Vec<ValueIn>,
+    /// Total of every count of the submitted reports of a period, for the trend. One entry per
+    /// period that has any numbers (the route loads these without the detail, which is only
+    /// needed for the shown period).
+    pub volumes: Vec<(Uuid, i64)>,
 }
 
 fn date(d: NaiveDate) -> String {
@@ -183,9 +187,9 @@ pub fn build(input: &SummaryInput) -> Value {
                 "met": rs.iter().map(|r| r.met).sum::<i64>(),
                 "partly": rs.iter().map(|r| r.partly).sum::<i64>(),
                 "missed": rs.iter().map(|r| r.missed).sum::<i64>(),
-                "volume_total": input.values.iter()
-                    .filter(|v| v.period_id == p.id)
-                    .map(|v| v.total)
+                "volume_total": input.volumes.iter()
+                    .filter(|(period, _)| *period == p.id)
+                    .map(|(_, total)| *total)
                     .sum::<i64>(),
             })
         })
@@ -332,6 +336,7 @@ mod tests {
                 val(100, 1, "Files", 1, 7),
                 val(100, 4, "Boxes", 0, 100),
             ],
+            volumes: vec![(id(100), 107), (id(101), 25)],
         }
     }
 
@@ -432,6 +437,7 @@ mod tests {
             seats: vec![],
             reports: vec![],
             values: vec![],
+            volumes: vec![],
         });
         assert_eq!(s["expected"], 0);
         assert_eq!(s["period_label"], "Nov 2026 to Jan 2027");

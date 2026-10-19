@@ -61,6 +61,7 @@ class LiveChanges {
     required this.buildUrl,
     this.backoff = defaultBackoff,
     this.pollInterval = const Duration(seconds: 5),
+    this.safetyInterval = const Duration(seconds: 60),
     this.debounce = const Duration(milliseconds: 250),
   }) {
     _controller = StreamController<LiveKind>.broadcast(
@@ -75,6 +76,11 @@ class LiveChanges {
   final Uri Function(String ticket) buildUrl;
   final Duration Function(int attempt) backoff;
   final Duration pollInterval;
+
+  /// While the live connection is up, a slow tick still fires. A connection
+  /// can die without a word (a laptop that slept, a proxy that dropped it
+  /// quietly), and without this the view would stay stale for ever.
+  final Duration safetyInterval;
   final Duration debounce;
 
   late final StreamController<LiveKind> _controller;
@@ -120,13 +126,14 @@ class LiveChanges {
     if (w != null && !w.isCompleted) w.complete();
   }
 
-  void _startPolling() {
-    _poll ??= Timer.periodic(pollInterval, (_) => _emit(LiveKind.all));
-  }
+  void _startPolling() => _tick(pollInterval);
 
-  void _stopPolling() {
+  /// Connected: only the safety tick remains.
+  void _stopPolling() => _tick(safetyInterval);
+
+  void _tick(Duration every) {
     _poll?.cancel();
-    _poll = null;
+    _poll = Timer.periodic(every, (_) => _emit(LiveKind.all));
   }
 
   Future<void> _sleep(Duration d) {
@@ -171,7 +178,8 @@ class LiveChanges {
         await ended.future;
       } on UnauthorizedException {
         // Signed out: nothing to watch any more.
-        _stopPolling();
+        _poll?.cancel();
+        _poll = null;
         return;
       } on Object {
         // Ticket or connection failed: back off, keep polling meanwhile.

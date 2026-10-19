@@ -65,13 +65,29 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
-  testWidgets('totals sit 3 per row from 4 series on', (tester) async {
-    await pumpSlide(tester, SlideKpi(manySeries(8)));
-    final tops = <double>{
-      for (var i = 1; i <= 8; i++)
-        tester.getTopLeft(find.textContaining('C$i ')).dy.roundToDouble(),
-    };
-    expect(tops, hasLength(3));
+  // Deliberate change: seven and eight counts take two rows of four (they used
+  // to take three rows of three) so the bars keep their height.
+  testWidgets('totals sit 3 per row for 4 to 6 counts, 4 per row for 7 and 8', (
+    tester,
+  ) async {
+    Future<List<int>> rowsOf(int n) async {
+      await pumpSlide(tester, SlideKpi(manySeries(n)));
+      final tops = <double, int>{};
+      for (var i = 1; i <= n; i++) {
+        final y = tester
+            .getTopLeft(find.textContaining('C$i '))
+            .dy
+            .roundToDouble();
+        tops[y] = (tops[y] ?? 0) + 1;
+      }
+      return (tops.keys.toList()..sort()).map((y) => tops[y]!).toList();
+    }
+
+    expect(await rowsOf(4), [3, 1]);
+    expect(await rowsOf(5), [3, 2]);
+    expect(await rowsOf(6), [3, 3]);
+    expect(await rowsOf(7), [4, 3]);
+    expect(await rowsOf(8), [4, 4]);
   });
 
   testWidgets('four series use smaller totals than three', (tester) async {

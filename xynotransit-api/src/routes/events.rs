@@ -46,9 +46,15 @@ async fn stream(
     let period_id = parse_id(q.get("period_id").map(String::as_str).unwrap_or(""))?;
 
     let mut rx = st.events.subscribe();
+    let mut stopping = st.shutdown.subscribe();
     let events = async_stream::stream! {
         loop {
-            match rx.recv().await {
+            let next = tokio::select! {
+                r = rx.recv() => r,
+                // The server is shutting down: end the stream so the connection can close.
+                _ = stopping.wait_for(|v| *v) => break,
+            };
+            match next {
                 Ok(ev) if ev.period_id == period_id => {
                     yield Ok::<Event, Infallible>(Event::default().data(
                         serde_json::to_string(&ev).unwrap_or_default(),

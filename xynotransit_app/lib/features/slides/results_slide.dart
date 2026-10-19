@@ -7,6 +7,7 @@ import '../../domain/enums.dart';
 import '../../domain/snapshot.dart';
 import 'canvas.dart';
 import 'icons.dart';
+import 'measure.dart';
 import 'palette.dart';
 import 'slide_words.dart';
 
@@ -57,6 +58,7 @@ class SlideResults extends StatelessWidget {
     final size = titles
         .map((t) => pickFit(t, _titleWidth, _titleSteps, _titleStyle).$1)
         .reduce(math.min);
+    final colTitles = [for (final c in columns) s.notesOf(c.$1)];
     return PersonSlideFrame(
       background: SlidePalette.navy,
       footerColor: SlidePalette.mutedOnDark,
@@ -68,32 +70,70 @@ class SlideResults extends StatelessWidget {
         eyebrowColor: SlidePalette.orange,
         titleColor: SlidePalette.paper,
       ),
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (var i = 0; i < columns.length; i++) ...[
-            if (i > 0) const SizedBox(width: 32),
-            Expanded(
-              child: _NoteColumn(
-                title: titles[i],
-                titleSize: size,
-                emptyNote: texts['emptyNote'],
-                icon: columns[i].$2,
-                fill: columns[i].$3,
-                notes: s.notesOf(columns[i].$1),
-              ),
-            ),
-          ],
-        ],
+      // The notes take the biggest type in which the fullest column fits.
+      body: LayoutBuilder(
+        builder: (context, box) {
+          final noteSize = pickNoteSize([
+            for (final n in colTitles) n.isEmpty ? [texts['emptyNote']] : n,
+          ], box.maxHeight);
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < columns.length; i++) ...[
+                if (i > 0) const SizedBox(width: 32),
+                Expanded(
+                  child: _NoteColumn(
+                    title: titles[i],
+                    titleSize: size,
+                    noteSize: noteSize,
+                    emptyNote: texts['emptyNote'],
+                    icon: columns[i].$2,
+                    fill: columns[i].$3,
+                    notes: s.notesOf(columns[i].$1),
+                  ),
+                ),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
+}
+
+/// Width of the text of a note: a third of the text area, minus the gaps and
+/// the 40 px padding on both sides.
+const _noteWidth = (slideTextWidth - 64) / 3 - 80;
+const _noteSizes = [32.0, 30.0, 28.0, 26.0, 24.0, 22.0, 20.0];
+const _headerHeight = 56 + 52.8;
+const _bodyPad = 8 + 24.0;
+
+double _notePad(double size) => (size * 0.6875).roundToDouble();
+
+/// Height a column of [notes] needs at [size].
+double noteColumnHeight(List<String> notes, double size) {
+  var h = _headerHeight + _bodyPad;
+  for (final n in notes) {
+    h +=
+        measureText(n, st(size, height: 1.3), _noteWidth).height +
+        2 * _notePad(size);
+  }
+  return h;
+}
+
+/// The biggest size (32 px down to 20 px) in which every column fits [height].
+double pickNoteSize(List<List<String>> columns, double height) {
+  for (final z in _noteSizes) {
+    if (columns.every((c) => noteColumnHeight(c, z) <= height)) return z;
+  }
+  return _noteSizes.last;
 }
 
 class _NoteColumn extends StatelessWidget {
   const _NoteColumn({
     required this.title,
     required this.titleSize,
+    required this.noteSize,
     required this.emptyNote,
     required this.icon,
     required this.fill,
@@ -102,6 +142,7 @@ class _NoteColumn extends StatelessWidget {
 
   final String title;
   final double titleSize;
+  final double noteSize;
   final String emptyNote;
   final NoteIcon icon;
   final Color fill;
@@ -146,7 +187,9 @@ class _NoteColumn extends StatelessWidget {
                 children: [
                   for (var i = 0; i < rows.length; i++)
                     Container(
-                      padding: const EdgeInsets.symmetric(vertical: 22),
+                      padding: EdgeInsets.symmetric(
+                        vertical: _notePad(noteSize),
+                      ),
                       decoration: BoxDecoration(
                         border: i == 0
                             ? null
@@ -157,7 +200,7 @@ class _NoteColumn extends StatelessWidget {
                       child: Text(
                         rows[i],
                         style: st(
-                          32,
+                          noteSize,
                           height: 1.3,
                           color: notes.isEmpty
                               ? SlidePalette.emptyNote

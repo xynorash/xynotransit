@@ -19,6 +19,7 @@ Future<ApiClient> clientFor(
     tokens: TokenStore(prefs),
     client: MockClient(handler),
     timeout: const Duration(milliseconds: 200),
+    retryDelay: (_) => Duration.zero,
   );
 }
 

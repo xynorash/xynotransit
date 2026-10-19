@@ -44,6 +44,10 @@ class _ExportMenuState extends State<ExportMenu> {
       final pngs = await renderDeckPngs(
         context,
         slides,
+        // PowerPoint is for projectors, often 4K: twice the pixels. PDF and
+        // PNG stay at 1920 x 1080 (building a PDF from bigger pictures is
+        // slow in the browser).
+        pixelRatio: format == _Format.pptx ? pptxPixelRatio : 1,
         isActive: () => mounted,
         onProgress: (i, n) {
           if (mounted) {

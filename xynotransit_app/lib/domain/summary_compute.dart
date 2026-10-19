@@ -5,13 +5,19 @@ import 'report.dart';
 import 'summary.dart';
 
 /// Builds the dashboard numbers from reports. The API computes the same thing
-/// in SQL; this is the version the in-memory demo uses.
+/// in SQL; this is the version the in-memory demo uses, and the contract suite
+/// holds the two against each other.
 ///
 /// Rules, shared with the API:
 /// - only submitted reports count, a report counts whatever the seat's state is now;
+/// - a seat is expected when the seat and its person are both switched on, also
+///   for older periods in the trend;
 /// - volume is the sum of every count of every month;
-/// - [expected] is the number of active seats now, also for older periods;
-/// - counts are grouped by lower case label across seats, the first label seen is shown;
+/// - counts are grouped by lower case label, per seat first and then across
+///   seats; only counts a report has numbers for show up, and the first label
+///   seen (live before retired, then the lower series) is the one shown;
+/// - a team shows when it has an expected seat or a report in the shown period;
+///   a switched off seat shows in the people list only when it has a report;
 /// - [retired] holds counts that were taken off a seat but still sit in old reports.
 Summary computeSummary({
   required Period period,
@@ -21,13 +27,16 @@ Summary computeSummary({
   Map<String, List<MetricDef>> retired = const {},
   int trend = 6,
 }) {
-  final active = catalog.assignments.where((a) => a.active).toList();
   final byId = {for (final a in catalog.assignments) a.id: a};
   final teamName = {for (final t in catalog.teams) t.id: t.name};
+  final expectedSeats = [
+    for (final a in catalog.assignments)
+      if (catalog.isExpected(a)) a,
+  ];
 
-  List<MetricDef> defsOf(Assignment a) => [
-    ...a.metrics,
-    ...(retired[a.id] ?? const <MetricDef>[]),
+  List<(MetricDef, bool)> defsOf(Assignment a) => [
+    for (final m in a.metrics) (m, false),
+    for (final m in retired[a.id] ?? const <MetricDef>[]) (m, true),
   ];
 
   List<Report> submittedOf(String periodId) => [
@@ -38,8 +47,7 @@ Summary computeSummary({
   /// Per month sums of the known counts of one report.
   List<int> monthsOf(Report r) {
     final out = [0, 0, 0];
-    final defs = defsOf(byId[r.assignmentId]!);
-    for (final m in defs) {
+    for (final (m, _) in defsOf(byId[r.assignmentId]!)) {
       for (var i = 0; i < 3; i++) {
         out[i] += r.valueOf(m.id, i);
       }
@@ -51,12 +59,15 @@ Summary computeSummary({
 
   // ---- the shown period ----
   final shown = submittedOf(period.id);
+  final shownBySeat = {for (final r in shown) r.assignmentId: r};
 
   final teams = <TeamSummary>[];
   for (final t in catalog.teams) {
-    final seats = active.where((a) => a.teamId == t.id).length;
-    if (seats == 0) continue;
-    final rs = shown.where((r) => byId[r.assignmentId]!.teamId == t.id);
+    final seats = expectedSeats.where((a) => a.teamId == t.id).length;
+    final rs = shown
+        .where((r) => byId[r.assignmentId]!.teamId == t.id)
+        .toList();
+    if (seats == 0 && rs.isEmpty) continue;
     final months = [0, 0, 0];
     for (final r in rs) {
       final m = monthsOf(r);
@@ -78,56 +89,62 @@ Summary computeSummary({
     );
   }
 
-  // Counts grouped by lower case label, in deck order of first sight.
+  // Counts grouped by lower case label. Seats come in deck order. Inside a seat
+  // the groups come by their lowest series, then by label.
   final order = <String>[];
   final display = <String, String>{};
   final monthsByLabel = <String, List<int>>{};
   final teamsByLabel = <String, Map<String, int>>{};
+  final teamOrderByLabel = <String, List<String>>{};
   for (final a in catalog.assignments) {
-    for (final m in defsOf(a)) {
-      final k = m.label.toLowerCase();
+    final r = shownBySeat[a.id];
+    if (r == null) continue;
+    final seatGroups = <String, _SeatGroup>{};
+    for (final (m, isRetired) in defsOf(a)) {
+      // A count a report holds no numbers for (added after it was sent) is out.
+      if (!r.values.containsKey(m.id)) continue;
+      seatGroups
+          .putIfAbsent(m.label.toLowerCase(), _SeatGroup.new)
+          .add(m, isRetired, r);
+    }
+    final keys = seatGroups.keys.toList()
+      ..sort((x, y) {
+        final c = seatGroups[x]!.minSeries.compareTo(seatGroups[y]!.minSeries);
+        return c != 0 ? c : x.compareTo(y);
+      });
+    final team = teamName[a.teamId] ?? '';
+    for (final k in keys) {
+      final g = seatGroups[k]!;
       if (!display.containsKey(k)) {
         order.add(k);
-        display[k] = m.label;
+        display[k] = g.label;
         monthsByLabel[k] = [0, 0, 0];
         teamsByLabel[k] = {};
+        teamOrderByLabel[k] = [];
       }
-    }
-  }
-  for (final r in shown) {
-    final a = byId[r.assignmentId]!;
-    for (final m in defsOf(a)) {
-      final k = m.label.toLowerCase();
-      final team = teamName[a.teamId] ?? '';
       var sum = 0;
       for (var i = 0; i < 3; i++) {
-        final v = r.valueOf(m.id, i);
-        monthsByLabel[k]![i] += v;
-        sum += v;
+        monthsByLabel[k]![i] += g.months[i];
+        sum += g.months[i];
       }
-      teamsByLabel[k]![team] = (teamsByLabel[k]![team] ?? 0) + sum;
+      final byTeam = teamsByLabel[k]!;
+      if (!byTeam.containsKey(team)) teamOrderByLabel[k]!.add(team);
+      byTeam[team] = (byTeam[team] ?? 0) + sum;
     }
   }
-  final teamOrder = {for (final t in catalog.teams) t.name: t.sort};
   final metrics = [
     for (final k in order)
       MetricSummary(
         label: display[k]!,
         total: monthsByLabel[k]!.fold(0, (a, b) => a + b),
         byMonth: monthsByLabel[k]!,
-        byTeam:
-            [
-              for (final e in teamsByLabel[k]!.entries)
-                (team: e.key, total: e.value),
-            ]..sort((a, b) {
-              final c = b.total.compareTo(a.total);
-              return c != 0
-                  ? c
-                  : (teamOrder[a.team] ?? 0).compareTo(teamOrder[b.team] ?? 0);
-            }),
+        byTeam: _byTotalDesc([
+          for (final team in teamOrderByLabel[k]!)
+            (team: team, total: teamsByLabel[k]![team]!),
+        ]),
       ),
   ];
-  // Dart's sort is not stable for lists, so the tie break is the first sight.
+  // Biggest first; equal totals keep the order they were first seen in.
   final rank = {for (var i = 0; i < metrics.length; i++) metrics[i].label: i};
   metrics.sort((a, b) {
     final c = b.total.compareTo(a.total);
@@ -135,8 +152,9 @@ Summary computeSummary({
   });
 
   final people = <PersonSummary>[];
-  for (final a in active) {
-    final r = shown.where((r) => r.assignmentId == a.id).firstOrNull;
+  for (final a in catalog.assignments) {
+    final r = shownBySeat[a.id];
+    if (!catalog.isExpected(a) && r == null) continue;
     people.add(
       PersonSummary(
         assignmentId: a.id,
@@ -169,7 +187,7 @@ Summary computeSummary({
           periodId: p.id,
           label: p.label,
           startMonth: p.startMonth,
-          expected: active.length,
+          expected: expectedSeats.length,
           submitted: rs.length,
           met: rs.fold(0, (n, r) => n + r.kpiCount(KpiStatus.met)),
           partly: rs.fold(0, (n, r) => n + r.kpiCount(KpiStatus.partly)),
@@ -183,11 +201,52 @@ Summary computeSummary({
     periodId: period.id,
     periodLabel: period.label,
     months: period.months,
-    expected: active.length,
+    expected: expectedSeats.length,
     submitted: shown.length,
     teams: teams,
     metrics: metrics,
     trend: trendPoints,
     people: people,
   );
+}
+
+/// Counts of one label inside one seat: a live name wins over a retired one,
+/// then the lower series, then the id.
+class _SeatGroup {
+  String label = '';
+  bool _labelRetired = true;
+  int _labelSeries = 1 << 30;
+  String _labelId = '';
+  int minSeries = 1 << 30;
+  final months = [0, 0, 0];
+
+  void add(MetricDef m, bool isRetired, Report r) {
+    for (var i = 0; i < 3; i++) {
+      months[i] += r.valueOf(m.id, i);
+    }
+    if (m.series < minSeries) minSeries = m.series;
+    final better =
+        label.isEmpty ||
+        (isRetired ? 1 : 0) < (_labelRetired ? 1 : 0) ||
+        ((isRetired ? 1 : 0) == (_labelRetired ? 1 : 0) &&
+            (m.series < _labelSeries ||
+                (m.series == _labelSeries && m.id.compareTo(_labelId) < 0)));
+    if (better) {
+      label = m.label;
+      _labelRetired = isRetired;
+      _labelSeries = m.series;
+      _labelId = m.id;
+    }
+  }
+}
+
+/// Stable: equal totals keep their order.
+List<({String team, int total})> _byTotalDesc(
+  List<({String team, int total})> rows,
+) {
+  final rank = {for (var i = 0; i < rows.length; i++) rows[i].team: i};
+  return [...rows]..sort((a, b) {
+    final c = b.total.compareTo(a.total);
+    return c != 0 ? c : rank[a.team]!.compareTo(rank[b.team]!);
+  });
 }

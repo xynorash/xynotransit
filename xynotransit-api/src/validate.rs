@@ -8,12 +8,11 @@ use uuid::Uuid;
 
 use crate::snapshot::{month_at, month_long};
 
-pub const NOTE_MAX_CHARS: usize = 70;
-pub const NOTES_PER_KIND: usize = 3;
-pub const COMMENT_MAX_CHARS: usize = 200;
-pub const VALUE_MAX: i64 = 1_000_000_000;
-pub const NOTE_KINDS: [&str; 3] = ["well", "wrong", "next"];
-pub const KPI_STATUSES: [&str; 3] = ["met", "partly", "missed"];
+use crate::rules::msg;
+pub use crate::rules::{
+    COMMENT_MAX_CHARS, KPI_STATUSES, NOTES_PER_KIND, NOTE_KINDS, NOTE_MAX_CHARS,
+    REPORTER_MAX_CHARS, VALUE_MAX, VALUE_MIN,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ValueIn {
@@ -36,8 +35,6 @@ pub struct NoteIn {
     pub position: i16,
     pub text: String,
 }
-
-pub const REPORTER_MAX_CHARS: usize = 80;
 
 /// Who the report is from, in the reporter's own words.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -65,16 +62,14 @@ impl ReporterIn {
 fn field_problem(value: &str, what: &str) -> Option<String> {
     let t = value.trim();
     if t.is_empty() {
-        Some(format!("Enter your {what}."))
+        Some(msg::REPORTER_EMPTY.replace("{what}", what))
     } else if t.chars().count() > REPORTER_MAX_CHARS {
-        Some(format!(
-            "Your {what} can be at most {REPORTER_MAX_CHARS} characters."
-        ))
+        Some(msg::REPORTER_LONG.replace("{what}", what))
     } else if t
         .chars()
         .any(|c| c.is_control() || crate::rules::is_invisible(c))
     {
-        Some(format!("Your {what} must be plain text on one line."))
+        Some(msg::REPORTER_PLAIN.replace("{what}", what))
     } else {
         None
     }
@@ -128,17 +123,17 @@ pub fn validate(
         .iter()
         .any(|v| !metric_ids.contains(&v.metric_def_id))
     {
-        problems.push("One of the numbers does not belong to this report.".to_string());
+        problems.push(msg::VALUE_NOT_YOURS.to_string());
     }
     if input.kpis.iter().any(|k| !kpi_set.contains(&k.kpi_def_id)) {
-        problems.push("One of the targets does not belong to this report.".to_string());
+        problems.push(msg::KPI_NOT_YOURS.to_string());
     }
     if input
         .values
         .iter()
         .any(|v| !(0..=2).contains(&v.month_offset))
     {
-        problems.push("A number is for a month outside this period.".to_string());
+        problems.push(msg::MONTH_OUTSIDE.to_string());
     }
     let mut seen_values = HashSet::new();
     if input
@@ -146,18 +141,18 @@ pub fn validate(
         .iter()
         .any(|v| !seen_values.insert((v.metric_def_id, v.month_offset)))
     {
-        problems.push("A number was entered twice for the same month.".to_string());
+        problems.push(msg::VALUE_TWICE.to_string());
     }
     let mut seen_kpis = HashSet::new();
     if input.kpis.iter().any(|k| !seen_kpis.insert(k.kpi_def_id)) {
-        problems.push("A target was answered twice.".to_string());
+        problems.push(msg::KPI_TWICE.to_string());
     }
     if input
         .kpis
         .iter()
         .any(|k| !KPI_STATUSES.contains(&k.status.as_str()))
     {
-        problems.push("Answer each target with met, partly or missed.".to_string());
+        problems.push(msg::KPI_STATUS.to_string());
     }
 
     // Step 2: a number for every month of every metric (first gap per metric).
@@ -172,11 +167,11 @@ pub fn validate(
                 matches!(given.get(&(m.id, offset)), Some(Some(x)) if (0..=VALUE_MAX).contains(x));
             if !ok {
                 let month = month_at(start_month, offset as u32).month();
-                problems.push(format!(
-                    "Enter a number for \"{}\" in {}.",
-                    m.label,
-                    month_long(month)
-                ));
+                problems.push(
+                    msg::VALUE_MISSING
+                        .replace("{label}", &m.label)
+                        .replace("{month}", month_long(month)),
+                );
                 break;
             }
         }
@@ -187,7 +182,7 @@ pub fn validate(
         .iter()
         .any(|v| v.value.is_some_and(|x| x > VALUE_MAX))
     {
-        problems.push(format!("A number can be at most {VALUE_MAX}."));
+        problems.push(msg::VALUE_TOO_BIG.to_string());
     }
 
     // Step 3: every active target answered.
@@ -199,16 +194,14 @@ pub fn validate(
         .collect();
     let left = kpi_ids.iter().filter(|id| !answered.contains(id)).count();
     if left > 0 {
-        problems.push(format!("Answer all targets in step 3 ({left} left)."));
+        problems.push(msg::KPIS_LEFT.replace("{left}", &left.to_string()));
     }
     if input
         .kpis
         .iter()
         .any(|k| k.comment.as_deref().map_or(0, |c| c.trim().chars().count()) > COMMENT_MAX_CHARS)
     {
-        problems.push(format!(
-            "A comment can be at most {COMMENT_MAX_CHARS} characters."
-        ));
+        problems.push(msg::COMMENT_LONG.to_string());
     }
 
     // Postgres cannot store NUL in text; refuse it here instead of failing later.
@@ -218,7 +211,7 @@ pub fn validate(
             .iter()
             .any(|k| k.comment.as_deref().is_some_and(|c| c.contains('\0')))
     {
-        problems.push("Text cannot contain control characters.".to_string());
+        problems.push(msg::NUL_TEXT.to_string());
     }
 
     // Step 4: short notes.
@@ -227,35 +220,33 @@ pub fn validate(
         .iter()
         .any(|n| !NOTE_KINDS.contains(&n.kind.as_str()))
     {
-        problems.push("A note is in a box that does not exist.".to_string());
+        problems.push(msg::NOTE_BOX.to_string());
     }
     for kind in NOTE_KINDS {
         let of_kind: Vec<&NoteIn> = input.notes.iter().filter(|n| n.kind == kind).collect();
         if of_kind.len() > NOTES_PER_KIND {
-            problems.push(format!("Write at most {NOTES_PER_KIND} notes per box."));
+            problems.push(msg::NOTES_TOO_MANY.to_string());
         }
         if of_kind
             .iter()
             .any(|n| !(1..=NOTES_PER_KIND as i16).contains(&n.position))
         {
-            problems.push(format!("Notes are numbered 1 to {NOTES_PER_KIND}."));
+            problems.push(msg::NOTE_NUMBER.to_string());
         }
         let mut seen = HashSet::new();
         if of_kind.iter().any(|n| !seen.insert(n.position)) {
-            problems.push("Two notes in the same box have the same number.".to_string());
+            problems.push(msg::NOTE_SAME_NUMBER.to_string());
         }
     }
     if input.notes.iter().any(|n| n.text.trim().is_empty()) {
-        problems.push("A note cannot be empty.".to_string());
+        problems.push(msg::NOTE_EMPTY.to_string());
     }
     if input
         .notes
         .iter()
         .any(|n| n.text.trim().chars().count() > NOTE_MAX_CHARS)
     {
-        problems.push(format!(
-            "A note can be at most {NOTE_MAX_CHARS} characters."
-        ));
+        problems.push(msg::NOTE_LONG.to_string());
     }
 
     problems

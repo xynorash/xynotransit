@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use xynotransit_api::{
-    bootstrap_controller, build_router, config::Config, listener, mail::Mailer, state::AppState,
+    bootstrap_controller, config::Config, listener, mail::Mailer, serve, state::AppState,
 };
 
 #[tokio::main]
@@ -10,12 +10,18 @@ async fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
         std::process::exit(if healthcheck() { 0 } else { 1 });
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sqlx=warn".into()),
-        )
-        .init();
+    // LOG_FORMAT=json writes one JSON object per line (for a log collector); anything else is text.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,sqlx=warn".into());
+    if std::env::var("LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json")) {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(filter)
+            .with_current_span(true)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+    }
 
     let config = Config::from_env().map_err(|e| anyhow::anyhow!(e))?;
     let pool = connect(&config.database_url).await?;
@@ -31,27 +37,31 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(pool.clone(), config, mailer);
     listener::start(pool, state.events.clone()).await;
 
-    let app = build_router(state);
     let tcp = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(%bind, "listening");
 
-    // Open event streams never end by themselves, so give them a few seconds on shutdown.
-    let server = axum::serve(tcp, app).with_graceful_shutdown(shutdown_signal());
-    tokio::select! {
-        r = server => r?,
-        _ = async { shutdown_signal().await; tokio::time::sleep(Duration::from_secs(5)).await } => {}
-    }
+    serve(tcp, state, shutdown_signal()).await?;
+    tracing::info!("stopped");
     Ok(())
 }
 
 /// The database may still be starting; try for about a minute.
 async fn connect(url: &str) -> anyhow::Result<sqlx::PgPool> {
+    // Limits on the database side too, so one stuck query or forgotten transaction cannot hold
+    // a connection (and a request) forever. Both stay below the 30 second request timeout.
+    let options = url
+        .parse::<PgConnectOptions>()?
+        .application_name("xynotransit-api")
+        .options([
+            ("statement_timeout", "20000"),
+            ("idle_in_transaction_session_timeout", "30000"),
+        ]);
     let mut last = None;
     for attempt in 1..=30 {
         match PgPoolOptions::new()
             .max_connections(10)
             .acquire_timeout(Duration::from_secs(10))
-            .connect(url)
+            .connect_with(options.clone())
             .await
         {
             Ok(p) => return Ok(p),

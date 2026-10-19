@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/material.dart' show Curves, FocusNode, Scrollable;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
@@ -21,6 +23,9 @@ class FormModel {
     this.phase = SendPhase.idle,
     this.message,
     this.epoch = 0,
+    this.attempted = false,
+    this.draftSavedAt,
+    this.notice,
   });
 
   final String? assignmentId;
@@ -37,6 +42,17 @@ class FormModel {
   /// Bumped when a different report is loaded, so inputs reset their text.
   final int epoch;
 
+  /// True after a Send that found gaps, until the report is sent or another
+  /// one is loaded. The fields then show what is still missing.
+  final bool attempted;
+
+  /// When the draft was last kept on this device.
+  final DateTime? draftSavedAt;
+
+  /// Plain words about what changed under the person, for example counts that
+  /// the manager removed since the draft was saved.
+  final String? notice;
+
   bool get hasPerson => assignmentId != null && report != null;
 
   FormModel copyWith({
@@ -49,6 +65,11 @@ class FormModel {
     String? message,
     bool clearMessage = false,
     int? epoch,
+    bool? attempted,
+    DateTime? draftSavedAt,
+    bool clearDraftSavedAt = false,
+    String? notice,
+    bool clearNotice = false,
   }) => FormModel(
     assignmentId: assignmentId ?? this.assignmentId,
     report: report ?? this.report,
@@ -57,6 +78,11 @@ class FormModel {
     phase: phase ?? this.phase,
     message: clearMessage ? null : (message ?? this.message),
     epoch: epoch ?? this.epoch,
+    attempted: attempted ?? this.attempted,
+    draftSavedAt: clearDraftSavedAt
+        ? null
+        : (draftSavedAt ?? this.draftSavedAt),
+    notice: clearNotice ? null : (notice ?? this.notice),
   );
 }
 
@@ -88,6 +114,8 @@ class FormController extends Notifier<FormModel> {
       'draft/${Period.dateOnly(p.startMonth)}/$assignmentId';
   String _pendingKey(Period p, String assignmentId) =>
       'pending/${Period.dateOnly(p.startMonth)}/$assignmentId';
+  String _draftAtKey(Period p, String assignmentId) =>
+      'draftat/${Period.dateOnly(p.startMonth)}/$assignmentId';
 
   /// Pick a person, or null to clear the choice.
   Future<void> selectAssignment(String? id) async {
@@ -125,7 +153,21 @@ class FormController extends Notifier<FormModel> {
       }
     }
     final queued = prefs.containsKey(_pendingKey(period, assignmentId));
+    final savedAt = draft == null
+        ? null
+        : DateTime.tryParse(
+            prefs.getString(_draftAtKey(period, assignmentId)) ?? '',
+          );
+    // The manager may have changed counts or targets since the draft was typed.
+    String? notice;
+    final seat = _catalog.assignmentById(assignmentId);
+    if (draft != null && seat != null) {
+      final rec = draft.reconciliation(seat);
+      draft = rec.report;
+      notice = reconcileNotice(rec);
+    }
     var working = draft ?? _workingCopy(existing, period.id, assignmentId);
+    if (draft == null && seat != null) working = working.reconcile(seat);
     working = working.copyWith(
       reporter:
           working.reporter ??
@@ -138,6 +180,8 @@ class FormController extends Notifier<FormModel> {
       assignmentId: assignmentId,
       report: working,
       sentAt: existing?.submittedAt,
+      draftSavedAt: savedAt,
+      notice: notice,
       phase: queued ? SendPhase.queued : SendPhase.idle,
       message: queued
           ? 'Saved on this device. It will be sent when you are back online.'
@@ -191,6 +235,7 @@ class FormController extends Notifier<FormModel> {
     final period = _period;
     if (period == null) return;
     ref.read(prefsProvider).remove(_draftKey(period, r.assignmentId));
+    ref.read(prefsProvider).remove(_draftAtKey(period, r.assignmentId));
     final working = _workingCopy(
       r,
       period.id,
@@ -212,8 +257,15 @@ class FormController extends Notifier<FormModel> {
       problems: const [],
       phase: SendPhase.idle,
       clearMessage: true,
+      draftSavedAt: ref.read(clockProvider)(),
     );
     _saveDraft();
+  }
+
+  /// Back to editing after "Sent": the report stays as it was sent.
+  void editAgain() {
+    if (state.phase != SendPhase.sent) return;
+    state = state.copyWith(phase: SendPhase.idle, clearMessage: true);
   }
 
   void _saveDraft() {
@@ -221,11 +273,14 @@ class FormController extends Notifier<FormModel> {
     final r = state.report;
     final id = state.assignmentId;
     if (period == null || r == null || id == null) return;
+    final prefs = ref.read(prefsProvider);
     unawaited(
-      ref
-          .read(prefsProvider)
-          .setString(_draftKey(period, id), jsonEncode(r.toDraftJson())),
+      prefs.setString(_draftKey(period, id), jsonEncode(r.toDraftJson())),
     );
+    final at = state.draftSavedAt;
+    if (at != null) {
+      unawaited(prefs.setString(_draftAtKey(period, id), at.toIso8601String()));
+    }
   }
 
   void setValue(String metricId, int month, int? value) {
@@ -338,6 +393,7 @@ class FormController extends Notifier<FormModel> {
     if (problems.isNotEmpty) {
       state = state.copyWith(
         problems: problems,
+        attempted: true,
         phase: SendPhase.idle,
         clearMessage: true,
       );
@@ -356,9 +412,13 @@ class FormController extends Notifier<FormModel> {
     try {
       final saved = await ref.read(repositoryProvider).sendReport(r);
       await prefs.remove(_draftKey(period, r.assignmentId));
+      await prefs.remove(_draftAtKey(period, r.assignmentId));
       await prefs.remove(_pendingKey(period, r.assignmentId));
       if (state.assignmentId == r.assignmentId) {
         state = state.copyWith(
+          attempted: false,
+          clearNotice: true,
+          clearDraftSavedAt: true,
           phase: SendPhase.sent,
           sentAt: saved.submittedAt,
           clearMessage: true,
@@ -448,3 +508,118 @@ class FormController extends Notifier<FormModel> {
 final formControllerProvider = NotifierProvider<FormController, FormModel>(
   FormController.new,
 );
+
+/// Where something is still missing in the form, in the order of the page.
+enum FormPart { who, numbers, targets }
+
+class FormGap {
+  const FormGap(this.fieldId, this.part, this.message);
+
+  /// Id of the control to focus, see [FieldFocus].
+  final String fieldId;
+  final FormPart part;
+
+  /// Plain words shown under the control.
+  final String message;
+}
+
+String numberFieldId(String metricId, int month) => 'm:$metricId:$month';
+String targetFieldId(String kpiId) => 'k:$kpiId';
+
+/// What a person still has to fill in before Send works, in page order:
+/// name, country, role, each missing number, each unanswered target. Pure, so
+/// the progress summary, the inline errors and the focus after a failed Send
+/// all agree.
+List<FormGap> formGaps(Report r, Assignment a) {
+  final gaps = <FormGap>[];
+  final who = r.reporter ?? const Reporter();
+  final seen = <String>{};
+  for (final p in who.problems()) {
+    final lower = p.toLowerCase();
+    for (final f in const ['name', 'country', 'role']) {
+      if (lower.contains('your $f') && seen.add(f)) {
+        gaps.add(FormGap(f, FormPart.who, p));
+      }
+    }
+  }
+  for (final m in a.metrics) {
+    final v = r.values[m.id];
+    for (var i = 0; i < 3; i++) {
+      final x = v != null && i < v.length ? v[i] : null;
+      if (x == null || x < 0) {
+        gaps.add(
+          FormGap(numberFieldId(m.id, i), FormPart.numbers, 'Enter a number'),
+        );
+      }
+    }
+  }
+  for (final k in a.kpis) {
+    if (r.kpis[k.id] == null) {
+      gaps.add(
+        FormGap(
+          targetFieldId(k.id),
+          FormPart.targets,
+          'Choose Met, Partly or Missed',
+        ),
+      );
+    }
+  }
+  return gaps;
+}
+
+/// Focus nodes of the controls that can be missing, by id, so a failed Send or
+/// the progress summary can move focus (and the page) to one of them.
+class FieldFocus {
+  final _nodes = <String, FocusNode>{};
+
+  FocusNode node(String id) =>
+      _nodes.putIfAbsent(id, () => FocusNode(debugLabel: id));
+
+  /// Scrolls to the control and focuses it. False when it is not on screen.
+  bool focus(String id, {bool animate = true}) {
+    final n = _nodes[id];
+    final ctx = n?.context;
+    if (n == null || ctx == null) return false;
+    unawaited(
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.25,
+        duration: animate ? const Duration(milliseconds: 250) : Duration.zero,
+        curve: Curves.easeOut,
+      ),
+    );
+    n.requestFocus();
+    return true;
+  }
+
+  void dispose() {
+    for (final n in _nodes.values) {
+      n.dispose();
+    }
+    _nodes.clear();
+  }
+}
+
+final fieldFocusProvider = Provider<FieldFocus>((ref) {
+  final f = FieldFocus();
+  ref.onDispose(f.dispose);
+  return f;
+});
+
+/// Words for the person when a saved draft no longer matches the seat, or null
+/// when nothing they typed was lost.
+String? reconcileNotice(Reconciliation rec) {
+  if (!rec.lostAnswers && rec.openCounts == 0 && rec.openTargets == 0) {
+    return null;
+  }
+  final lost = <String>[
+    if (rec.droppedCounts > 0)
+      '${rec.droppedCounts} ${rec.droppedCounts == 1 ? 'count' : 'counts'}',
+    if (rec.droppedTargets > 0)
+      '${rec.droppedTargets} ${rec.droppedTargets == 1 ? 'target' : 'targets'}',
+  ];
+  if (lost.isEmpty) return null;
+  return 'Your manager changed this role since you saved your draft. '
+      '${lost.join(' and ')} you answered no longer exist and ${lost.length == 1 && rec.droppedCounts + rec.droppedTargets == 1 ? 'was' : 'were'} removed. '
+      'Please check the numbers and targets.';
+}

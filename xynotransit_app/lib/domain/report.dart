@@ -1,16 +1,22 @@
 import 'catalog.dart';
 import 'enums.dart';
 import 'period.dart';
+import 'numbers.dart';
+import 'text_rules.dart';
 
 /// Rules for the short notes under each box.
 abstract final class NoteRules {
   static const maxCount = 3;
   static const maxLength = 70;
 
-  /// Trimmed text, or null when empty or too long.
+  /// Largest number a count can hold, and the smallest.
+  static const valueMax = countMax;
+
+  /// Trimmed text, or null when empty or too long. Length is in characters
+  /// (an emoji is one), as the server counts.
   static String? clean(String raw) {
-    final t = raw.trim();
-    if (t.isEmpty || t.length > maxLength) return null;
+    final t = trimText(raw);
+    if (t.isEmpty || charCount(t) > maxLength) return null;
     return t;
   }
 
@@ -36,14 +42,10 @@ class Reporter {
 
   static const maxLength = 80;
 
-  /// Control, format (zero width) and separator characters, bar the plain space.
-  static final _hidden = RegExp(
-    r'[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]|(?!\u0020)\p{Zs}',
-    unicode: true,
-  );
-
-  /// True when [s] holds only visible characters and plain spaces.
-  static bool isPlain(String s) => !_hidden.hasMatch(s);
+  /// True when [s] has no control or invisible character, as the server
+  /// judges it (lib/domain/text_rules.dart). Odd spaces are not a problem:
+  /// they are turned into plain spaces when the report is sent.
+  static bool isPlain(String s) => !hasHiddenChars(s);
 
   final String name;
   final String country;
@@ -57,38 +59,38 @@ class Reporter {
 
   /// Plain-language problems, in the order of the fields.
   List<String> problems() => [
-    if (name.trim().isEmpty)
-      'Enter your name.'
-    else if (name.trim().runes.length > maxLength)
-      'Your name can be at most $maxLength characters.'
-    else if (!isPlain(name.trim()))
-      'Your name can only use plain text.',
-    if (country.trim().isEmpty)
-      'Enter your country.'
-    else if (country.trim().runes.length > maxLength)
-      'Your country can be at most $maxLength characters.'
-    else if (!isPlain(country.trim()))
-      'Your country can only use plain text.',
-    if (role.trim().isEmpty)
-      'Enter your role.'
-    else if (role.trim().runes.length > maxLength)
-      'Your role can be at most $maxLength characters.'
-    else if (!isPlain(role.trim()))
-      'Your role can only use plain text.',
+    ?_problem(name, 'name'),
+    ?_problem(country, 'country'),
+    ?_problem(role, 'role'),
   ];
 
+  static String? _problem(String value, String what) {
+    final t = trimText(plainSpaces(value));
+    if (t.isEmpty) return 'Enter your $what.';
+    if (charCount(t) > maxLength) {
+      return 'Your $what can be at most $maxLength characters.';
+    }
+    if (!isPlain(t)) return 'Your $what must be plain text on one line.';
+    return null;
+  }
+
   Map<String, Object?> toJson() => {
-    'name': name.trim(),
-    'country': country.trim(),
-    'role': role.trim(),
+    'name': trimText(plainSpaces(name)),
+    'country': trimText(plainSpaces(country)),
+    'role': trimText(plainSpaces(role)),
   };
 
   static Reporter? fromJson(Object? j) {
-    if (j is! Map<String, Object?>) return null;
+    if (j is! Map) return null;
+    String text(String k) {
+      final v = j[k];
+      return v is String ? v : '';
+    }
+
     return Reporter(
-      name: (j['name'] as String?) ?? '',
-      country: (j['country'] as String?) ?? '',
-      role: (j['role'] as String?) ?? '',
+      name: text('name'),
+      country: text('country'),
+      role: text('role'),
     );
   }
 
@@ -176,24 +178,126 @@ class Report {
     reporter: reporter ?? this.reporter,
   );
 
-  /// Plain-language problems that block sending. Empty means ready.
+  /// Plain-language problems that block sending, in the order the server finds
+  /// them and with the same words (the server sends the first one back).
+  /// Empty means ready.
   List<String> validate(Assignment a, Period p) {
-    final problems = <String>[...?reporter?.problems()];
-    if (reporter == null) problems.addAll(const Reporter().problems());
+    final problems = <String>[];
+    problems.addAll((reporter ?? const Reporter()).problems());
+
+    // Ids must belong to this seat's live counts and targets.
+    final metricIds = {for (final m in a.metrics) m.id};
+    final kpiIds = {for (final k in a.kpis) k.id};
+    if (values.keys.any((id) => !metricIds.contains(id))) {
+      problems.add('One of the numbers does not belong to this report.');
+    }
+    if (kpis.keys.any((id) => !kpiIds.contains(id))) {
+      problems.add('One of the targets does not belong to this report.');
+    }
+
+    // Step 2: a number for every month of every count (first gap per count).
     final months = p.months;
     for (final m in a.metrics) {
       final v = values[m.id];
       for (var i = 0; i < 3; i++) {
         final x = v != null && i < v.length ? v[i] : null;
-        if (x == null || x < 0) {
+        if (x == null || x < 0 || x > NoteRules.valueMax) {
           problems.add('Enter a number for "${m.label}" in ${months[i].long}.');
           break;
         }
       }
     }
+    if (values.values.any(
+      (v) => v.any((x) => x != null && x > NoteRules.valueMax),
+    )) {
+      problems.add('A number can be at most ${NoteRules.valueMax}.');
+    }
+
+    // Step 3: every target answered.
     final left = a.kpis.where((k) => kpis[k.id] == null).length;
     if (left > 0) problems.add('Answer all targets in step 3 ($left left).');
+    if (kpis.values.any((r) => charCount(trimText(r.comment ?? '')) > 200)) {
+      problems.add('A comment can be at most 200 characters.');
+    }
+
+    // Text the database cannot store.
+    if (notes.values.any((l) => l.any((t) => t.contains('\u0000'))) ||
+        kpis.values.any((r) => (r.comment ?? '').contains('\u0000'))) {
+      problems.add('Text cannot contain control characters.');
+    }
+
+    // Step 4: short notes.
+    if (notes.values.any((l) => l.length > NoteRules.maxCount)) {
+      problems.add('Write at most ${NoteRules.maxCount} notes per box.');
+    }
+    if (notes.values.any((l) => l.any((t) => trimText(t).isEmpty))) {
+      problems.add('A note cannot be empty.');
+    }
+    if (notes.values.any(
+      (l) => l.any((t) => charCount(trimText(t)) > NoteRules.maxLength),
+    )) {
+      problems.add('A note can be at most ${NoteRules.maxLength} characters.');
+    }
     return problems;
+  }
+
+  /// This report cut to what [a] defines now: values and answers for counts and
+  /// targets that no longer exist are dropped, everything else is kept. Use it
+  /// on a saved draft before it goes back on the form, because a manager may
+  /// have retired, added or renamed counts and targets since it was typed.
+  ///
+  /// A count keeps its numbers when it is renamed (same id). A target whose
+  /// words were changed is a new target (new id), so its old answer is dropped:
+  /// it answered other words.
+  Report reconcile(Assignment a) => reconciliation(a).report;
+
+  /// Same as [reconcile], with what changed, for a notice to the person.
+  Reconciliation reconciliation(Assignment a) {
+    final metricIds = {for (final m in a.metrics) m.id};
+    final kpiIds = {for (final k in a.kpis) k.id};
+    final keptValues = <String, List<int?>>{};
+    var droppedCounts = 0;
+    for (final e in values.entries) {
+      if (metricIds.contains(e.key)) {
+        keptValues[e.key] = [
+          for (var i = 0; i < 3; i++) i < e.value.length ? e.value[i] : null,
+        ];
+      } else if (e.value.any((x) => x != null)) {
+        droppedCounts++;
+      }
+    }
+    final keptKpis = <String, KpiResult>{};
+    var droppedTargets = 0;
+    for (final e in kpis.entries) {
+      if (kpiIds.contains(e.key)) {
+        keptKpis[e.key] = e.value;
+      } else {
+        droppedTargets++;
+      }
+    }
+    final newCounts = a.metrics
+        .where((m) => (keptValues[m.id] ?? const []).every((x) => x == null))
+        .length;
+    final newTargets = a.kpis.where((k) => !keptKpis.containsKey(k.id)).length;
+    return Reconciliation(
+      Report(
+        id: id,
+        periodId: periodId,
+        assignmentId: assignmentId,
+        status: status,
+        submittedAt: submittedAt,
+        values: keptValues,
+        kpis: keptKpis,
+        notes: {
+          for (final k in NoteKind.values) k: [...notesOf(k)],
+        },
+        reporter: reporter,
+      ),
+      droppedCounts: droppedCounts,
+      droppedTargets: droppedTargets,
+      openCounts: newCounts,
+      openTargets: newTargets,
+    );
   }
 
   /// Local draft storage.
@@ -207,32 +311,50 @@ class Report {
     if (reporter != null) 'reporter': reporter!.toJson(),
   };
 
+  /// Reads a saved draft. A draft is only ever a convenience, so anything in it
+  /// that does not look right is skipped instead of failing: a damaged draft
+  /// gives a smaller draft, never an exception.
   static Report fromDraftJson(
     String periodId,
     String assignmentId,
     Map<String, Object?> j,
   ) {
     final values = <String, List<int?>>{};
-    final rawValues = (j['values'] as Map<String, Object?>?) ?? const {};
-    for (final e in rawValues.entries) {
-      values[e.key] = [
-        for (final x in e.value! as List<Object?>) (x as num?)?.toInt(),
-      ];
+    final rawValues = j['values'];
+    if (rawValues is Map) {
+      for (final e in rawValues.entries) {
+        final v = e.value;
+        if (e.key is! String || v is! List) continue;
+        values[e.key as String] = [
+          for (final x in v) x is num && x.isFinite ? x.toInt() : null,
+        ];
+      }
     }
     final kpis = <String, KpiResult>{};
-    final rawKpis = (j['kpis'] as Map<String, Object?>?) ?? const {};
-    for (final e in rawKpis.entries) {
-      final m = e.value! as Map<String, Object?>;
-      final s = KpiStatus.tryParse(m['status'] as String?);
-      if (s != null) {
-        kpis[e.key] = KpiResult(s, comment: m['comment'] as String?);
+    final rawKpis = j['kpis'];
+    if (rawKpis is Map) {
+      for (final e in rawKpis.entries) {
+        final m = e.value;
+        if (e.key is! String || m is! Map) continue;
+        final st = m['status'];
+        final s = KpiStatus.tryParse(st is String ? st : null);
+        if (s == null) continue;
+        final c = m['comment'];
+        kpis[e.key as String] = KpiResult(s, comment: c is String ? c : null);
       }
     }
     final notes = {for (final k in NoteKind.values) k: <String>[]};
-    final rawNotes = (j['notes'] as Map<String, Object?>?) ?? const {};
-    for (final k in NoteKind.values) {
-      final l = rawNotes[k.name] as List<Object?>?;
-      if (l != null) notes[k] = [for (final s in l) s! as String];
+    final rawNotes = j['notes'];
+    if (rawNotes is Map) {
+      for (final k in NoteKind.values) {
+        final l = rawNotes[k.name];
+        if (l is List) {
+          notes[k] = [
+            for (final s in l)
+              if (s is String) s,
+          ];
+        }
+      }
     }
     return Report(
       periodId: periodId,
@@ -243,4 +365,32 @@ class Report {
       reporter: Reporter.fromJson(j['reporter']),
     );
   }
+}
+
+/// What [Report.reconcile] did to a draft.
+class Reconciliation {
+  const Reconciliation(
+    this.report, {
+    required this.droppedCounts,
+    required this.droppedTargets,
+    required this.openCounts,
+    required this.openTargets,
+  });
+
+  final Report report;
+
+  /// Counts that were typed in but no longer exist on the seat.
+  final int droppedCounts;
+
+  /// Answered targets that no longer exist on the seat.
+  final int droppedTargets;
+
+  /// Counts of the seat that have no number yet.
+  final int openCounts;
+
+  /// Targets of the seat that have no answer yet.
+  final int openTargets;
+
+  /// True when something the person typed or chose had to be dropped.
+  bool get lostAnswers => droppedCounts > 0 || droppedTargets > 0;
 }

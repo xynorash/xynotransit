@@ -16,8 +16,8 @@ pub fn router() -> Router<AppState> {
         .route("/auth/verify", post(verify))
 }
 
-pub const MAX_LINKS_PER_HOUR: i64 = 5;
-const LINK_MINUTES: i32 = 15;
+pub use crate::rules::MAX_LINKS_PER_HOUR;
+use crate::rules::{EMAIL_MAX, LINK_MINUTES};
 
 #[derive(Deserialize)]
 struct MagicLinkBody {
@@ -29,8 +29,8 @@ async fn magic_link(
     ApiJson(body): ApiJson<MagicLinkBody>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let email = body.email.trim().to_lowercase();
-    if email.len() > 254 || !email.contains('@') || email.chars().any(char::is_control) {
-        return Err(ApiError::bad("Enter a valid email address."));
+    if email.len() > EMAIL_MAX || !email.contains('@') || email.chars().any(char::is_control) {
+        return Err(ApiError::bad(crate::rules::msg::EMAIL_INVALID));
     }
 
     // The limit is keyed by the normalised email string, not by the person, so a known and an
@@ -56,7 +56,7 @@ async fn magic_link(
     if counted == 0 {
         tx.commit().await?;
         return Err(ApiError::TooManyRequests(
-            "Too many links requested. Try again later.".into(),
+            crate::rules::msg::TOO_MANY_LINKS.into(),
         ));
     }
     // Housekeeping: attempts older than a day no longer matter.
@@ -75,6 +75,14 @@ async fn magic_link(
         tx.commit().await?;
         return Ok((StatusCode::ACCEPTED, Json(json!({}))));
     };
+
+    // Spent links of this person are not needed after a day.
+    sqlx::query(
+        "delete from login_token where person_id = $1 and expires_at < now() - interval '1 day'",
+    )
+    .bind(person_id)
+    .execute(&mut *tx)
+    .await?;
 
     let token = random_token();
     sqlx::query(

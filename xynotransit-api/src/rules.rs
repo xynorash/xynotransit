@@ -7,14 +7,106 @@ use uuid::Uuid;
 
 use crate::error::ApiError;
 
+// ---------------------------------------------------------------------------------------------
+// The single source of every limit and fixed message the API enforces.
+// `tests/fixtures/rules.json` repeats them for the other side (the Flutter tests read it) and
+// `rules_json_matches_code` fails when the two drift apart. Change both together.
+// ---------------------------------------------------------------------------------------------
+
+/// Counts (metrics) per seat.
 pub const MAX_METRICS: usize = 8;
+/// Targets (KPIs) per seat.
 pub const MAX_KPIS: usize = 10;
+/// Characters of a count name.
 pub const MAX_LABEL: usize = 60;
+/// Characters of a target text.
 pub const MAX_KPI_TEXT: usize = 200;
+/// Characters of a seat role title.
 pub const MAX_ROLE_TITLE: usize = 80;
+/// Characters of a person name.
 pub const MAX_NAME: usize = 80;
+/// Characters of a team name.
 pub const MAX_TEAM_NAME: usize = 60;
+/// Highest manual order number of a team or seat.
 pub const MAX_SORT: i32 = 10_000;
+/// Characters of the reporter name, country and role on a report.
+pub const REPORTER_MAX_CHARS: usize = 80;
+/// Characters of one note.
+pub const NOTE_MAX_CHARS: usize = 70;
+/// Notes per box (well, wrong, next).
+pub const NOTES_PER_KIND: usize = 3;
+/// Characters of a target comment.
+pub const COMMENT_MAX_CHARS: usize = 200;
+/// Lowest and highest value of a monthly count.
+pub const VALUE_MIN: i64 = 0;
+pub const VALUE_MAX: i64 = 1_000_000_000;
+/// Characters of a whole email address, and of the part before the @.
+pub const EMAIL_MAX: usize = 254;
+pub const EMAIL_LOCAL_MAX: usize = 64;
+/// Meeting dates and period start months must be in these years.
+pub const PERIOD_MIN_YEAR: i32 = 2000;
+pub const PERIOD_MAX_YEAR: i32 = 2100;
+/// A period is three months.
+pub const MONTHS_PER_PERIOD: usize = 3;
+/// Summary trend: default and highest number of periods.
+pub const TREND_DEFAULT: i64 = 6;
+pub const TREND_MAX: i64 = 24;
+/// Magic links per email per hour, and how long one works.
+pub const MAX_LINKS_PER_HOUR: i64 = 5;
+pub const LINK_MINUTES: i32 = 15;
+/// Largest request body.
+pub const MAX_BODY_BYTES: usize = 256 * 1024;
+pub const NOTE_KINDS: [&str; 3] = ["well", "wrong", "next"];
+pub const KPI_STATUSES: [&str; 3] = ["met", "partly", "missed"];
+pub const APP_ROLES: [&str; 2] = ["contributor", "controller"];
+
+/// Fixed messages. The ones with `{...}` are templates, filled by the code that raises them.
+pub mod msg {
+    pub const TEAM_EMPTY: &str = "Enter a team name.";
+    pub const TEAM_LONG: &str = "A team name can have at most 60 characters.";
+    pub const NAME_EMPTY: &str = "Enter a name.";
+    pub const NAME_LONG: &str = "A name can have at most 80 characters.";
+    pub const ROLE_TITLE_EMPTY: &str = "Enter a role title.";
+    pub const ROLE_TITLE_LONG: &str = "A role title can have at most 80 characters.";
+    pub const PLAIN_LINE: &str = "Use plain text on one line.";
+    pub const EMAIL_INVALID: &str = "Enter a valid email address.";
+    pub const APP_ROLE_INVALID: &str = "Choose employee or manager.";
+    pub const SORT_RANGE: &str = "Enter an order between 0 and 10000.";
+    pub const METRICS_TOO_MANY: &str = "A seat can have at most 8 counts.";
+    pub const METRIC_EMPTY: &str = "Give every count a name.";
+    pub const METRIC_LONG: &str = "A count name can have at most 60 characters.";
+    pub const METRIC_DUPLICATE: &str =
+        "Two counts have the same name. Give each count its own name.";
+    pub const KPIS_TOO_MANY: &str = "A seat can have at most 10 targets.";
+    pub const KPI_EMPTY: &str = "Write every target in words.";
+    pub const KPI_LONG: &str = "A target can have at most 200 characters.";
+    pub const LISTED_TWICE: &str = "The same {what} is listed twice.";
+    pub const REPORTER_EMPTY: &str = "Enter your {what}.";
+    pub const REPORTER_LONG: &str = "Your {what} can be at most 80 characters.";
+    pub const REPORTER_PLAIN: &str = "Your {what} must be plain text on one line.";
+    pub const VALUE_NOT_YOURS: &str = "One of the numbers does not belong to this report.";
+    pub const KPI_NOT_YOURS: &str = "One of the targets does not belong to this report.";
+    pub const MONTH_OUTSIDE: &str = "A number is for a month outside this period.";
+    pub const VALUE_TWICE: &str = "A number was entered twice for the same month.";
+    pub const KPI_TWICE: &str = "A target was answered twice.";
+    pub const KPI_STATUS: &str = "Answer each target with met, partly or missed.";
+    pub const VALUE_MISSING: &str = "Enter a number for \"{label}\" in {month}.";
+    pub const VALUE_TOO_BIG: &str = "A number can be at most 1000000000.";
+    pub const KPIS_LEFT: &str = "Answer all targets in step 3 ({left} left).";
+    pub const COMMENT_LONG: &str = "A comment can be at most 200 characters.";
+    pub const NUL_TEXT: &str = "Text cannot contain control characters.";
+    pub const NOTE_BOX: &str = "A note is in a box that does not exist.";
+    pub const NOTES_TOO_MANY: &str = "Write at most 3 notes per box.";
+    pub const NOTE_NUMBER: &str = "Notes are numbered 1 to 3.";
+    pub const NOTE_SAME_NUMBER: &str = "Two notes in the same box have the same number.";
+    pub const NOTE_EMPTY: &str = "A note cannot be empty.";
+    pub const NOTE_LONG: &str = "A note can be at most 70 characters.";
+    pub const DATE_FORMAT: &str = "Enter a date like 2026-02-01.";
+    pub const DATE_RANGE: &str = "Enter a date between 2000 and 2100.";
+    pub const TREND_RANGE: &str = "The trend must be a number from 1 to 24.";
+    pub const CHOOSE_PERIOD: &str = "Choose a period.";
+    pub const TOO_MANY_LINKS: &str = "Too many links requested. Try again later.";
+}
 
 fn fold(c: char) -> Option<char> {
     Some(match c {
@@ -88,44 +180,34 @@ pub fn clean_line(s: &str, max: usize, empty: &str, long: &str) -> Result<String
         return Err(ApiError::bad(long));
     }
     if t.chars().any(|c| c.is_control() || is_invisible(c)) {
-        return Err(ApiError::bad("Use plain text on one line."));
+        return Err(ApiError::bad(msg::PLAIN_LINE));
     }
     Ok(t.to_string())
 }
 
 pub fn clean_team_name(s: &str) -> Result<String, ApiError> {
-    clean_line(
-        s,
-        MAX_TEAM_NAME,
-        "Enter a team name.",
-        "A team name can have at most 60 characters.",
-    )
+    clean_line(s, MAX_TEAM_NAME, msg::TEAM_EMPTY, msg::TEAM_LONG)
 }
 
 pub fn clean_person_name(s: &str) -> Result<String, ApiError> {
-    clean_line(
-        s,
-        MAX_NAME,
-        "Enter a name.",
-        "A name can have at most 80 characters.",
-    )
+    clean_line(s, MAX_NAME, msg::NAME_EMPTY, msg::NAME_LONG)
 }
 
 pub fn clean_role_title(s: &str) -> Result<String, ApiError> {
     clean_line(
         s,
         MAX_ROLE_TITLE,
-        "Enter a role title.",
-        "A role title can have at most 80 characters.",
+        msg::ROLE_TITLE_EMPTY,
+        msg::ROLE_TITLE_LONG,
     )
 }
 
 /// Trimmed, lowercased, and shaped like name@domain.tld.
 pub fn clean_email(s: &str) -> Result<String, ApiError> {
     let e = s.trim().to_lowercase();
-    let bad = || ApiError::bad("Enter a valid email address.");
+    let bad = || ApiError::bad(msg::EMAIL_INVALID);
     if e.is_empty()
-        || e.len() > 254
+        || e.len() > EMAIL_MAX
         || e.chars().any(|c| {
             c.is_control()
                 || c.is_whitespace()
@@ -143,7 +225,7 @@ pub fn clean_email(s: &str) -> Result<String, ApiError> {
         && !domain.starts_with('.')
         && !domain.ends_with('.')
         && !domain.contains("..");
-    if local.is_empty() || local.len() > 64 || domain.contains('@') || !dotted {
+    if local.is_empty() || local.len() > EMAIL_LOCAL_MAX || domain.contains('@') || !dotted {
         return Err(bad());
     }
     Ok(e)
@@ -151,8 +233,8 @@ pub fn clean_email(s: &str) -> Result<String, ApiError> {
 
 pub fn clean_app_role(s: &str) -> Result<String, ApiError> {
     match s.trim() {
-        r @ ("contributor" | "controller") => Ok(r.to_string()),
-        _ => Err(ApiError::bad("Choose employee or manager.")),
+        r if APP_ROLES.contains(&r) => Ok(r.to_string()),
+        _ => Err(ApiError::bad(msg::APP_ROLE_INVALID)),
     }
 }
 
@@ -160,7 +242,7 @@ pub fn check_sort(n: i64) -> Result<i32, ApiError> {
     if (0..=i64::from(MAX_SORT)).contains(&n) {
         Ok(n as i32)
     } else {
-        Err(ApiError::bad("Enter an order between 0 and 10000."))
+        Err(ApiError::bad(msg::SORT_RANGE))
     }
 }
 
@@ -175,7 +257,7 @@ fn check_ids(entries: &[Entry], what: &str) -> Result<(), ApiError> {
     let mut seen = HashSet::new();
     for id in entries.iter().filter_map(|e| e.id) {
         if !seen.insert(id) {
-            return Err(ApiError::bad(format!("The same {what} is listed twice.")));
+            return Err(ApiError::bad(msg::LISTED_TWICE.replace("{what}", what)));
         }
     }
     Ok(())
@@ -184,21 +266,14 @@ fn check_ids(entries: &[Entry], what: &str) -> Result<(), ApiError> {
 /// 0..=8 counts, each named 1..=60 characters, names unique ignoring case.
 pub fn check_metrics(raw: &[(Option<Uuid>, String)]) -> Result<Vec<Entry>, ApiError> {
     if raw.len() > MAX_METRICS {
-        return Err(ApiError::bad("A seat can have at most 8 counts."));
+        return Err(ApiError::bad(msg::METRICS_TOO_MANY));
     }
     let mut out = Vec::with_capacity(raw.len());
     let mut names = HashSet::new();
     for (id, label) in raw {
-        let text = clean_line(
-            label,
-            MAX_LABEL,
-            "Give every count a name.",
-            "A count name can have at most 60 characters.",
-        )?;
+        let text = clean_line(label, MAX_LABEL, msg::METRIC_EMPTY, msg::METRIC_LONG)?;
         if !names.insert(text.to_lowercase()) {
-            return Err(ApiError::bad(
-                "Two counts have the same name. Give each count its own name.",
-            ));
+            return Err(ApiError::bad(msg::METRIC_DUPLICATE));
         }
         out.push(Entry { id: *id, text });
     }
@@ -209,16 +284,11 @@ pub fn check_metrics(raw: &[(Option<Uuid>, String)]) -> Result<Vec<Entry>, ApiEr
 /// 0..=10 targets, each 1..=200 characters.
 pub fn check_kpis(raw: &[(Option<Uuid>, String)]) -> Result<Vec<Entry>, ApiError> {
     if raw.len() > MAX_KPIS {
-        return Err(ApiError::bad("A seat can have at most 10 targets."));
+        return Err(ApiError::bad(msg::KPIS_TOO_MANY));
     }
     let mut out = Vec::with_capacity(raw.len());
     for (id, text) in raw {
-        let text = clean_line(
-            text,
-            MAX_KPI_TEXT,
-            "Write every target in words.",
-            "A target can have at most 200 characters.",
-        )?;
+        let text = clean_line(text, MAX_KPI_TEXT, msg::KPI_EMPTY, msg::KPI_LONG)?;
         out.push(Entry { id: *id, text });
     }
     check_ids(&out, "target")?;
@@ -321,5 +391,134 @@ mod tests {
         assert!(check_kpis(&[(None, "  ".into())]).is_err());
         // Two targets may share wording.
         assert!(check_kpis(&[(None, "same".into()), (None, "same".into())]).is_ok());
+    }
+
+    const RULES_JSON: &str = include_str!("../tests/fixtures/rules.json");
+
+    #[test]
+    fn rules_json_matches_code() {
+        let j: serde_json::Value = serde_json::from_str(RULES_JSON).unwrap();
+        let l = &j["limits"];
+        let expect: &[(&str, i64)] = &[
+            ("person_name", MAX_NAME as i64),
+            ("role_title", MAX_ROLE_TITLE as i64),
+            ("reporter_name", REPORTER_MAX_CHARS as i64),
+            ("reporter_country", REPORTER_MAX_CHARS as i64),
+            ("reporter_role", REPORTER_MAX_CHARS as i64),
+            ("team_name", MAX_TEAM_NAME as i64),
+            ("metric_label", MAX_LABEL as i64),
+            ("kpi_text", MAX_KPI_TEXT as i64),
+            ("max_metrics", MAX_METRICS as i64),
+            ("max_kpis", MAX_KPIS as i64),
+            ("note_chars", NOTE_MAX_CHARS as i64),
+            ("notes_per_kind", NOTES_PER_KIND as i64),
+            ("comment_chars", COMMENT_MAX_CHARS as i64),
+            ("value_min", VALUE_MIN),
+            ("value_max", VALUE_MAX),
+            ("email_chars", EMAIL_MAX as i64),
+            ("email_local_chars", EMAIL_LOCAL_MAX as i64),
+            ("sort_max", MAX_SORT as i64),
+            ("period_min_year", PERIOD_MIN_YEAR as i64),
+            ("period_max_year", PERIOD_MAX_YEAR as i64),
+            ("months_per_period", MONTHS_PER_PERIOD as i64),
+            ("trend_default", TREND_DEFAULT),
+            ("trend_max", TREND_MAX),
+            ("magic_links_per_hour", MAX_LINKS_PER_HOUR),
+            ("magic_link_minutes", LINK_MINUTES as i64),
+            ("max_body_bytes", MAX_BODY_BYTES as i64),
+        ];
+        for (k, v) in expect {
+            assert_eq!(l[*k].as_i64(), Some(*v), "limit {k}");
+        }
+        assert_eq!(
+            l.as_object().unwrap().len(),
+            expect.len(),
+            "extra limit in json"
+        );
+        let list = |v: &serde_json::Value| -> Vec<String> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(list(&j["enums"]["note_kinds"]), NOTE_KINDS);
+        assert_eq!(list(&j["enums"]["kpi_statuses"]), KPI_STATUSES);
+        assert_eq!(list(&j["enums"]["app_roles"]), APP_ROLES);
+    }
+
+    #[test]
+    fn rules_json_messages_match_code_and_limits() {
+        use super::msg::*;
+        let j: serde_json::Value = serde_json::from_str(RULES_JSON).unwrap();
+        let m = j["messages"].as_object().unwrap();
+        let expect: &[(&str, &str)] = &[
+            ("team_empty", TEAM_EMPTY),
+            ("team_long", TEAM_LONG),
+            ("name_empty", NAME_EMPTY),
+            ("name_long", NAME_LONG),
+            ("role_title_empty", ROLE_TITLE_EMPTY),
+            ("role_title_long", ROLE_TITLE_LONG),
+            ("plain_line", PLAIN_LINE),
+            ("email_invalid", EMAIL_INVALID),
+            ("app_role_invalid", APP_ROLE_INVALID),
+            ("sort_range", SORT_RANGE),
+            ("metrics_too_many", METRICS_TOO_MANY),
+            ("metric_empty", METRIC_EMPTY),
+            ("metric_long", METRIC_LONG),
+            ("metric_duplicate", METRIC_DUPLICATE),
+            ("kpis_too_many", KPIS_TOO_MANY),
+            ("kpi_empty", KPI_EMPTY),
+            ("kpi_long", KPI_LONG),
+            ("listed_twice", LISTED_TWICE),
+            ("reporter_empty", REPORTER_EMPTY),
+            ("reporter_long", REPORTER_LONG),
+            ("reporter_plain", REPORTER_PLAIN),
+            ("value_not_yours", VALUE_NOT_YOURS),
+            ("kpi_not_yours", KPI_NOT_YOURS),
+            ("month_outside", MONTH_OUTSIDE),
+            ("value_twice", VALUE_TWICE),
+            ("kpi_twice", KPI_TWICE),
+            ("kpi_status", KPI_STATUS),
+            ("value_missing", VALUE_MISSING),
+            ("value_too_big", VALUE_TOO_BIG),
+            ("kpis_left", KPIS_LEFT),
+            ("comment_long", COMMENT_LONG),
+            ("nul_text", NUL_TEXT),
+            ("note_box", NOTE_BOX),
+            ("notes_too_many", NOTES_TOO_MANY),
+            ("note_number", NOTE_NUMBER),
+            ("note_same_number", NOTE_SAME_NUMBER),
+            ("note_empty", NOTE_EMPTY),
+            ("note_long", NOTE_LONG),
+            ("date_format", DATE_FORMAT),
+            ("date_range", DATE_RANGE),
+            ("trend_range", TREND_RANGE),
+            ("choose_period", CHOOSE_PERIOD),
+            ("too_many_links", TOO_MANY_LINKS),
+        ];
+        for (k, v) in expect {
+            assert_eq!(m[*k].as_str(), Some(*v), "message {k}");
+        }
+        assert_eq!(m.len(), expect.len(), "extra message in json");
+        // The numbers written in the words are the limits.
+        let has = |s: &str, n: i64| assert!(s.contains(&n.to_string()), "{s} should say {n}");
+        has(TEAM_LONG, MAX_TEAM_NAME as i64);
+        has(NAME_LONG, MAX_NAME as i64);
+        has(ROLE_TITLE_LONG, MAX_ROLE_TITLE as i64);
+        has(SORT_RANGE, MAX_SORT as i64);
+        has(METRICS_TOO_MANY, MAX_METRICS as i64);
+        has(METRIC_LONG, MAX_LABEL as i64);
+        has(KPIS_TOO_MANY, MAX_KPIS as i64);
+        has(KPI_LONG, MAX_KPI_TEXT as i64);
+        has(REPORTER_LONG, REPORTER_MAX_CHARS as i64);
+        has(VALUE_TOO_BIG, VALUE_MAX);
+        has(COMMENT_LONG, COMMENT_MAX_CHARS as i64);
+        has(NOTES_TOO_MANY, NOTES_PER_KIND as i64);
+        has(NOTE_NUMBER, NOTES_PER_KIND as i64);
+        has(NOTE_LONG, NOTE_MAX_CHARS as i64);
+        has(DATE_RANGE, PERIOD_MIN_YEAR as i64);
+        has(DATE_RANGE, PERIOD_MAX_YEAR as i64);
+        has(TREND_RANGE, TREND_MAX);
     }
 }

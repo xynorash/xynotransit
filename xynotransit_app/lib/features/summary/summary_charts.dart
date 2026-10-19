@@ -343,7 +343,16 @@ class _VolumeChart extends StatelessWidget {
       for (var i = 0; i < s.teams.length; i++) {
         final v = _at(s.teams[i].volumeByMonth, m).toDouble();
         if (v <= 0) continue;
-        stack.add(BarChartRodStackItem(from, from + v, seriesColor(i)));
+        stack.add(
+          BarChartRodStackItem(
+            from,
+            from + v,
+            seriesColor(i),
+            // A thin gap between teams keeps neighbours apart for people
+            // who cannot tell the colours apart.
+            borderSide: BorderSide(color: tokens.surface, width: 1.5),
+          ),
+        );
         from += v;
       }
       groups.add(

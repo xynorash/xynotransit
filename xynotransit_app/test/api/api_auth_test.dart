@@ -21,6 +21,7 @@ Future<(ApiAuthService, ApiClient, TokenStore)> make(
     tokens: tokens,
     client: MockClient(h),
     timeout: const Duration(milliseconds: 200),
+    retryDelay: (_) => Duration.zero,
   );
   return (ApiAuthService(client), client, tokens);
 }

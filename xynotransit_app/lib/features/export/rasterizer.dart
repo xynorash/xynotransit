@@ -7,8 +7,14 @@ import 'package:flutter/widgets.dart';
 
 import '../slides/canvas.dart';
 
-/// Draws a slide off screen at exactly 1920 x 1080 and returns it as a PNG.
-Future<Uint8List> slideToPng(BuildContext context, Widget slide) async {
+/// Draws a slide off screen and returns it as a PNG: 1920 x 1080 pixels at
+/// the default [pixelRatio] of 1, twice as many in each direction at 2. The
+/// slide itself is laid out at 1920 x 1080 either way.
+Future<Uint8List> slideToPng(
+  BuildContext context,
+  Widget slide, {
+  double pixelRatio = 1,
+}) async {
   final key = GlobalKey();
   final overlay = Overlay.of(context, rootOverlay: true);
   final entry = OverlayEntry(
@@ -31,7 +37,7 @@ Future<Uint8List> slideToPng(BuildContext context, Widget slide) async {
     await WidgetsBinding.instance.endOfFrame;
     final boundary =
         key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-    final image = await boundary.toImage();
+    final image = await boundary.toImage(pixelRatio: pixelRatio);
     try {
       final data = await image.toByteData(format: ui.ImageByteFormat.png);
       return data!.buffer.asUint8List();

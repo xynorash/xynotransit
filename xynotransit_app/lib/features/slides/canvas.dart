@@ -59,9 +59,27 @@ const _titleSteps = <FitStep>[
   (40, 2),
   (36, 2),
   (32, 2),
+  ..._titleStepsLong,
 ];
-const _eyebrowSteps = <FitStep>[(24, 1), (22, 1), (20, 1), (18, 1), (16, 1)];
-const _footerSteps = <FitStep>[(24, 1), (22, 1), (20, 1), (18, 1), (16, 1)];
+const _titleStepsLong = <FitStep>[(28, 3), (24, 3), (24, 4)];
+
+/// Small text never goes below 20 px (22 px in the footer): a long line wraps
+/// instead of shrinking.
+const _eyebrowSteps = <FitStep>[
+  (24, 1),
+  (22, 1),
+  (20, 1),
+  (20, 2),
+  (20, 3),
+  (20, 4),
+];
+const _footerSteps = <FitStep>[(24, 1), (22, 1), (22, 2), (22, 3)];
+
+/// Steps of the small line (date, team) on the cover and the dividers.
+const smallLineSteps = _eyebrowSteps;
+
+/// Width of the footer line; the page number sits to its right.
+const footerWidth = 1500.0;
 
 TextStyle _eyebrowStyle(double size, Color color) =>
     st(size, weight: FontWeight.w700, color: color, letterSpacing: size / 8);
@@ -166,7 +184,12 @@ class PersonSlideFrame extends StatelessWidget {
           ),
           if (badge != null)
             Positioned(right: 128, top: 152, width: 420, child: badge!),
-          Positioned(left: 128, bottom: 64, width: 1400, child: _footerText()),
+          Positioned(
+            left: 128,
+            bottom: 64,
+            width: page == null ? slideTextWidth : footerWidth,
+            child: _footerText(page == null ? slideTextWidth : footerWidth),
+          ),
           if (page != null)
             Positioned(
               right: 128,
@@ -183,10 +206,10 @@ class PersonSlideFrame extends StatelessWidget {
     );
   }
 
-  Widget _footerText() {
+  Widget _footerText(double width) {
     final f = pickFit(
       source,
-      1400,
+      width,
       _footerSteps,
       (s) => st(s, color: footerColor),
     );

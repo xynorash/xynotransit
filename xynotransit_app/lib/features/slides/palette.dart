@@ -20,7 +20,12 @@ abstract final class SlidePalette {
   static const axis = Color(0xFF3A4A6B);
   static const white = Color(0xFFFBFBF8);
   static const noteRule = Color(0xFFD8D3C4);
-  static const emptyNote = Color(0xFF6A7185);
+  static const emptyNote = Color(0xFF596074);
+
+  /// Target totals on the navy panel when a role has no counts.
+  static const metOnNavy = Color(0xFF5FD3B0);
+  static const partlyOnNavy = Color(0xFFF0C24A);
+  static const missedOnNavy = Color(0xFFF0933A);
 
   static const series = XynoTokens.series;
 

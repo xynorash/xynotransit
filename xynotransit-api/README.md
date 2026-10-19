@@ -6,7 +6,7 @@ See `../xynotransit_app/README.md` for the whole system and `../xynotransit-db/R
 
 ## Run
 
-Needs a Postgres with the schema (`xynotransit-db/initdb/01-schema.sql`, `02-api.sql` and `03-dynamic.sql`). The catalog starts empty: the first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app.
+Needs a Postgres with the schema: every file of `xynotransit-db/initdb/` in name order (`01` to `07`; a database that lives on is brought up to date with `xynotransit-db/scripts/migrate.sh`). The catalog starts empty: the first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app.
 
 ```bash
 cd ../xynotransit-db && docker compose up -d db      # database on 127.0.0.1:5432
@@ -33,15 +33,17 @@ Or use the full stack with `docker compose up -d --build` in `xynotransit-db`. T
 | `BOOTSTRAP_CONTROLLER_EMAIL` | none | At start, that person becomes an active controller. Created when missing, promoted and activated when present. |
 | `BOOTSTRAP_CONTROLLER_NAME` | capitalised part of the email before the `@` | Name used only when the person is created. |
 | `LOG_MAGIC_LINKS` | `false` | Logs links at info level. Dev only. |
-| `RUST_LOG` | `info` | Log filter. |
+| `RUST_LOG` | `info,sqlx=warn` | Log filter. |
+| `LOG_FORMAT` | text | `json` writes one JSON object per log line. |
+| `SHUTDOWN_GRACE_SECS` | `8` | After SIGTERM, how long requests that are running get to finish (1 to 300). Keep it below the container stop timeout (10 s by default in Docker). |
 
 ## Endpoints
 
-All except `/api/health` and the two auth endpoints need `Authorization: Bearer <jwt>`. Errors are the HTTP status plus `{"error":"plain words"}`: 400, 401, 403, 404, 409, 429, 500.
+All except `/api/health` and the two auth endpoints need `Authorization: Bearer <jwt>`. Errors are the HTTP status plus `{"error":"plain words"}`, always JSON, for every status: 400 (also JSON that does not parse), 401, 403, 404, 405 (with `Allow`), 408 (slower than 30 s), 409, 413 (body over 256 KB), 415 (not `application/json`), 429, 500, 503. Nothing from the database, no file path and no stack trace ever reaches a body.
 
 | Method and path | Who | Purpose |
 | --- | --- | --- |
-| `GET /api/health` | anyone | `{"ok":true}`, checks the database. |
+| `GET /api/health` | anyone | 200 `{"ok":true,"db":"up"}` when a query reaches the database within 3 seconds; otherwise 503 `{"ok":false,"db":"down","error":"..."}`. |
 | `POST /api/auth/magic-link` | anyone | `{email}`. Always 202 (no enumeration). 429 "Too many links requested. Try again later." after 5 requests per hour, counted per normalised email string in `login_attempt`, so known and unknown addresses behave the same. |
 | `POST /api/auth/verify` | anyone | `{token}`. Returns `{access_token, expires_at, user}`. Single use. |
 | `GET /api/me` | signed in | `{person_id, role, label}`. |
@@ -78,7 +80,15 @@ Roles: `contributor` (employee) and `controller` (manager). A refused controller
 - **Deck texts:** keys, defaults, placeholders and limits live in `deck_text_defaults.json` (copies in `src/` and `tests/fixtures/`, a test checks they match the app copy in `xynotransit_app/docs/reference/`). Texts are stored per period and frozen into each deck run.
 - **Decks:** snapshots are built on the server from submitted reports. Name and role come from the report's reporter words, and the snapshot field `team` carries the reporter's country (legacy reports without reporter words use the catalog profile). The app groups slides by country (case-insensitive, whitespace collapsed, first spelling shown, first appearance order); `snapshot::country_key` is the reference. The dashboard summary still groups by catalog teams (assumption). `tests/fixtures/snapshot_case.json` is the shared contract proven by the Rust and Dart tests. Old decks stay frozen when a report is sent again.
 - **Live updates:** triggers in `02-api.sql` send `NOTIFY xt_changes` with `{kind, period_id}`. One `PgListener` task (reconnects with backoff) fans out through a broadcast channel to SSE clients. Responses carry `X-Accel-Buffering: no`.
-- Body limit 256 KB, response timeout 30 s, no CORS layer (same origin through nginx). Database errors are logged, never returned.
+- **Single source of rules:** every limit and fixed message lives in `src/rules.rs` (constants and `rules::msg`). `tests/fixtures/rules.json` repeats them for the other side (the Flutter tests read `../xynotransit-api/tests/fixtures/rules.json`); `rules_json_matches_code` fails when the two drift apart. Add keys, never rename one. Deck text limits stay in `deck_text_defaults.json`.
+- **Request id:** every response has `X-Request-Id` (a short plain id sent by the caller is kept, else a new one) and every log line of that request carries it. One log line per request: method, path (never the query, which holds event tickets), status, milliseconds. Bodies, tokens, emails and magic links are never logged; links appear only when `LOG_MAGIC_LINKS=true` (dev). Health checks log at debug.
+- **Headers on every answer:** `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `Cross-Origin-Resource-Policy: same-origin`. A panic in a handler becomes a plain 500 and is logged.
+- **Limits:** body 256 KB (413), request 30 s until the answer starts (408; open event streams are not cut), database statements 20 s, a transaction idle for more than 30 s is ended by the database, 10 pooled connections. No CORS layer (same origin through nginx).
+- **Shutdown:** on SIGTERM or Ctrl-C the server stops taking connections, ends the event streams at once, lets requests that are running finish (up to `SHUTDOWN_GRACE_SECS`), then exits. `tests/ops.rs` proves it with a request held by a table lock.
+- **Deck content:** a slide shows the counts and targets the report was answered against, also when the manager changed or retired them since (the deck reads the definitions that the report has answers for). If a retired count and a renumbered live count share a series number, the slide renumbers them so no two bars share a colour.
+- **Who is expected:** a seat is expected in a period when the seat and its person are both switched on (summary `expected`, deck `expected_count`, the views). Old reports of a switched off seat or person stay, still count in the summary totals (so `submitted` can exceed `expected`) and still list the person, but the deck only holds active seats of active people.
+- **Summary names:** the shown name of a count (counts with the same name ignoring case are added) is chosen by rule, not alphabet: a live name beats a retired one, then the lower series, then the id.
+- Database errors are logged, never returned.
 
 ## Tests
 
@@ -88,23 +98,39 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Integration tests (`tests/api.rs`, `tests/security.rs`, `tests/dynamic.rs`) need Postgres. Each test creates a throwaway database and drops it afterwards. The default admin URL is `postgres://xynotransit:xynotransit@127.0.0.1:5432/postgres`; override it with `TEST_ADMIN_URL`. Start the db first: `docker compose up -d db` in `../xynotransit-db`.
+| File | What it proves |
+| --- | --- |
+| `src/*` unit tests | rules, validation, summary and snapshot math, config, `rules.json` matches the code |
+| `tests/api.rs`, `security.rs`, `dynamic.rs`, `reporter.rs`, `review.rs`, `deck_text*.rs` | the behaviour the READMEs describe |
+| `tests/integrity.rs` | the database refuses bad rows by itself (06-integrity.sql), frozen decks, `updated_at`, migrations run twice |
+| `tests/property.rs` | hundreds of seeded random catalogs, reports and decks: `/api/summary` and the deck compared with plain brute force loops (`tests/common/model.rs`). `PROPTEST_CASES`, `PROPTEST_SEED`; a failure prints its seed |
+| `tests/fuzz.rs` | malformed and random input (wrong types, huge numbers, unicode, NUL, deep nesting, huge arrays, duplicate ids, hostile paths and queries) to every endpoint as nobody, a bad token, an employee, a manager and a switched off person: never a 5xx, always `{"error"}` on 4xx, no SQL or paths in a body. `FUZZ_ITERS`, `FUZZ_SEED` |
+| `tests/concurrency.rs` | the same report sent 16 times at once, definitions edited at once, decks made while people send, a double click on the magic link, the sign-in limit under parallel requests, two managers demoting each other |
+| `tests/ops.rs` | request ids, headers, JSON for 404/405/408/413/415/400, 503 health, panic to JSON, logs without secrets, graceful shutdown |
+| `tests/data_review.rs` | edge cases: fresh install, empty period, years 2000 and 2100, team without seats, a person with two seats in one team, a seat or person switched off after reporting, deck faithfulness after definition edits |
+| `tests/perf.rs` | 300 seats x 24 periods x 8 counts: every call must answer in under 300 ms (release; debug has 1500 ms) |
+
+`cargo test --release --test perf -- --nocapture` prints the timings. The migration and backup scripts have their own tests in `../xynotransit-db/scripts` (`test-migrations.sh`, `test-backup.sh`).
+
+Integration tests need Postgres. Each test creates a throwaway database and drops it afterwards. The default admin URL is `postgres://xynotransit:xynotransit@127.0.0.1:5432/postgres`; override it with `TEST_ADMIN_URL`. Start the db first: `docker compose up -d db` in `../xynotransit-db`. `TEST_TEMPLATE_DB=<database>` builds each test database from a copy of that database (emptied) instead of the initdb files; `test-migrations.sh` uses it to run the whole suite on a migrated copy of the live data.
 
 ## Layout
 
 ```
-src/main.rs        start, config, bootstrap controller
+src/main.rs        start, logging, config, bootstrap controller, signals
+src/http.rs        request id and logging, JSON errors for every status, security headers, panic to JSON
 src/config.rs      env settings
 src/auth.rs        JWT, current user loading
 src/mail.rs        SMTP (lettre) and a capture mailer for tests
 src/validate.rs    plain word validation of a report
-src/rules.rs       slugs and rules for names, emails, counts and targets
+src/rules.rs       every limit and message (the single source), slugs and rules for names, emails, counts and targets
 src/summary.rs     pure aggregation behind /api/summary
 src/snapshot.rs    deck snapshot builder
 src/deck_text.rs   slide text rules and defaults (pure)
 src/listener.rs    Postgres LISTEN fan out
 src/routes/        auth, catalog, admin (teams, persons, seats, definitions), summary, periods, reports, decks, events, health
-tests/             integration and security tests
+tests/             integration, security, property, fuzz, concurrency, operations and performance tests
+tests/fixtures/rules.json   the limits and messages for other test suites (see above)
 ```
 
 ## Slide texts (deck-text)

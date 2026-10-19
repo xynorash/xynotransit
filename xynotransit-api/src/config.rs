@@ -14,6 +14,8 @@ pub struct Config {
     pub bootstrap_controller_email: Option<String>,
     pub bootstrap_controller_name: Option<String>,
     pub log_magic_links: bool,
+    /// How long requests that are running get to finish after SIGTERM.
+    pub shutdown_grace: std::time::Duration,
 }
 
 impl Config {
@@ -62,6 +64,16 @@ impl Config {
             log_magic_links: non_empty("LOG_MAGIC_LINKS")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
+            shutdown_grace: std::time::Duration::from_secs(
+                match non_empty("SHUTDOWN_GRACE_SECS") {
+                    Some(v) => v
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|n| (1..=300).contains(n))
+                        .ok_or("SHUTDOWN_GRACE_SECS must be a number from 1 to 300")?,
+                    None => 8,
+                },
+            ),
         })
     }
 }
@@ -109,9 +121,27 @@ mod tests {
         assert_eq!(c.smtp_port, 1025);
         assert_eq!(c.public_url, "http://example.org");
         assert!(c.log_magic_links);
+        assert_eq!(c.shutdown_grace.as_secs(), 8);
         assert_eq!(
             c.bootstrap_controller_email.as_deref(),
             Some("boss@example.org")
         );
+    }
+
+    #[test]
+    fn shutdown_grace_is_checked() {
+        let base = [
+            ("DATABASE_URL", "postgres://x"),
+            ("JWT_SECRET", "0123456789012345678901234567890123"),
+        ];
+        let with = |v: &'static str| {
+            let mut p = base.to_vec();
+            p.push(("SHUTDOWN_GRACE_SECS", v));
+            Config::from_lookup(lookup(&p))
+        };
+        assert_eq!(with("20").unwrap().shutdown_grace.as_secs(), 20);
+        assert!(with("0").is_err());
+        assert!(with("soon").is_err());
+        assert!(with("301").is_err());
     }
 }

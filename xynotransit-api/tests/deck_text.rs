@@ -227,7 +227,10 @@ async fn decks_freeze_their_words_and_old_decks_keep_them() {
         .await;
     assert_eq!(d3["texts"]["title"], "Third words");
 
-    // Old decks made before the feature have '{}' and read as the defaults.
+    // Old decks made before the feature have '{}' and read as the defaults. Decks are frozen
+    // (06-integrity.sql), so the test plays the part of the old database with the trigger off.
+    app.sql("alter table deck_run disable trigger deck_run_frozen")
+        .await;
     sqlx::query("update deck_run set texts = '{}'::jsonb where id = $1::uuid")
         .bind(d2["id"].as_str().unwrap())
         .execute(&app.state.pool)

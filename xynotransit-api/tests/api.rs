@@ -20,7 +20,8 @@ async fn health_is_open_and_checks_the_database() {
     let app = TestApp::new().await;
     let (s, v) = app.call("GET", "/api/health", None, None).await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(v, json!({"ok": true}));
+    // Deliberately improved: it also says what it checked (see tests/ops.rs for the 503).
+    assert_eq!(v, json!({"ok": true, "db": "up"}));
 }
 
 #[tokio::test]

@@ -2,18 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../domain/deck_text.dart';
 import 'canvas.dart';
+import 'measure.dart';
 import 'palette.dart';
 import 'slide_words.dart';
 
-const _bodySteps = <FitStep>[
-  (48, 4),
-  (44, 5),
-  (40, 6),
-  (36, 7),
-  (32, 8),
-  (28, 10),
-  (26, 11),
-];
+/// Biggest size first; the text takes as many lines as the box allows.
+const _bodySizes = [48.0, 44.0, 40.0, 36.0, 32.0, 28.0, 26.0, 24.0, 22.0, 20.0];
 const _bodyWidth = slideTextWidth - 2 * 64;
 
 /// The last page of the deck: a placeholder until real suggestions exist.
@@ -34,7 +28,6 @@ class SlideSuggestions extends StatelessWidget {
     final body = w.suggestionsBody;
     TextStyle bodyStyle(double size) =>
         st(size, color: SlidePalette.panelText, height: 1.35);
-    final b = pickFit(body, _bodyWidth, _bodySteps, bodyStyle);
     return PersonSlideFrame(
       background: SlidePalette.navy,
       footerColor: SlidePalette.mutedOnDark,
@@ -45,22 +38,41 @@ class SlideSuggestions extends StatelessWidget {
         eyebrowColor: SlidePalette.orange,
         titleColor: SlidePalette.paper,
       ),
-      body: CustomPaint(
-        painter: const _DashedBox(),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 32),
-            child: Text(
-              body,
-              textAlign: TextAlign.center,
-              maxLines: b.$2,
-              overflow: TextOverflow.ellipsis,
-              style: bodyStyle(b.$1),
+      body: LayoutBuilder(
+        builder: (context, box) {
+          final size = _pickSize(body, box.maxHeight - 64, bodyStyle);
+          return CustomPaint(
+            painter: const _DashedBox(),
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 64,
+                  vertical: 32,
+                ),
+                child: Text(
+                  body,
+                  textAlign: TextAlign.center,
+                  style: bodyStyle(size),
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
+  }
+
+  /// The biggest size in which the whole text fits the box, down to 20 px.
+  double _pickSize(
+    String body,
+    double height,
+    TextStyle Function(double) style,
+  ) {
+    for (final z in _bodySizes) {
+      final m = measureText(body, style(z), _bodyWidth);
+      if (m.height <= height && m.width <= _bodyWidth + 0.5) return z;
+    }
+    return _bodySizes.last;
   }
 
   // The footer of the other pages says "{team} team"; this page has no team,

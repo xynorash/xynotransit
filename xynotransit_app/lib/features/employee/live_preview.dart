@@ -157,33 +157,50 @@ class _CollapsiblePreviewState extends State<CollapsiblePreview> {
           Semantics(
             button: true,
             expanded: _open,
-            label: 'Preview your slides',
+            label: 'Preview your slides. Empty numbers count as 0',
             excludeSemantics: true,
             onTap: () => setState(() => _open = !_open),
             child: InkWell(
               key: const ValueKey('preview-toggle'),
               borderRadius: BorderRadius.circular(10),
               onTap: () => setState(() => _open = !_open),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 44),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Preview your slides',
-                        style: bodyStyle(
-                          context,
-                          size: 18,
-                          weight: FontWeight.w700,
-                          height: 1.25,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Preview your slides',
+                              style: bodyStyle(
+                                context,
+                                size: 18,
+                                weight: FontWeight.w700,
+                                height: 1.25,
+                              ),
+                            ),
+                            Text(
+                              _open ? 'Tap to hide' : 'Tap to see how they look. Empty numbers count as 0.',
+                              style: bodyStyle(
+                                context,
+                                size: 14,
+                                color: t.muted,
+                                height: 1.3,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                    Icon(
-                      _open ? Icons.expand_less : Icons.expand_more,
-                      color: t.ink,
-                    ),
-                  ],
+                      Icon(
+                        _open ? Icons.expand_less : Icons.expand_more,
+                        color: t.ink,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

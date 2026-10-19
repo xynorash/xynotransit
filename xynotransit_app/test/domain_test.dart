@@ -227,7 +227,18 @@ void main() {
         role: AppRole.contributor,
         label: 'Rova',
       );
+      // Reading someone else's report is refused too.
+      await expectLater(
+        repo.getReport(period.id, 'rado'),
+        throwsA(isA<RepositoryException>()),
+      );
+      user = DemoAuth.controller;
       final rado = (await repo.getReport(period.id, 'rado'))!;
+      user = const AppUser(
+        personId: 'p-rova',
+        role: AppRole.contributor,
+        label: 'Rova',
+      );
       expect(repo.sendReport(rado), throwsA(isA<RepositoryException>()));
     });
 
