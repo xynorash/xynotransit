@@ -48,6 +48,7 @@ Scripts (also `make up|down|reset|logs`):
 | `MAIL_FROM` | `Xynotransit <no-reply@xynotransit.local>` | Sender. |
 | `BOOTSTRAP_CONTROLLER_EMAIL` | empty | This person is created (or promoted and activated) as controller at API start. |
 | `BOOTSTRAP_CONTROLLER_NAME` | empty | Name used when that person is created. Default: the part of the email before the `@`, capitalised. |
+| `INTERNAL_EMAIL_DOMAINS` | `xynotransit.internal` | Comma separated. Addresses at these domains never receive mail; people sign in with a one-time link from a manager. Read by the API; the compose files do not pass it on yet, so the default applies until the line `INTERNAL_EMAIL_DOMAINS: ${INTERNAL_EMAIL_DOMAINS:-}` is added to the `api` environment. |
 | `LOG_MAGIC_LINKS` | `true` | Log links. Dev only. |
 | `RUST_LOG` | `info` | Log level. |
 | `LOG_FORMAT` | text | `json` for one JSON object per log line. |
@@ -57,7 +58,7 @@ The API variables `SMTP_HOST` (`mailpit`), `SMTP_PORT` (`1025`), plain SMTP and 
 
 ## Init SQL (initdb/) and migrations
 
-**Order.** `entrypoint.sh` runs every `/initdb/*.sql` in name order, but only on the first start of an empty volume. The API test suite builds its databases the same way (all files, name order), and `scripts/migrate.sh` follows the same order for a database that lives on. Name a new file with the next number (`08-...sql`); never edit a file that has been applied somewhere.
+**Order.** `entrypoint.sh` runs every `/initdb/*.sql` in name order, but only on the first start of an empty volume. The API test suite builds its databases the same way (all files, name order), and `scripts/migrate.sh` follows the same order for a database that lives on. Name a new file with the next number (`11-...sql`); never edit a file that has been applied somewhere.
 
 | File | Content | Runs twice? |
 | --- | --- | --- |
@@ -70,7 +71,19 @@ The API variables `SMTP_HOST` (`mailpit`), `SMTP_PORT` (`1025`), plain SMTP and 
 | `07-ledger.sql` | `schema_migration` (which files this database has had) and `xt_purge_expired()`. | yes |
 | `08-role-title-unique.sql` | One seat per person, team and role title, ignoring case and outer spaces (unique index on `lower(btrim(role_title))`). Skipped with a warning if old rows already repeat a title. | yes |
 
+| `10-internal-signin.sql` | `sign_in_link_audit` (who got a one-time sign-in link, who issued it, when, until when; never the token). `login_token` is unchanged. | yes |
+
 A fresh database has an empty catalog. The first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app. The old seed (`10-seed.sql`, `20-seed-demo.sql`) lives in `examples/` and is not loaded automatically; see `examples/README.md` to load it by hand.
+
+### First manager without email
+
+No mail server is needed to start. Set `BOOTSTRAP_CONTROLLER_EMAIL=manager@xynotransit.internal`, start the stack, then ask the API for a one-time sign-in link on the server:
+
+```bash
+docker compose exec api xynotransit-api sign-in-link manager@xynotransit.internal --hours 24
+```
+
+It prints only the link. Open it in a browser (once, within 24 hours). After that the manager makes links for everyone else in the app: People, then "Sign-in link" (copy it or show the QR code). Exit code 1 means no active person has that email or the database is not reachable (the reason is printed); 2 means wrong usage.
 
 ### Updating a database that already has data
 

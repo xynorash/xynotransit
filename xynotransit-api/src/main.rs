@@ -10,6 +10,10 @@ async fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
         std::process::exit(if healthcheck() { 0 } else { 1 });
     }
+    if std::env::args().nth(1).as_deref() == Some("sign-in-link") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(sign_in_link_command(&args).await);
+    }
     // LOG_FORMAT=json writes one JSON object per line (for a log collector); anything else is text.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "info,sqlx=warn".into());
@@ -118,4 +122,45 @@ fn healthcheck() -> bool {
     let mut out = String::new();
     let _ = s.read_to_string(&mut out);
     out.starts_with("HTTP/1.0 200") || out.starts_with("HTTP/1.1 200")
+}
+
+/// `xynotransit-api sign-in-link <email> [--hours N]`: prints only the URL on stdout. Problems go
+/// to stderr in plain words. Exit 0 on success, 1 when no link could be made, 2 for wrong usage.
+async fn sign_in_link_command(args: &[String]) -> i32 {
+    use xynotransit_api::signin::{parse_cli_args, sign_in_link_for_email};
+    let (email, hours) = match parse_cli_args(args) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return e.exit_code();
+        }
+    };
+    let get = |k: &str| std::env::var(k).ok();
+    let Some(url) = get("DATABASE_URL").filter(|u| !u.trim().is_empty()) else {
+        eprintln!("DATABASE_URL is not set.");
+        return 1;
+    };
+    let public_url = xynotransit_api::config::public_url_from(get);
+    let pool = match sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(url.trim())
+        .await
+    {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Could not reach the database. Check DATABASE_URL.");
+            return 1;
+        }
+    };
+    match sign_in_link_for_email(&pool, &public_url, &email, hours).await {
+        Ok(link) => {
+            println!("{}", link.url);
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            e.exit_code()
+        }
+    }
 }

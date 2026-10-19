@@ -6,7 +6,7 @@ See `../xynotransit_app/README.md` for the whole system and `../xynotransit-db/R
 
 ## Run
 
-Needs a Postgres with the schema: every file of `xynotransit-db/initdb/` in name order (`01` to `08`; a database that lives on is brought up to date with `xynotransit-db/scripts/migrate.sh`). The catalog starts empty: the first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app.
+Needs a Postgres with the schema: every file of `xynotransit-db/initdb/` in name order (`01` to `10`; a database that lives on is brought up to date with `xynotransit-db/scripts/migrate.sh`). The catalog starts empty: the first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app.
 
 ```bash
 cd ../xynotransit-db && docker compose up -d db      # database on 127.0.0.1:5432
@@ -34,6 +34,7 @@ Or use the full stack with `docker compose up -d --build` in `xynotransit-db`. T
 | `BIND` | `0.0.0.0:8081` | Listen address. |
 | `BOOTSTRAP_CONTROLLER_EMAIL` | none | At start, that person becomes an active controller. Created when missing, promoted and activated when present. |
 | `BOOTSTRAP_CONTROLLER_NAME` | capitalised part of the email before the `@` | Name used only when the person is created. |
+| `INTERNAL_EMAIL_DOMAINS` | `xynotransit.internal` | Comma separated. An address at one of these domains is internal: it never receives mail (see "Sign in without an email"). The first domain is used for addresses the server generates. |
 | `LOG_MAGIC_LINKS` | `false` | Logs links at info level. Dev only. |
 | `RUST_LOG` | `info,sqlx=warn` | Log filter. |
 | `LOG_FORMAT` | text | `json` writes one JSON object per log line. |
@@ -53,7 +54,8 @@ All except `/api/health` and the two auth endpoints need `Authorization: Bearer 
 | `POST /api/teams` | controller | `{name}` (1 to 60). Returns 201 `{id, code, name, sort}`; the code is a slug of the name, sort is last plus one. 409 when the name is used. |
 | `PATCH /api/teams/{id}` | controller | `{name?, sort?}`. |
 | `DELETE /api/teams/{id}` | controller | 204. 409 "Move or remove the seats of this team first." while any seat (active or not) is in it. |
-| `POST /api/persons` | controller | `{full_name, email, app_role}`. Email is trimmed and lowercased, 409 when used. 201. |
+| `POST /api/persons` | controller | `{full_name, email?, app_role}`. Email is trimmed and lowercased, 409 when used. When `email` is missing, null or blank the server makes a unique internal address from the name (`rosa.rakoto@xynotransit.internal`, then `rosa.rakoto2@...`). An address typed at an internal domain is kept as typed. 201 with the person, including the address. |
+| `POST /api/persons/{id}/sign-in-link` | controller | `{hours?}` (a whole number from 1 to 168, default 24; send `{}` for the default). 201 `{url, expires_at, person_id}`: `url` is `{PUBLIC_URL}/auth/verify?token=...`, `expires_at` is RFC 3339 UTC (`2026-10-20T08:30:00Z`). The link is single use and goes through `POST /api/auth/verify` like a magic link. 400 "Choose a validity from 1 hour to 168 hours.", 404 unknown person, 409 "This person is switched off.", 429 "Too many sign-in links created. Try again later." after 30 links per issuing manager per hour. Making another link does not cancel an earlier one. Every link adds a row to `sign_in_link_audit` (never the token). |
 | `PATCH /api/persons/{id}` | controller | `{full_name?, email?, app_role?, active?}`. 409 "There must be at least one manager." when it would leave no active controller. An inactive person cannot sign in and every token of theirs stops working (401). |
 | `POST /api/assignments` | controller | `{person_id, team_id, role_title}`. 201 with the seat. 409 when that person already has that role in that team. |
 | `PATCH /api/assignments/{id}` | controller | `{team_id?, role_title?, active?, sort?}`. Inactive seats are no longer expected in any period; their old reports stay. |
@@ -72,6 +74,21 @@ All except `/api/health` and the two auth endpoints need `Authorization: Bearer 
 | `GET /api/events?ticket=...&period_id=...` | controller (checked again when the ticket is used) | Server-Sent Events: `data: {"kind":"reports"|"deck","period_id":"..."}`, heartbeat `: ping` every 20 seconds. |
 
 Roles: `contributor` (employee) and `controller` (manager). A refused controller-only call answers 403 `{"error":"Only the controller can do this."}`. The role is read from the database on every request, so the UI split is not the security boundary; this table is.
+
+## Sign in without an email
+
+People may sign in without a real email address. An employee gets an internal address such as `name@xynotransit.internal` that never receives mail, and a manager gives them a one-time sign-in link instead (People screen, or the server command below).
+
+- **Internal addresses.** `POST /api/auth/magic-link` answers an internal address exactly like any other: 202 `{}`, the same rate limit keyed by the email string. It never tries to send mail (no SMTP error), and logs the link only when `LOG_MAGIC_LINKS` is on. The address is still validated like any other.
+- **Sign-in links.** `POST /api/persons/{id}/sign-in-link` (above). Same kind of token as a magic link: 32 random bytes, only the SHA-256 in `login_token`, used once by `/api/auth/verify`, only longer lived (1 to 168 hours). `sign_in_link_audit(id, person_id, issued_by, issued_at, expires_at)` records each one; `issued_by` is null when the server command made it. `login_token` itself is unchanged.
+- **Server command**, for the first manager (no mail needed) or when no manager can sign in:
+
+```bash
+docker compose exec api xynotransit-api sign-in-link manager@xynotransit.internal --hours 24
+```
+
+  It reads `DATABASE_URL` and `PUBLIC_URL` from the environment, needs an ACTIVE person with that email, and prints only the URL on stdout. Exit 0 on success, 1 when no link could be made (unknown or switched off person, database not reachable; the message is on stderr), 2 for wrong usage (`--hours` outside 1 to 168, missing email). Create the first manager with `BOOTSTRAP_CONTROLLER_EMAIL=manager@xynotransit.internal`, then run the command.
+- **Generated addresses.** Lowercase ASCII letters, digits and dots made from the full name: accents are folded (`é` to `e`, `ü` to `u`, `ß` to `ss`), apostrophes, hyphens and other characters are dropped, spaces and dots become single dots, at most 40 characters before the `@`. A name that leaves nothing (for example only CJK letters) gives `user`. On a clash a number is appended: `rosa.rakoto`, `rosa.rakoto2`, `rosa.rakoto3`. The code is `signin::internal_local_part` (pure, table tests in `src/signin.rs`).
 
 ## How it works
 
@@ -110,6 +127,7 @@ cargo test
 | `tests/concurrency.rs` | the same report sent 16 times at once, definitions edited at once, decks made while people send, a double click on the magic link, the sign-in limit under parallel requests, two managers demoting each other |
 | `tests/ops.rs` | request ids, headers, JSON for 404/405/408/413/415/400, 503 health, panic to JSON, logs without secrets, graceful shutdown |
 | `tests/data_review.rs` | edge cases: fresh install, empty period, years 2000 and 2100, team without seats, a person with two seats in one team, a seat or person switched off after reporting, deck faithfulness after definition edits |
+| `tests/internal_signin.rs` | people without email, generated addresses, sign-in links (single use, expiry, roles, 404/409/429, audit without tokens), internal addresses get no mail and the same rate limit, the `sign-in-link` command run as a real binary (output, exit codes), the migration run twice |
 | `tests/perf.rs` | 300 seats x 24 periods x 8 counts: every call must answer in under 300 ms (release; debug has 1500 ms) |
 
 `cargo test --release --test perf -- --nocapture` prints the timings. The migration and backup scripts have their own tests in `../xynotransit-db/scripts` (`test-migrations.sh`, `test-backup.sh`).
@@ -123,6 +141,7 @@ src/main.rs        start, logging, config, bootstrap controller, signals
 src/http.rs        request id and logging, JSON errors for every status, security headers, panic to JSON
 src/config.rs      env settings
 src/auth.rs        JWT, current user loading
+src/signin.rs      internal addresses, generated addresses, sign-in links, the sign-in-link command
 src/mail.rs        SMTP (lettre) and a capture mailer for tests
 src/validate.rs    plain word validation of a report
 src/rules.rs       every limit and message (the single source), slugs and rules for names, emails, counts and targets

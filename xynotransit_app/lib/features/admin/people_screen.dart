@@ -10,6 +10,7 @@ import '../shell/top_bar.dart';
 import 'admin_providers.dart';
 import 'definitions_dialog.dart';
 import 'person_dialog.dart';
+import 'sign_in_link_dialog.dart';
 
 /// The People screen with its app bar. The router mounts [PeopleScreenBody].
 class PeopleScreen extends StatelessWidget {
@@ -666,8 +667,31 @@ class _PersonLine extends StatelessWidget {
                         'What ${person.fullName} counts as ${seat!.roleTitle}',
                     onPressed: () => showDefinitionsDialog(context, seat!.id),
                   ),
+                SmallButton(
+                  label: 'Sign-in link',
+                  semanticLabel: person.active
+                      ? 'Sign-in link for ${person.fullName}'
+                      : 'Sign-in link for ${person.fullName}, not available. '
+                            '$signInLinkOffReason',
+                  onPressed: person.active
+                      ? () => showSignInLinkDialog(context, person)
+                      : null,
+                ),
               ],
             ),
+            if (!person.active)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  signInLinkOffReason,
+                  style: bodyStyle(
+                    context,
+                    size: 13,
+                    color: t.ink,
+                    height: 1.4,
+                  ),
+                ),
+              ),
           ],
         ),
       ),

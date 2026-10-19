@@ -28,6 +28,7 @@ pub fn router() -> Router<AppState> {
         .route("/teams/{id}", patch(update_team).delete(delete_team))
         .route("/persons", post(create_person))
         .route("/persons/{id}", patch(update_person))
+        .route("/persons/{id}/sign-in-link", post(create_sign_in_link))
         .route("/assignments", post(create_assignment))
         .route("/assignments/{id}", patch(update_assignment))
         .route("/assignments/{id}/definitions", put(save_definitions))
@@ -231,7 +232,9 @@ const LAST_MANAGER: &str = "There must be at least one manager.";
 #[derive(Deserialize)]
 struct PersonBody {
     full_name: String,
-    email: String,
+    /// Optional: when missing or blank the server makes an internal address from the name.
+    #[serde(default)]
+    email: Option<String>,
     app_role: String,
 }
 
@@ -256,9 +259,26 @@ async fn create_person(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     user.require_controller()?;
     let name = rules::clean_person_name(&body.full_name)?;
-    let email = rules::clean_email(&body.email)?;
+    let given = body.email.as_deref().filter(|e| !e.trim().is_empty());
+    let given = given.map(rules::clean_email).transpose()?;
     let role = rules::clean_app_role(&body.app_role)?;
     let mut tx = st.pool.begin().await?;
+    let email = match given {
+        Some(e) => e,
+        None => {
+            // One generator at a time, so two new people cannot pick the same address.
+            sqlx::query("select pg_advisory_xact_lock(hashtextextended('xt_person_email', 0))")
+                .execute(&mut *tx)
+                .await?;
+            let domain = st
+                .config
+                .internal_email_domains
+                .first()
+                .cloned()
+                .unwrap_or_else(|| crate::config::DEFAULT_INTERNAL_DOMAIN.into());
+            crate::signin::free_internal_email(&mut tx, &name, &domain).await?
+        }
+    };
     if email_taken(&mut tx, &email, None).await? {
         return Err(ApiError::Conflict(EMAIL_TAKEN.into()));
     }
@@ -363,6 +383,71 @@ async fn update_person(
     let person = load_person(&mut tx, id).await?.ok_or(ApiError::Internal)?;
     tx.commit().await?;
     Ok(Json(person_json(&person, true)))
+}
+
+#[derive(Deserialize)]
+struct SignInLinkBody {
+    /// 1 to 168, default 24. Kept as raw JSON so "2.5" or "1" (text) get our plain message.
+    #[serde(default)]
+    hours: Option<Value>,
+}
+
+/// A one-time sign-in link for a person, to share privately (chat, in person).
+async fn create_sign_in_link(
+    user: AuthUser,
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<SignInLinkBody>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    use crate::signin::{self, msg};
+    user.require_controller()?;
+    let id = parse_id(&id).map_err(|_| ApiError::not_found("That person does not exist."))?;
+    let hours = match &body.hours {
+        None | Some(Value::Null) => signin::LINK_HOURS_DEFAULT,
+        Some(v) => v
+            .as_i64()
+            .filter(|h| (signin::LINK_HOURS_MIN..=signin::LINK_HOURS_MAX).contains(h))
+            .ok_or_else(|| ApiError::bad(msg::HOURS_INVALID))?,
+    };
+    let mut tx = st.pool.begin().await?;
+    let cur = load_person(&mut tx, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("That person does not exist."))?;
+    if !cur.active {
+        return Err(ApiError::Conflict(msg::SWITCHED_OFF.into()));
+    }
+    // Serialise per issuing manager so parallel requests cannot all pass the count.
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(format!("xt_sign_in_link:{}", user.person_id))
+        .execute(&mut *tx)
+        .await?;
+    let recent: i64 = sqlx::query_scalar(
+        "select count(*) from sign_in_link_audit
+         where issued_by = $1 and issued_at > now() - interval '1 hour'",
+    )
+    .bind(user.person_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if recent >= signin::MAX_SIGN_IN_LINKS_PER_HOUR {
+        return Err(ApiError::TooManyRequests(msg::TOO_MANY.into()));
+    }
+    let link = signin::create_sign_in_link(
+        &mut tx,
+        &st.config.public_url,
+        id,
+        hours,
+        Some(user.person_id),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "url": link.url,
+            "expires_at": link.expires_at_rfc3339(),
+            "person_id": link.person_id,
+        })),
+    ))
 }
 
 // ---------- seats ----------

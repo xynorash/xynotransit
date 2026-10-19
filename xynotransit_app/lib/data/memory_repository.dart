@@ -1,5 +1,6 @@
 // ignore_for_file: prefer_initializing_formals
 import 'dart:async';
+import 'dart:math';
 
 import '../domain/admin.dart';
 import '../domain/summary.dart';
@@ -507,11 +508,23 @@ class MemoryRepository implements Repository {
   }) async {
     _requireController();
     final name = _ok(AdminRules.cleanPersonName(fullName));
-    final mail = _ok(AdminRules.cleanEmail(email));
     final persons = [..._catalog.persons];
     final i = id == null ? -1 : persons.indexWhere((p) => p.id == id);
     if (id != null && i < 0) {
       throw const RepositoryException('That person does not exist.');
+    }
+    final blank = trimText(email).isEmpty;
+    final String mail;
+    if (!blank) {
+      mail = _ok(AdminRules.cleanEmail(email));
+    } else if (i >= 0 && persons[i].email != null) {
+      mail = persons[i].email!;
+    } else {
+      mail = internalEmailOf(
+        name,
+        AdminRules.internalDomain,
+        (e) => persons.any((p) => p.email?.toLowerCase() == e),
+      );
     }
     if (persons.any((p) => p.id != id && p.email?.toLowerCase() == mail)) {
       throw const RepositoryException(AdminRules.emailTaken);
@@ -540,6 +553,59 @@ class MemoryRepository implements Repository {
     }
     _setCatalog(persons: persons);
     return person;
+  }
+
+  final _links = <String, _IssuedLink>{};
+  final _linkTimes = <String, List<DateTime>>{};
+
+  @override
+  Future<SignInLink> createSignInLink(String personId, {int hours = 24}) async {
+    _requireController();
+    final me = _me();
+    if (hours < 1 || hours > AdminRules.maxSignInHours) {
+      throw const RepositoryException(AdminRules.hoursInvalid);
+    }
+    final p = _catalog.personById(personId);
+    if (p == null) throw const RepositoryException(AdminRules.noPerson);
+    if (!p.active) {
+      throw const RepositoryException(AdminRules.personSwitchedOff);
+    }
+    final now = _clock();
+    final times = _linkTimes.putIfAbsent(me.personId ?? '', () => []);
+    times.removeWhere((t) => now.difference(t) >= const Duration(hours: 1));
+    if (times.length >= AdminRules.maxSignInLinksPerHour) {
+      throw const RepositoryException(AdminRules.tooManyLinks);
+    }
+    times.add(now);
+    final random = Random.secure();
+    final token =
+        'demo-${List.generate(12, (_) => random.nextInt(36).toRadixString(36)).join()}';
+    final expires = now.add(Duration(hours: hours));
+    _links[token] = _IssuedLink(personId, expires);
+    return SignInLink(
+      url: 'https://demo.invalid/auth/verify?token=$token',
+      expiresAt: expires,
+      personId: personId,
+    );
+  }
+
+  /// Uses a link made by [createSignInLink], like the server does with the
+  /// token: once, before it expires, for a person who is still active. Returns
+  /// the person now signed in. Demo links are only displayed in the app; this
+  /// is for tests and the contract suite.
+  AppUser redeemSignInLink(String url) {
+    const refused = RepositoryException(
+      'This link has expired or was already used. Ask for a new one.',
+    );
+    final token = Uri.tryParse(url)?.queryParameters['token'];
+    final link = token == null ? null : _links[token];
+    if (link == null || link.used || !_clock().isBefore(link.expiresAt)) {
+      throw refused;
+    }
+    final p = _catalog.personById(link.personId);
+    if (p == null || !p.active) throw refused;
+    link.used = true;
+    return AppUser(personId: p.id, role: p.appRole, label: p.fullName);
   }
 
   @override
@@ -770,6 +836,13 @@ class MemoryRepository implements Repository {
     _deckTexts[periodId] = clean;
     return DeckTextsState(texts: clean);
   }
+}
+
+class _IssuedLink {
+  _IssuedLink(this.personId, this.expiresAt);
+  final String personId;
+  final DateTime expiresAt;
+  bool used = false;
 }
 
 /// Demo sign-in: pick who you are, no email.

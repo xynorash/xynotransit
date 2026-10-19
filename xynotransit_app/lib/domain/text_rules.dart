@@ -90,23 +90,24 @@ String plainSpaces(String s) => s.replaceAllMapped(_oddSpace, (_) => ' ');
 
 final _oddSpace = RegExp(r'(?!\u0020)\p{Zs}', unicode: true);
 
+const _asciiFold = {
+  'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a', //
+  'ç': 'c',
+  'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e',
+  'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i',
+  'ñ': 'n',
+  'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o',
+  'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u',
+  'ý': 'y', 'ÿ': 'y',
+};
+
 /// Lower case ASCII letters and digits joined by single dashes. Never empty.
 String slugOf(String s) {
-  const fold = {
-    'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a', //
-    'ç': 'c',
-    'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e',
-    'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i',
-    'ñ': 'n',
-    'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o',
-    'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u',
-    'ý': 'y', 'ÿ': 'y',
-  };
   final out = StringBuffer();
   var len = 0;
   var dash = false;
   for (final raw in s.toLowerCase().split('')) {
-    final c = fold[raw] ?? raw;
+    final c = _asciiFold[raw] ?? raw;
     final u = c.codeUnitAt(0);
     final alnum =
         c.length == 1 && ((u >= 0x30 && u <= 0x39) || (u >= 0x61 && u <= 0x7A));
@@ -137,4 +138,99 @@ String uniqueSlug(String base, bool Function(String) taken) {
     c = '$base-$n';
   }
   return c;
+}
+
+/// Longest local part of a generated internal address.
+const maxInternalLocal = 40;
+
+/// Letters with their accent taken off, for internal addresses. Same table as
+/// the API (xynotransit-api/src/signin.rs).
+final _internalFold = <String, String>{
+  for (final e in const {
+    'aàáâãäåāăąǎ': 'a',
+    'æǣ': 'ae',
+    'cçćĉċč': 'c',
+    'dďđð': 'd',
+    'eèéêëēĕėęě': 'e',
+    'gĝğġģ': 'g',
+    'hĥħ': 'h',
+    'iìíîïĩīĭįıǐ': 'i',
+    'jĵ': 'j',
+    'kķ': 'k',
+    'lĺļľŀł': 'l',
+    'nñńņň': 'n',
+    'oòóôõöøōŏőǒ': 'o',
+    'œ': 'oe',
+    'rŕŗř': 'r',
+    'sśŝşšș': 's',
+    'ß': 'ss',
+    'tţťŧț': 't',
+    'þ': 'th',
+    'uùúûüũūŭůűųǔ': 'u',
+    'ŵ': 'w',
+    'yýÿŷ': 'y',
+    'zźżž': 'z',
+  }.entries)
+    for (final c in e.key.split('')) c: e.value,
+};
+
+/// The local part of an internal address made from a full name: lower case
+/// ASCII letters and digits and single dots. Accents are folded to plain
+/// letters (ü to u, ß to ss), spaces and dots become one dot, every other
+/// character is dropped (apostrophes and hyphens too). No dot at either end,
+/// at most [maxInternalLocal] characters, and "user" when nothing is left.
+String internalLocalOf(String fullName) {
+  final out = StringBuffer();
+  var dot = false;
+  var len = 0;
+  void put(String letters) {
+    if (dot && len > 0) {
+      out.write('.');
+      len++;
+    }
+    dot = false;
+    out.write(letters);
+    len += letters.length;
+  }
+
+  for (final rune in fullName.toLowerCase().runes) {
+    final c = String.fromCharCode(rune);
+    final alnum =
+        (rune >= 0x30 && rune <= 0x39) || (rune >= 0x61 && rune <= 0x7A);
+    if (alnum) {
+      put(c);
+    } else if (c == '.' || isWhiteSpaceRune(rune)) {
+      dot = true;
+    } else if (_internalFold[c] != null) {
+      put(_internalFold[c]!);
+    }
+  }
+  var t = out.toString();
+  if (t.length > maxInternalLocal) t = t.substring(0, maxInternalLocal);
+  while (t.endsWith('.')) {
+    t = t.substring(0, t.length - 1);
+  }
+  return t.isEmpty ? 'user' : t;
+}
+
+/// `local@domain` for [fullName]; when [taken] knows it, a number goes on the
+/// end of the local part (rosa.rakoto2, rosa.rakoto3 ...) and the local part
+/// stays within [maxInternalLocal] characters.
+String internalEmailOf(
+  String fullName,
+  String domain,
+  bool Function(String email) taken,
+) {
+  final base = internalLocalOf(fullName);
+  var email = '$base@$domain';
+  for (var n = 2; taken(email); n++) {
+    var cut = base;
+    final room = maxInternalLocal - '$n'.length;
+    if (cut.length > room) cut = cut.substring(0, room);
+    while (cut.endsWith('.')) {
+      cut = cut.substring(0, cut.length - 1);
+    }
+    email = '$cut$n@$domain';
+  }
+  return email;
 }

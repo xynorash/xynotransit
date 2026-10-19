@@ -166,7 +166,8 @@ In the "Reports received" table press **Edit** on the row. The report is loaded 
 This is where the catalog is built and kept.
 
 - **Teams:** add, rename, delete. A team that still has seats cannot be deleted ("Move or remove the seats of this team first.").
-- **People:** add a person (name, email, Employee or Manager). Deactivate a person with the Active switch: they can no longer sign in and every token of theirs stops working at once. Their old reports stay. Inactive people and seats are hidden until you turn on the inactive switch. The dialog explains what saving an inactive person does and how to undo it (turn Active on and save). The page has a search (name, email, role), a team filter and a sort (order set up, name, role), and builds only the rows near the screen, so a catalog of 300 people stays fast. Deleting a team asks first; a team that still has seats is refused with a message.
+- **People:** add a person (name, optional email, Employee or Manager). With no email the server makes an internal address from the name (see "Sign in without an email") and the dialog shows it. Deactivate a person with the Active switch: they can no longer sign in and every token of theirs stops working at once. Their old reports stay. Inactive people and seats are hidden until you turn on the inactive switch. The dialog explains what saving an inactive person does and how to undo it (turn Active on and save). The page has a search (name, email, role), a team filter and a sort (order set up, name, role), and builds only the rows near the screen, so a catalog of 300 people stays fast. Deleting a team asks first; a team that still has seats is refused with a message.
+- **Sign-in link:** every person has a **Sign-in link** action (also in the person dialog). It opens a dialog to choose how long the link works (1 hour, 24 hours, 7 days), then shows the link in a read-only field with **Copy link** (the screen reader hears "Copied"), a QR code, the time it stops working in your own time zone, a sentence ready to paste into a chat, and the warning that anyone with the link can sign in as that person. Making another link does not turn the first off. The action is disabled for a person who is switched off, with the reason next to it. In demo mode the links are only displayed (`https://demo.invalid/auth/verify?token=demo-...`); they open nothing.
 - **Seats:** a seat is a person in a team with a role title. A person can have several seats. A deactivated seat is no longer expected in any period; its old reports stay.
 - **Counts and targets:** "What they count" on a seat opens the definitions editor.
   - Counts: up to 8 (a seat with none has nothing to count on its form), each named by you (a seat can have just "Sea", or "Sea", "Air", "Road" and so on), name 1 to 60 characters, unique ignoring case. The order is the order on the form and the slides; use the up and down buttons.
@@ -183,6 +184,17 @@ A fresh database has no catalog. Only the manager from the environment exists.
 3. Open http://127.0.0.1:8080, sign in with that email, read the link in Mailpit (http://127.0.0.1:8025). You land on Overview, which says nobody is expected yet.
 4. Open **People**. Add a team, then a person, then a seat (team and role title). Open the definitions editor and name the counts and write the targets.
 5. Tell the person to sign in with their email. They land on their form.
+
+## Sign in without an email
+
+People who have no real email can still sign in. This is for people who work without a mailbox of their own.
+
+- **Internal address.** Leave the email empty when you add a person. The server makes `name@xynotransit.internal` from the full name: lower case letters and digits, accents folded to plain letters (`é` becomes `e`), words joined by one dot, other characters dropped, at most 40 characters before the `@`. If it is taken it gets a number (`rosa.rakoto`, `rosa.rakoto2`, `rosa.rakoto3`). Addresses at a domain listed in the API setting `INTERNAL_EMAIL_DOMAINS` never receive mail. The demo follows the same rules (`internalLocalOf` and `internalEmailOf` in `lib/domain/text_rules.dart`, the same table as `xynotransit-api/src/signin.rs`).
+- **Sign-in link.** A manager makes a one-time link in People and shares it privately (chat, in person, or by QR code). It signs the person in once, through the same `/auth/verify` page as an emailed link. A manager can make 30 links an hour. Every link is written to an audit table (never the link itself). See the API README.
+- **First manager, no mail.** On the server: `docker compose exec api xynotransit-api sign-in-link manager@xynotransit.internal --hours 24` prints the link and nothing else.
+- **Sign-in page.** Under the form: "No email address? Ask your manager for a sign-in link."
+
+The QR code is drawn in the app with the pure Dart `qr` package (error correction M, a quiet zone of 4 modules, black on white also in dark mode). `test/signin/qr_test.dart` draws it to a PNG and reads the modules back.
 
 ## Loading the optional example catalog
 
@@ -206,7 +218,7 @@ Postgres 18 (db container)    Mailpit (dev mail catcher, UI on 127.0.0.1:8025)
 ```
 
 - Only the API talks to Postgres. There is no row level security.
-- Sign-in is an emailed magic link. No passwords, no open sign-up.
+- Sign-in is an emailed magic link, or a one-time sign-in link a manager makes for a person without a real email (see "Sign in without an email"). No passwords, no open sign-up.
 - Live updates use Server-Sent Events (SSE). If SSE fails, the app polls every 5 seconds.
 
 ## Quick start with the Docker stack
@@ -307,6 +319,7 @@ Every export includes the Suggestions page (34 slides for 14 reports). File name
 | Endpoint | Employee | Manager |
 | --- | --- | --- |
 | `POST /api/auth/magic-link`, `POST /api/auth/verify` | open | open |
+| `POST /api/persons/{id}/sign-in-link` | no | yes (30 an hour) |
 | `GET /api/me`, `GET /api/catalog` | yes (active rows only, other people's emails hidden) | yes (all emails; `?include_inactive=true` adds inactive rows) |
 | `POST/PATCH/DELETE` teams, `POST/PATCH` persons and assignments, `PUT /api/assignments/{id}/definitions` | no | yes |
 | `GET /api/summary` | no | yes |
@@ -339,6 +352,8 @@ flutter analyze
 flutter test
 flutter test --update-goldens     # only after an intended visual change
 ```
+
+`test/signin/` covers sign-in without an email: the address rules, the demo repository, the API client, the People screen and dialog, the QR code and the sign-in screen. `test/contract/` runs the same scenarios against the demo repository and, with `--dart-define=CONTRACT_API=http://127.0.0.1:8080`, against the live API.
 
 API tests (need the db container running, see the API README):
 

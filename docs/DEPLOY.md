@@ -59,6 +59,16 @@ The API checks the mail server's certificate. `SMTP_TLS=none` sends mail in plai
 
 Mail is the part that most often goes wrong. Use a provider that gives you SMTP credentials (your own mailbox, or a transactional service with a free tier) and set up its SPF and DKIM records for the sending domain, or the sign-in links land in spam.
 
+### People without a real email
+
+If some people have no mailbox, you do not need mail for them. Add them in People with the email left empty: they get an address like `name@xynotransit.internal`. A manager then makes a one-time sign-in link for each person and shares it privately. To start with no working mail at all, set `BOOTSTRAP_CONTROLLER_EMAIL` to an internal address, start the stack (step 1.4), and make the first sign-in link on the server:
+
+```bash
+docker compose exec api xynotransit-api sign-in-link manager@xynotransit.internal --hours 24
+```
+
+It prints only the link. Anyone who has a link can sign in as that person until it is used or it expires, so send it privately. `INTERNAL_EMAIL_DOMAINS` in the API settings lists the domains that never get mail.
+
 ### 1.4 Start
 
 ```bash

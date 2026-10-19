@@ -10,6 +10,7 @@ import '../../domain/text_rules.dart';
 import '../../domain/enums.dart';
 import 'admin_providers.dart';
 import 'definitions_dialog.dart';
+import 'sign_in_link_dialog.dart';
 
 Future<void> showPersonDialog(BuildContext context, {String? personId}) {
   return showDialog<void>(
@@ -45,6 +46,7 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
   String? _teamId;
   String? _message;
   bool _isError = false;
+  String? _generated;
   String? _seatMessage;
   bool _seatIsError = false;
 
@@ -82,7 +84,10 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
         true,
       );
     }
-    if (email.isEmpty) return _say('Enter the email they sign in with.', true);
+    if (email.isEmpty && _id != null) {
+      return _say('Enter the email they sign in with.', true);
+    }
+    final creating = _id == null;
     setState(() {
       _busy = true;
       _message = null;
@@ -104,6 +109,12 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
         _loaded = true;
         _message = 'Saved.';
         _isError = false;
+        if (creating && email.isEmpty) {
+          _email.text = p.email ?? '';
+          _generated = p.email;
+        } else {
+          _generated = null;
+        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -223,13 +234,21 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
           ),
           const SizedBox(height: 12),
           Labeled(
-            label: 'Email (they sign in with it)',
+            label: editing
+                ? 'Email (they sign in with it)'
+                : 'Email (optional)',
             child: TextField(
               key: const Key('person-email'),
               controller: _email,
               keyboardType: TextInputType.emailAddress,
               style: bodyStyle(context),
-              decoration: xInput(context, hint: 'name@company.com'),
+              decoration: xInput(
+                context,
+                hint: editing
+                    ? 'name@company.com'
+                    : 'Leave empty to create an internal address '
+                          '(no real email needed)',
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -284,6 +303,12 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
                 label: editing ? 'Save person' : 'Add person',
                 onPressed: _busy ? null : _savePerson,
               ),
+              if (existing != null && existing.active)
+                GhostButton(
+                  label: 'Sign-in link',
+                  semanticLabel: 'Sign-in link for ${existing.fullName}',
+                  onPressed: () => showSignInLinkDialog(context, existing),
+                ),
               if (_message != null)
                 Semantics(
                   liveRegion: true,
@@ -299,6 +324,20 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
                 ),
             ],
           ),
+          if (_generated != null) ...[
+            const SizedBox(height: 12),
+            Semantics(
+              liveRegion: true,
+              child: SoftBanner(
+                child: Text(
+                  'Their internal address is $_generated. It never receives '
+                  'mail. To let them in, make a sign-in link.',
+                  key: const Key('generated-address'),
+                  style: bodyStyle(context, size: 15, height: 1.45),
+                ),
+              ),
+            ),
+          ],
           if (editing) ...[
             const SizedBox(height: 24),
             Semantics(

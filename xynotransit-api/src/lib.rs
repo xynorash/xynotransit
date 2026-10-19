@@ -9,6 +9,7 @@ pub mod listener;
 pub mod mail;
 pub mod routes;
 pub mod rules;
+pub mod signin;
 pub mod snapshot;
 pub mod state;
 pub mod summary;

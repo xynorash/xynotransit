@@ -271,6 +271,7 @@ class SmallButton extends StatelessWidget {
         : Semantics(
             label: semanticLabel,
             button: true,
+            enabled: onPressed != null,
             excludeSemantics: true,
             child: button,
           );

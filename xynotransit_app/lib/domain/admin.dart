@@ -53,6 +53,14 @@ abstract final class AdminRules {
   static const notThisSeat =
       'One of the counts or targets does not belong to this seat.';
   static const teamNameTaken = 'That team name is already used.';
+  static const internalDomain = 'xynotransit.internal';
+  static const maxSignInHours = 168;
+  static const maxSignInLinksPerHour = 30;
+  static const hoursInvalid = 'Choose a validity from 1 hour to 168 hours.';
+  static const personSwitchedOff = 'This person is switched off.';
+  static const tooManyLinks =
+      'Too many sign-in links created. Try again later.';
+  static const noPerson = 'That person does not exist.';
   static const emailTaken = 'That email is already used.';
   static const lastManager = 'There must be at least one manager.';
   static const seatTaken = 'That person already has this role in this team.';

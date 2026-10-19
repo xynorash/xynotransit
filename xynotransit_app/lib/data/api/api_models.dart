@@ -99,6 +99,15 @@ Person parsePerson(Object? data) => _guard(() {
   );
 });
 
+SignInLink parseSignInLink(Object? data) => _guard(() {
+  final j = asJson(data);
+  return SignInLink(
+    url: j['url'] as String,
+    expiresAt: DateTime.parse(j['expires_at'] as String),
+    personId: '${j['person_id']}',
+  );
+});
+
 Assignment parseAssignment(Object? data) => _guard(() {
   final a = asJson(data);
   return Assignment(
@@ -154,7 +163,9 @@ Map<String, Object?> personToJson({
   required bool active,
 }) => {
   'full_name': _line(fullName),
-  'email': trimText(email).toLowerCase(),
+  // Empty means "no real email": the server makes an internal address on
+  // create and keeps the old one on update.
+  if (trimText(email).isNotEmpty) 'email': trimText(email).toLowerCase(),
   'app_role': role.name,
   'active': active,
 };

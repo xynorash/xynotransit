@@ -334,7 +334,7 @@ class ApiRepository implements Repository {
         '/persons',
         body: {
           'full_name': body['full_name'],
-          'email': body['email'],
+          if (body['email'] != null) 'email': body['email'],
           'app_role': body['app_role'],
         },
       ),
@@ -344,6 +344,17 @@ class ApiRepository implements Repository {
       await _api.patch('/persons/${created.id}', body: {'active': false}),
     );
   }());
+
+  @override
+  Future<SignInLink> createSignInLink(
+    String personId, {
+    int hours = 24,
+  }) async => parseSignInLink(
+    await _api.post(
+      '/persons/${Uri.encodeComponent(personId)}/sign-in-link',
+      body: {'hours': hours},
+    ),
+  );
 
   @override
   Future<Assignment> saveAssignment({
