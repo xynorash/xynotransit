@@ -9,6 +9,7 @@ import 'package:xynotransit_app/data/api/api_client.dart';
 import 'package:xynotransit_app/data/api/api_models.dart';
 import 'package:xynotransit_app/data/repository.dart';
 import 'package:xynotransit_app/domain/enums.dart';
+import 'package:xynotransit_app/domain/password_rules.dart';
 
 import '../api/api_client_test.dart' show json;
 import '../api/api_repository_test.dart' show repoFor;
@@ -387,7 +388,6 @@ void main() {
       (403, 'Your current password is not right.'),
       (400, 'Use at least 10 characters.'),
       (400, 'Choose a password different from the current one.'),
-      (429, 'Too many sign-in attempts. Try again later.'),
     ]) {
       test('$status: $msg', () async {
         final (auth, tokens, _) = await authFor((r) async {
@@ -417,6 +417,71 @@ void main() {
         expect(auth.currentUser, isNotNull);
       });
     }
+
+    test(
+      'a 429 on a change keeps the sign-in and says when to retry',
+      () async {
+        final (auth, tokens, _) = await authFor((r) async {
+          if (r.url.path == '/api/auth/password') {
+            return http.Response(
+              jsonEncode({
+                'error': 'Too many password attempts. Try again later.',
+              }),
+              429,
+              headers: {
+                'retry-after': '840',
+                'content-type': 'application/json',
+              },
+            );
+          }
+          return json(loginAnswer());
+        });
+        await auth.signInWithPassword('rosa.rakoto', 'a purple bicycle');
+        await expectLater(
+          auth.changePassword(
+            currentPassword: 'x',
+            newPassword: 'a green kitchen sink',
+          ),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'status', 429)
+                .having((e) => e.retryAfterSeconds, 'retry', 840)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  'Too many password attempts. Try again in 14 minutes.',
+                ),
+          ),
+        );
+        expect(tokens.token, 'tok-login');
+        expect(auth.currentUser, isNotNull);
+      },
+    );
+
+    test('the safety 401 on a change signs out in plain words', () async {
+      final (auth, tokens, _) = await authFor((r) async {
+        if (r.url.path == '/api/auth/password') {
+          return json({'error': PasswordRules.signedOutForSafety}, 401);
+        }
+        return json(loginAnswer());
+      });
+      await auth.signInWithPassword('rosa.rakoto', 'a purple bicycle');
+      await expectLater(
+        auth.changePassword(
+          currentPassword: 'x',
+          newPassword: 'a green kitchen sink',
+        ),
+        throwsA(
+          isA<SignedOutForSafety>().having(
+            (e) => e.message,
+            'message',
+            PasswordRules.signedOutForSafety,
+          ),
+        ),
+      );
+      expect(tokens.token, isNull);
+      expect(auth.currentUser, isNull);
+    });
 
     test('a 401 (an older session) signs out', () async {
       final (auth, tokens, _) = await authFor((r) async {

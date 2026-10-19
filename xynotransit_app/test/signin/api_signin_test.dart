@@ -28,12 +28,26 @@ void main() {
     final l = await repo.createSignInLink('p7', hours: 168);
     expect(seen.method, 'POST');
     expect(seen.url.path, '/api/persons/p7/sign-in-link');
-    expect(jsonDecode(seen.body), {'hours': 168});
+    expect(jsonDecode(seen.body), {'hours': 168, 'recovery': false});
     expect(seen.headers['Authorization'], 'Bearer tok');
     expect(l.url, 'https://reports.example/auth/verify?token=abc_DEF-123');
     expect(l.personId, 'p7');
     expect(l.expiresAt, DateTime.utc(2026, 6, 2, 9));
     expect(l.expiresAt.isUtc, isTrue);
+  });
+
+  test('recovery is sent, and the answer says whether it was kept', () async {
+    late Object? body;
+    final repo = await repoFor((r) async {
+      body = jsonDecode(r.body);
+      return json({...okLink(), 'recovery': true}, 201);
+    });
+    final l = await repo.createSignInLink('p7', recovery: true);
+    expect(body, {'hours': 24, 'recovery': true});
+    expect(l.recovery, isTrue);
+    final plain = await (await repoFor((r) async => json(okLink(), 201)))
+        .createSignInLink('p7');
+    expect(plain.recovery, isFalse);
   });
 
   test('the default is 24 hours', () async {
@@ -43,7 +57,7 @@ void main() {
       return json(okLink(), 201);
     });
     await repo.createSignInLink('p7');
-    expect(body, {'hours': 24});
+    expect(body, {'hours': 24, 'recovery': false});
   });
 
   test('an id with odd characters cannot change the path', () async {

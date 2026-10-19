@@ -372,42 +372,36 @@ void main() {
   });
 
   group('changing a password', () {
-    test(
-      'needs the current one, and a wrong one counts as a failure',
-      () async {
-        await give('rosa', 'a purple bicycle');
-        await auth.signInWithPassword('rosa.rakoto', 'a purple bicycle');
-        for (var i = 0; i < 4; i++) {
-          await expectLater(
-            auth.changePassword(
-              currentPassword: 'wrong one $i',
-              newPassword: 'a brand new phrase',
-            ),
-            throwsA(
-              isA<ApiException>()
-                  .having((e) => e.statusCode, 'status', 403)
-                  .having(
-                    (e) => e.message,
-                    'message',
-                    'Your current password is not right.',
-                  ),
-            ),
-          );
-        }
-        // The fifth failure comes from a sign-in attempt for the same name.
-        await expectLater(
-          auth.signInWithPassword('rosa.rakoto', 'wrong'),
-          throwsA(isA<UnauthorizedException>()),
-        );
+    test('needs the current one, and a wrong one is counted apart', () async {
+      await give('rosa', 'a purple bicycle');
+      await auth.signInWithPassword('rosa.rakoto', 'a purple bicycle');
+      for (var i = 0; i < 4; i++) {
         await expectLater(
           auth.changePassword(
-            currentPassword: 'a purple bicycle',
+            currentPassword: 'wrong one $i',
             newPassword: 'a brand new phrase',
           ),
-          throwsA(isA<ApiException>().having((e) => e.statusCode, 's', 429)),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'status', 403)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  'Your current password is not right.',
+                ),
+          ),
         );
-      },
-    );
+      }
+      // Failed sign-ins of the same name do not count against the change.
+      await expectLater(
+        auth.signInWithPassword('rosa.rakoto', 'wrong'),
+        throwsA(isA<UnauthorizedException>()),
+      );
+      await auth.changePassword(
+        currentPassword: 'a purple bicycle',
+        newPassword: 'a brand new phrase',
+      );
+    });
 
     test('applies the policy with the same words', () async {
       await give('rosa', 'a purple bicycle');

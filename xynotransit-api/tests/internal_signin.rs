@@ -70,7 +70,8 @@ async fn manager_adds_a_person_without_email_and_creates_a_link() {
     let secs = (exp.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds();
     assert!((24 * 3600 - 30..=24 * 3600 + 5).contains(&secs), "{secs}");
     assert!(v["expires_at"].as_str().unwrap().ends_with('Z'));
-    assert_eq!(v.as_object().unwrap().len(), 3, "{v}");
+    assert_eq!(v.as_object().unwrap().len(), 4, "{v}");
+    assert_eq!(v["recovery"], false);
 
     // Works exactly once and gives a session of that person.
     let (s, session) = verify(&app, &token).await;
@@ -906,4 +907,45 @@ async fn migration_runs_twice_and_old_tokens_stay_valid() {
     app.sql("delete from person where id = '00000000-0000-0000-0000-0000000000e2'")
         .await;
     assert_eq!(app.count("sign_in_link_audit").await, 2);
+}
+
+#[tokio::test]
+async fn command_recovery_flag_sets_the_audit_and_the_token() {
+    let app = TestApp::new().await;
+    app.give_password(ANA, "ana", "purple bicycle rain").await;
+    let db = app.state.config.database_url.clone();
+    for (flag, want) in [(None, false), (Some("--recovery"), true)] {
+        let mut args = vec!["ana@example.org"];
+        args.extend(flag);
+        let r = run_cli(&app, &args, Some(&db)).await;
+        assert_eq!(r.code, 0, "{}", r.err);
+        assert!(r.err.is_empty(), "{}", r.err);
+        let (s, session) = verify(&app, &token_of(r.out.trim_end())).await;
+        assert_eq!(s, StatusCode::OK, "{session}");
+        let (o, rec): (String, bool) = sqlx::query_as(
+            "select origin, recovery from sign_in_link_audit order by id desc limit 1",
+        )
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+        assert_eq!((o.as_str(), rec), ("cli", want));
+        let (s, me) = app
+            .call(
+                "GET",
+                "/api/me",
+                Some(session["access_token"].as_str().unwrap()),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(me["recent_link_session"], want);
+    }
+    // The usage text names the flag and its warning.
+    let r = run_cli(&app, &["--nope"], Some(&db)).await;
+    assert_eq!(r.code, 2);
+    assert!(
+        r.err.contains("--recovery") && r.err.contains("sure whom"),
+        "{}",
+        r.err
+    );
 }

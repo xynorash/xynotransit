@@ -109,6 +109,8 @@ class _PasswordFormState extends ConsumerState<PasswordForm> {
       _busy = true;
       _error = null;
     });
+    // Read before the await: a sign-out sends the person away from here.
+    final notice = ref.read(signInNoticeProvider.notifier);
     try {
       await ref
           .read(authServiceProvider)
@@ -119,6 +121,10 @@ class _PasswordFormState extends ConsumerState<PasswordForm> {
       TextInput.finishAutofillContext();
       if (!mounted) return;
       widget.onDone();
+    } on SignedOutForSafety catch (e) {
+      // The sessions ended. The router sends the person to the sign-in
+      // screen, which shows these words.
+      notice.set(e.message);
     } on RepositoryException catch (e) {
       if (mounted) {
         setState(() {

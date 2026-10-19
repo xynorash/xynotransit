@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:xynotransit_app/data/api/api_client.dart'
+    show UnauthorizedException;
 import 'package:xynotransit_app/data/memory_repository.dart';
 import 'package:xynotransit_app/data/repository.dart';
 import 'package:xynotransit_app/domain/catalog.dart';
@@ -81,8 +83,13 @@ class _Acting implements Repository {
   Future<void> removePassword(String personId) =>
       _as(() => _r.removePassword(personId));
   @override
-  Future<SignInLink> createSignInLink(String personId, {int hours = 24}) =>
-      _as(() => _r.createSignInLink(personId, hours: hours));
+  Future<SignInLink> createSignInLink(
+    String personId, {
+    int hours = 24,
+    bool recovery = false,
+  }) => _as(
+    () => _r.createSignInLink(personId, hours: hours, recovery: recovery),
+  );
   @override
   Future<Assignment> saveAssignment({
     String? id,
@@ -134,7 +141,28 @@ class _MemorySession implements PersonSession {
     String? currentPassword,
     required String newPassword,
   }) async {
-    _acting.me = _r.changePasswordOf(
+    try {
+      _acting.me = _r.changePasswordOf(
+        _acting.me,
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+        address: _address,
+      );
+    } on UnauthorizedException catch (e) {
+      // Like the app: the safety sign-out reads in plain words.
+      if (e.message == const SignedOutForSafety().message) {
+        throw const SignedOutForSafety();
+      }
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> changePasswordRaw({
+    String? currentPassword,
+    required String newPassword,
+  }) async {
+    _r.changePasswordOf(
       _acting.me,
       currentPassword: currentPassword,
       newPassword: newPassword,
@@ -234,6 +262,16 @@ class MemoryArena implements Arena {
   }) async => _MemorySession(
     _repo,
     _Acting(_repo, _repo.redeemSignInLink(url, address: address)),
+    address,
+  );
+
+  @override
+  Future<PersonSession> signInWithEmailLinkSession(
+    Person p, {
+    String? address,
+  }) async => _MemorySession(
+    _repo,
+    _Acting(_repo, _repo.emailLinkSession(p.id, address: address)),
     address,
   );
 

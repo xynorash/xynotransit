@@ -39,8 +39,12 @@ Future<void> save(WidgetTester t) async {
   await t.pumpAndSettle();
 }
 
-Future<String> linkTokenFor(AuthHarness h, String personId) async {
-  final link = await h.repo.createSignInLink(personId);
+Future<String> linkTokenFor(
+  AuthHarness h,
+  String personId, {
+  bool recovery = false,
+}) async {
+  final link = await h.repo.createSignInLink(personId, recovery: recovery);
   return Uri.parse(link.url).queryParameters['token']!;
 }
 
@@ -512,6 +516,7 @@ void main() {
       WidgetTester tester, {
       Size size = const Size(1000, 1100),
       double textScale = 1.0,
+      bool recovery = true,
     }) async {
       final h = await pumpAuthApp(
         tester,
@@ -519,7 +524,7 @@ void main() {
         textScale: textScale,
         before: (h) => h.givePassword('p-rova', 'a purple bicycle'),
       );
-      final token = await linkTokenFor(h, 'p-rova');
+      final token = await linkTokenFor(h, 'p-rova', recovery: recovery);
       h.container.read(routerProvider).go('/auth/verify?token=$token');
       await tester.pump();
       await tester.pump(const Duration(seconds: 2));
@@ -578,6 +583,65 @@ void main() {
       await fill(tester, current: 'a purple bicycle');
       await save(tester);
       expect(find.text('Password saved'), findsOneWidget);
+    });
+
+    testWidgets('a link without recovery still asks for the current password', (
+      tester,
+    ) async {
+      final h = await openAfterLink(tester, recovery: false);
+      expect(_cur, findsOneWidget);
+      expect(find.byKey(const Key('link-recovery-note')), findsNothing);
+      expect(h.auth.currentUser!.recentLinkSession, isFalse);
+      await fill(
+        tester,
+        current: 'not it at all',
+        next: 'green kitchen sink',
+        again: 'green kitchen sink',
+      );
+      await save(tester);
+      expect(find.text('Your current password is not right.'), findsOneWidget);
+      await fill(tester, current: 'a purple bicycle');
+      await save(tester);
+      expect(find.text('Password saved'), findsOneWidget);
+    });
+
+    testWidgets('ten wrong current passwords sign the person out', (
+      tester,
+    ) async {
+      final h = await openAfterLink(tester, recovery: false);
+      for (var i = 0; i < 9; i++) {
+        await fill(
+          tester,
+          current: 'wrong guess $i',
+          next: 'green kitchen sink',
+          again: 'green kitchen sink',
+        );
+        await save(tester);
+        expect(
+          find.text('Your current password is not right.'),
+          findsOneWidget,
+        );
+      }
+      await fill(tester, current: 'wrong guess 9');
+      await save(tester);
+      expect(h.auth.currentUser, isNull);
+      expect(find.byKey(const Key('signin-username')), findsOneWidget);
+      expect(
+        find.text(
+          'You were signed out for safety after too many wrong passwords. '
+          'Sign in again.',
+        ),
+        findsOneWidget,
+      );
+      // The person signs in again with the password.
+      await tester.enterText(find.byKey(const Key('signin-username')), 'rova');
+      await tester.enterText(
+        find.byKey(const Key('signin-password')),
+        'a purple bicycle',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(h.auth.currentUser, isNotNull);
     });
 
     testWidgets('a password sign-in shows the current password box', (

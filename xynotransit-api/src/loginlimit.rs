@@ -8,7 +8,14 @@
 //!     last 30 days (`login_success`).
 //!   * per ADDRESS: 30 failures lock the address, but only an address the server can determine.
 //!
-//! All three answer 429 "Too many sign-in attempts. Try again later." with Retry-After.
+//! A WRONG CURRENT PASSWORD while signed in (`Kind::Change`) is counted apart, under other keys
+//! (own HMAC domains, so these rows never touch a login lock and a login failure never touches
+//! them): per pair (5), per address (30) and, across all addresses, per PERSON: 10 failures per
+//! 15 minutes answer 429 "Too many password attempts. Try again later." with Retry-After. The 10th
+//! failure also ends the person's sessions (`end_sessions`, audit kind `change-lock`), so a thief
+//! holding a token cannot keep guessing; the real person signs in again.
+//!
+//! All three login limits answer 429 "Too many sign-in attempts. Try again later." with Retry-After.
 //! A try is written down BEFORE the password is checked (under advisory locks), and taken back when
 //! it turns out right, so parallel guesses cannot all slip past the count. While locked, even the
 //! right password is refused and the refused tries are not counted again. A success clears that
@@ -49,6 +56,8 @@ pub const MAX_FAILURES_PER_PAIR: i64 = 5;
 pub const MAX_FAILURES_PER_USER: i64 = 100;
 /// Failures per determinable client address.
 pub const MAX_FAILURES_PER_IP: i64 = 30;
+/// Wrong current passwords per person (from any addresses) per window; the last one ends sessions.
+pub const MAX_CHANGE_FAILURES_PER_PERSON: i64 = 10;
 /// Days an address stays trusted for a username after a successful sign-in.
 pub const TRUSTED_DAYS: i64 = 30;
 /// Temporary passwords a manager may issue per hour.
@@ -61,6 +70,9 @@ pub const UNKNOWN_ADDRESS: &str = "unknown";
 pub mod msg {
     pub const WRONG: &str = "Username or password is wrong.";
     pub const TOO_MANY: &str = "Too many sign-in attempts. Try again later.";
+    pub const TOO_MANY_PASSWORD: &str = "Too many password attempts. Try again later.";
+    pub const SIGNED_OUT_FOR_SAFETY: &str =
+        "You were signed out for safety after too many wrong passwords. Sign in again.";
     pub const TOO_MANY_RESETS: &str = "Too many temporary passwords created. Try again later.";
     pub const BUSY: &str = "Busy, try again in a moment.";
 }
@@ -204,6 +216,16 @@ impl LimitKeys {
         self.hex("user", lookup_key)
     }
 
+    /// The stored key of a person for change attempts (a domain of its own).
+    pub fn change_person(&self, person_id: &str) -> String {
+        self.hex("change-person", person_id)
+    }
+
+    /// The stored key of a client address for change attempts (a domain of its own).
+    pub fn change_address(&self, addr: Option<&str>) -> String {
+        self.hex("change-address", addr.unwrap_or(UNKNOWN_ADDRESS))
+    }
+
     /// The stored key of a client address key, or of `unknown`.
     pub fn address(&self, addr: Option<&str>) -> String {
         self.hex("address", addr.unwrap_or(UNKNOWN_ADDRESS))
@@ -229,13 +251,24 @@ impl Who {
     }
 }
 
+impl Who {
+    /// Who is trying to change a password: keys of the change domains, for the person.
+    pub fn for_change(keys: &LimitKeys, person_id: &str, client: &ClientAddr) -> Self {
+        Who {
+            user: keys.change_person(person_id),
+            address: keys.change_address(client.0.as_deref()),
+            known_address: client.0.is_some(),
+        }
+    }
+}
+
 /// Which tries a check counts.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// A sign-in: pair, backstop (unless trusted) and address.
     Login,
-    /// A wrong current password while signed in: pair and address only. Failures from other
-    /// addresses never lock a person who is already signed in.
+    /// A wrong current password while signed in: pair, address and person (all addresses), under
+    /// keys of their own. Login failures never block it and it never blocks a login.
     Change,
 }
 
@@ -332,6 +365,21 @@ pub async fn begin_attempt(pool: &PgPool, who: &Who, kind: Kind) -> Result<i64, 
                 .max(wait_for(&mut tx, who, Scope::Address, by_addr, MAX_FAILURES_PER_IP).await?);
         }
     }
+    if kind == Kind::Change {
+        let by_person = count(&mut tx, who, Scope::User).await?;
+        if by_person >= MAX_CHANGE_FAILURES_PER_PERSON {
+            wait = wait.max(
+                wait_for(
+                    &mut tx,
+                    who,
+                    Scope::User,
+                    by_person,
+                    MAX_CHANGE_FAILURES_PER_PERSON,
+                )
+                .await?,
+            );
+        }
+    }
     if kind == Kind::Login {
         let by_user = count(&mut tx, who, Scope::User).await?;
         if by_user >= MAX_FAILURES_PER_USER {
@@ -354,7 +402,11 @@ pub async fn begin_attempt(pool: &PgPool, who: &Who, kind: Kind) -> Result<i64, 
     }
     if wait > 0 {
         tx.commit().await?;
-        return Err(ApiError::TooManyRequests(msg::TOO_MANY.into(), wait as u64));
+        let text = match kind {
+            Kind::Login => msg::TOO_MANY,
+            Kind::Change => msg::TOO_MANY_PASSWORD,
+        };
+        return Err(ApiError::TooManyRequests(text.into(), wait as u64));
     }
     let id: i64 = sqlx::query_scalar(
         "insert into login_failure (username_key, address_key) values ($1, $2) returning id",
@@ -365,6 +417,53 @@ pub async fn begin_attempt(pool: &PgPool, who: &Who, kind: Kind) -> Result<i64, 
     .await?;
     tx.commit().await?;
     Ok(id)
+}
+
+/// After a wrong current password: when THIS try (`attempt`, the id `begin_attempt` gave) is the
+/// 10th or later in the person's window, end their sessions (epoch plus 1, audit kind
+/// `change-lock`). Going by the place of this try, not by the total, means that parallel tries
+/// still waiting for their answer are plain wrong answers (403) and only the 10th is the lock.
+/// `epoch` is the one the caller's token carried, so callers end the sessions once. Returns true
+/// when the sessions are (now or already) ended by this lock, so the caller answers 401.
+pub async fn end_sessions_at_cap(
+    pool: &PgPool,
+    who: &Who,
+    attempt: i64,
+    person_id: uuid::Uuid,
+    epoch: i32,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    lock(&mut tx, &format!("xt_login_user:{}", who.user)).await?;
+    let place: i64 = sqlx::query_scalar(
+        "select count(*) from login_failure
+         where username_key = $1 and id <= $2
+           and at > now() - make_interval(mins => $3::int)",
+    )
+    .bind(&who.user)
+    .bind(attempt)
+    .bind(WINDOW_MINUTES as i32)
+    .fetch_one(&mut *tx)
+    .await?;
+    if place < MAX_CHANGE_FAILURES_PER_PERSON {
+        return Ok(false);
+    }
+    let done = sqlx::query(
+        "update person set session_epoch = session_epoch + 1
+         where id = $1 and session_epoch = $2",
+    )
+    .bind(person_id)
+    .bind(epoch)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if done == 1 {
+        sqlx::query("insert into password_audit (person_id, kind) values ($1, 'change-lock')")
+            .bind(person_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// The try was not a wrong guess after all (a busy server, a failure of ours): take it back.

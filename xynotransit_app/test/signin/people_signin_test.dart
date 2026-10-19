@@ -51,11 +51,15 @@ class FailingRepo extends MemoryRepository {
   Object? failWith;
   Completer<void>? hold;
   @override
-  Future<SignInLink> createSignInLink(String personId, {int hours = 24}) async {
+  Future<SignInLink> createSignInLink(
+    String personId, {
+    int hours = 24,
+    bool recovery = false,
+  }) async {
     await hold?.future;
     final f = failWith;
     if (f != null) throw f;
-    return super.createSignInLink(personId, hours: hours);
+    return super.createSignInLink(personId, hours: hours, recovery: recovery);
   }
 }
 
@@ -474,6 +478,129 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Create link'), findsOneWidget);
     });
+  });
+
+  group('Recovery link option', () {
+    MemoryRepository withPassword() {
+      final r = MemoryRepository(
+        catalog: catalogWithPeople(),
+        currentUser: () => DemoAuth.controller,
+        clock: () => DateTime(2026, 6, 1, 9, 5),
+      );
+      return r;
+    }
+
+    Future<void> givePassword(MemoryRepository r) async {
+      final t = await r.resetPassword('carol');
+      r.changePasswordOf(
+        r.sessionFor('carol'),
+        currentPassword: t.password,
+        newPassword: 'a purple bicycle',
+      );
+    }
+
+    const label =
+        'Recovery link: lets them choose a new password without knowing the '
+        'old one';
+    const help =
+        'Use it when they forgot their password and you are sure the link '
+        'reaches only them. Otherwise use Reset password.';
+    final box = find.descendant(
+      of: find.byKey(const Key('recovery-choice')),
+      matching: find.byType(Checkbox),
+    );
+
+    uiTest('a person without a password has no such choice', (tester) async {
+      await pump(tester);
+      await openFor(tester, 'Carol Rakoto');
+      expect(box, findsNothing);
+      expect(find.text(label), findsNothing);
+    });
+
+    uiTest('a person with a password: off by default, with its sentence', (
+      tester,
+    ) async {
+      final r = withPassword();
+      await givePassword(r);
+      await pump(tester, repo: r);
+      await openFor(tester, 'Carol Rakoto');
+      expect(find.text(label), findsOneWidget);
+      expect(find.text(help), findsOneWidget);
+      expect(tester.widget<Checkbox>(box).value, isFalse);
+      // The checkbox is one control with its words for a screen reader.
+      expect(
+        find.bySemanticsLabel(RegExp('Recovery link: lets them choose')),
+        findsWidgets,
+      );
+      await tester.ensureVisible(find.text('Create link'));
+      await tester.tap(find.text('Create link'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Anyone who has this link can sign in as Carol'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('choose a new password'), findsNothing);
+      // The same box is there again for the next link.
+      await tester.ensureVisible(find.text('Make another link'));
+      await tester.tap(find.text('Make another link'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Checkbox>(box).value, isFalse);
+    });
+
+    uiTest('ticking it sends recovery and warns in plain words', (
+      tester,
+    ) async {
+      final r = withPassword();
+      await givePassword(r);
+      await pump(tester, repo: r);
+      await openFor(tester, 'Carol Rakoto');
+      await tester.ensureVisible(box);
+      await tester.tap(box);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Checkbox>(box).value, isTrue);
+      await tester.ensureVisible(find.text('Create link'));
+      await tester.tap(find.text('Create link'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('and choose a new password'), findsOneWidget);
+      final url = shownUrl(tester);
+      // The demo link carries it: the session can skip the old password.
+      final session = r.redeemSignInLink(url);
+      expect(r.refreshed(session).recentLinkSession, isTrue);
+    });
+
+    uiTest('tapping the words ticks it too', (tester) async {
+      final r = withPassword();
+      await givePassword(r);
+      await pump(tester, repo: r);
+      await openFor(tester, 'Carol Rakoto');
+      await tester.ensureVisible(find.text(label));
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Checkbox>(box).value, isTrue);
+    });
+
+    for (final e in {
+      '360x800': const Size(360, 800),
+      '800x1100': const Size(800, 1100),
+      '1500x900': const Size(1500, 900),
+    }.entries) {
+      for (final scale in [1.0, 2.0]) {
+        uiTest('no overflow at ${e.key} text x$scale', (tester) async {
+          final r = withPassword();
+          await givePassword(r);
+          await pump(tester, repo: r, size: e.value, textScale: scale);
+          await openFor(tester, 'Carol Rakoto');
+          expect(tester.takeException(), isNull, reason: 'choose step');
+          await tester.ensureVisible(box);
+          await tester.tap(box);
+          await tester.pumpAndSettle();
+          await tester.ensureVisible(find.text('Create link'));
+          await tester.tap(find.text('Create link'));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull, reason: 'result step');
+        });
+      }
+    }
   });
 
   group('no overflow', () {

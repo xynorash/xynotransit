@@ -56,13 +56,13 @@ To work on the app with hot reload you also need Flutter 3.47 and Rust (stable);
 ## Signing in
 
 - **Username and password** is the main form. Usernames are lower case letters, digits, dot, dash and underscore (3 to 40); a new person gets the start of their email address. Passwords are 10 to 128 characters, spaces allowed, with no composition rules; the only refusals are the person's own name, username or email, one repeated character, a simple run and a list of common passwords.
-- **Links** stay as the way to start and to recover: an emailed link, a one-time link a manager makes for a person without an email, or `xynotransit-api sign-in-link <email>` on the server. After a link sign-in a person without a password is offered "Choose a password" (it can be skipped).
+- **Links** stay as the way to start and to recover: an emailed link, a one-time link a manager makes for a person without an email, or `xynotransit-api sign-in-link <email>` on the server. After a link sign-in a person without a password is offered "Choose a password" (it can be skipped). Only an emailed link, or a manager or server link made with the recovery option (`"recovery": true`, `--recovery`), lets a person who has a password choose a new one without the old one.
 - **First manager.** Either `sign-in-link` or `docker compose exec -it api xynotransit-api set-password <username-or-email>` (asks twice without echo).
 - **Managers** can reset a password (People, "Reset password"): a temporary 16 character password is shown once and never stored. The person must choose their own before anything else works (every other route answers 403 "Choose a new password first."). "Remove password" makes the person link-only again.
 - **Sessions end** when a password is changed, reset or removed, and when a person is switched off.
-- **Lockout.** 5 wrong tries per username and 30 per client address in 15 minutes give 429 with `Retry-After`. Wrong username, wrong password, switched-off person and no password all answer the same "Username or password is wrong." after the same work.
+- **Lockout.** 5 wrong tries per username and 30 per client address in 15 minutes give 429 with `Retry-After`. A wrong current password while signed in is counted apart (10 per person in 15 minutes, from any address; the 10th ends the person's sessions). Wrong username, wrong password, switched-off person and no password all answer the same "Username or password is wrong." after the same work.
 - **Security notes.** Passwords are hashed with Argon2id (m=19456 KiB, t=2, p=1, at most 2 hashes at a time for a 1 GB machine). A password, hash, temporary password or token is never logged or audited. The client address comes from `X-Forwarded-For` only when the connecting peer is a private address (nginx, Caddy), taking the right-most untrusted hop. Details: [`xynotransit-api/README.md`](xynotransit-api/README.md#passwords). The public demo keeps its "Demo:" menu and implements the same rules in memory.
-- **Existing databases** need `xynotransit-db/scripts/migrate.sh` (migration `12-passwords.sql`) before the new API starts.
+- **Existing databases** need `xynotransit-db/scripts/migrate.sh` (every missing migration, up to `14-link-origin.sql`) before the new API starts.
 
 ## Tests
 

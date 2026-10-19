@@ -586,6 +586,11 @@ mod tests {
                 loginlimit::MAX_FAILURES_PER_IP,
             ),
             ("login_window_minutes", loginlimit::WINDOW_MINUTES),
+            (
+                "change_failures_per_person",
+                loginlimit::MAX_CHANGE_FAILURES_PER_PERSON,
+            ),
+            ("change_failures_window_minutes", loginlimit::WINDOW_MINUTES),
             ("trusted_address_days", loginlimit::TRUSTED_DAYS),
             ("link_recovery_minutes", LINK_RECOVERY_MINUTES),
             (
@@ -632,6 +637,12 @@ mod tests {
             ("password_same", password::msg::SAME),
             ("choose_new_password", crate::auth::CHOOSE_NEW_PASSWORD_MSG),
             ("sign_in_again", crate::auth::SIGN_IN_AGAIN_MSG),
+            ("change_too_many", loginlimit::msg::TOO_MANY_PASSWORD),
+            (
+                "signed_out_for_safety",
+                loginlimit::msg::SIGNED_OUT_FOR_SAFETY,
+            ),
+            ("recovery_invalid", crate::signin::msg::RECOVERY_INVALID),
             ("too_many_resets", loginlimit::msg::TOO_MANY_RESETS),
             ("switched_off", crate::signin::msg::SWITCHED_OFF),
             ("manager_only", "Only the manager can do this."),

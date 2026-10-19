@@ -128,15 +128,25 @@ class ApiAuthService implements AuthService, LinkSignIn {
     String? currentPassword,
     required String newPassword,
   }) async {
-    final j = asJson(
-      await _api.post(
-        '/auth/password',
-        body: {
-          'current_password': ?currentPassword,
-          'new_password': newPassword,
-        },
-      ),
-    );
+    final Map<String, Object?> j;
+    try {
+      j = asJson(
+        await _api.post(
+          '/auth/password',
+          body: {
+            'current_password': ?currentPassword,
+            'new_password': newPassword,
+          },
+        ),
+      );
+    } on UnauthorizedException catch (e) {
+      if (e.message != const SignedOutForSafety().message) rethrow;
+      // Too many wrong current passwords: the server ended every session of
+      // this person. Our token is dead; forget it and say why.
+      await _tokens.clear();
+      _set(null);
+      throw const SignedOutForSafety();
+    }
     final access = j['access_token'];
     if (access is! String || access.isEmpty) {
       throw const RepositoryException(
@@ -169,7 +179,7 @@ class ApiAuthService implements AuthService, LinkSignIn {
       );
     }
     var user = parseSessionUser(j, username: username);
-    if (viaLink && user.hasPassword && j['recent_link_session'] != false) {
+    if (viaLink && user.hasPassword && j['recent_link_session'] == true) {
       user = user.copyWith(recentLinkSession: true);
     }
     await _tokens.save(access);

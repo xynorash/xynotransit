@@ -315,6 +315,8 @@ async fn migrations_run_twice_and_keep_old_rows_that_break_a_check() {
         "10-internal-signin.sql",
         "11-deck-switched-off.sql",
         "12-passwords.sql",
+        "13-hashed-keys.sql",
+        "14-link-origin.sql",
     ] {
         run(f).await.unwrap_or_else(|e| panic!("{f} twice: {e}"));
     }
@@ -363,4 +365,84 @@ async fn the_ledger_lists_every_file() {
         })
         .count() as i64;
     assert_eq!(app.count("schema_migration").await, n);
+}
+
+#[tokio::test]
+async fn migration_14_labels_old_links_and_runs_twice() {
+    let app = TestApp::new().await;
+    let initdb = concat!(env!("CARGO_MANIFEST_DIR"), "/../xynotransit-db/initdb/");
+    let sql = std::fs::read_to_string(format!("{initdb}14-link-origin.sql")).unwrap();
+    // Back to the state before 14: no columns, a kind list without change-lock.
+    app.sql("alter table login_token drop column origin, drop column allow_recovery")
+        .await;
+    app.sql("alter table sign_in_link_audit drop column origin, drop column recovery")
+        .await;
+    app.sql("delete from schema_migration where file = '14-link-origin.sql'")
+        .await;
+    // Three old links of Ana: one asked for on the page, one from a manager, one from the command.
+    app.sql(&format!(
+        "insert into login_token (token_hash, person_id, expires_at) values
+           ('\\x01', '{ANA}', timestamptz '2030-01-01 00:10:00+00'),
+           ('\\x02', '{ANA}', timestamptz '2030-01-02 00:00:00+00'),
+           ('\\x03', '{ANA}', timestamptz '2030-01-03 00:00:00+00')"
+    ))
+    .await;
+    app.sql(&format!(
+        "insert into sign_in_link_audit (person_id, issued_by, issued_at, expires_at) values
+           ('{ANA}', '{CORA}', timestamptz '2029-12-31 00:00:00+00', timestamptz '2030-01-02 00:00:00+00'),
+           ('{ANA}', null, timestamptz '2029-12-31 00:00:00+00', timestamptz '2030-01-03 00:00:00+00')"
+    ))
+    .await;
+    sqlx::raw_sql(&sql).execute(&app.state.pool).await.unwrap();
+    let rows: Vec<(String, bool)> =
+        sqlx::query_as("select origin, allow_recovery from login_token order by expires_at")
+            .fetch_all(&app.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("email".into(), true),
+            ("admin".into(), false),
+            ("cli".into(), false)
+        ]
+    );
+    let a: Vec<(String, bool)> =
+        sqlx::query_as("select origin, recovery from sign_in_link_audit order by expires_at")
+            .fetch_all(&app.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(a, vec![("admin".into(), false), ("cli".into(), false)]);
+    // Again: nothing changes, even if a row was edited by hand in between.
+    app.sql("update login_token set allow_recovery = true where origin = 'admin'")
+        .await;
+    sqlx::raw_sql(&sql).execute(&app.state.pool).await.unwrap();
+    assert_eq!(
+        app.scalar("select count(*) from login_token where origin = 'admin' and allow_recovery")
+            .await,
+        1
+    );
+    assert_eq!(
+        app.scalar("select count(*) from schema_migration where file = '14-link-origin.sql'")
+            .await,
+        1
+    );
+    // The new audit kind is accepted, a made-up one is not, and bad origins are refused.
+    app.sql(&format!(
+        "insert into password_audit (person_id, kind) values ('{ANA}', 'change-lock')"
+    ))
+    .await;
+    assert!(sqlx::query(&format!(
+        "insert into password_audit (person_id, kind) values ('{ANA}', 'nope')"
+    ))
+    .execute(&app.state.pool)
+    .await
+    .is_err());
+    assert!(sqlx::query(&format!(
+        "insert into login_token (token_hash, person_id, expires_at, origin)
+         values ('\\x09', '{ANA}', now(), 'other')"
+    ))
+    .execute(&app.state.pool)
+    .await
+    .is_err());
 }

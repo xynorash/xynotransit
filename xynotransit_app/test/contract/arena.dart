@@ -37,6 +37,14 @@ abstract class PersonSession {
     String? currentPassword,
     required String newPassword,
   });
+
+  /// Like [changePassword], but the refusal is the server's own answer (an
+  /// [ApiException] with the status and `Retry-After`), and a 429 does not
+  /// sign anyone out in the client. For failing calls only.
+  Future<void> changePasswordRaw({
+    String? currentPassword,
+    required String newPassword,
+  });
 }
 
 abstract class Arena {
@@ -76,6 +84,10 @@ abstract class Arena {
   /// Signs in with the link a manager made (the first password after it has
   /// no current one).
   Future<PersonSession> signInWithLinkSession(String url, {String? address});
+
+  /// Signs in with a link sent to the mailbox of [p] (the "send me a link"
+  /// way). It proves control of the mailbox, so it allows recovery.
+  Future<PersonSession> signInWithEmailLinkSession(Person p, {String? address});
 
   /// The first month of the n-th period of this scenario (n = 0, 1, 2, ...).
   /// Consecutive n are consecutive months, far from real data.

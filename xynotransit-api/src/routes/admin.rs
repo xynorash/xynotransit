@@ -456,6 +456,11 @@ struct SignInLinkBody {
     /// 1 to 168, default 24. Kept as raw JSON so "2.5" or "1" (text) get our plain message.
     #[serde(default)]
     hours: Option<Value>,
+    /// true makes a recovery link (the person may choose a new password without the old one).
+    /// Default false; ignored (false) for a person who has no password. Raw JSON so a wrong type
+    /// gets our plain message.
+    #[serde(default)]
+    recovery: Option<Value>,
 }
 
 /// A one-time sign-in link for a person, to share privately (chat, in person).
@@ -474,6 +479,11 @@ async fn create_sign_in_link(
             .as_i64()
             .filter(|h| (signin::LINK_HOURS_MIN..=signin::LINK_HOURS_MAX).contains(h))
             .ok_or_else(|| ApiError::bad(msg::HOURS_INVALID))?,
+    };
+    let recovery = match &body.recovery {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(ApiError::bad(msg::RECOVERY_INVALID)),
     };
     let mut tx = st.pool.begin().await?;
     let cur = load_person(&mut tx, id)
@@ -519,6 +529,7 @@ async fn create_sign_in_link(
         id,
         hours,
         Some(user.person_id),
+        recovery,
     )
     .await?;
     tx.commit().await?;
@@ -528,6 +539,7 @@ async fn create_sign_in_link(
             "url": link.url,
             "expires_at": link.expires_at_rfc3339(),
             "person_id": link.person_id,
+            "recovery": link.recovery,
         })),
     ))
 }

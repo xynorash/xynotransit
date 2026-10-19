@@ -100,6 +100,17 @@ class ApiPersonSession implements PersonSession {
     currentPassword: currentPassword,
     newPassword: newPassword,
   );
+
+  @override
+  Future<void> changePasswordRaw({
+    String? currentPassword,
+    required String newPassword,
+  }) async {
+    await _api.post(
+      '/auth/password',
+      body: {'current_password': ?currentPassword, 'new_password': newPassword},
+    );
+  }
 }
 
 /// One run against the live stack: one tag for everything it creates.
@@ -254,6 +265,39 @@ class ApiRun {
     return _session(api, auth);
   }
 
+  Future<ApiPersonSession> signInWithEmailLinkSession(
+    String email, {
+    String? address,
+  }) async {
+    SharedPreferences.setMockInitialValues({});
+    final tokens = TokenStore(await SharedPreferences.getInstance());
+    final api = ApiClient(
+      baseUrl: '$contractApi/api',
+      tokens: tokens,
+      timeout: const Duration(seconds: 20),
+      client: address == null ? null : _FromAddress(http.Client(), address),
+    );
+    _clients.add(api);
+    final auth = ApiAuthService(api);
+    final since = DateTime.now().toUtc();
+    try {
+      await auth.signInWithEmail(email);
+    } on RepositoryException catch (e) {
+      if (e.message.contains('Too many links') && sqlAvailable) {
+        await psql(
+          "delete from login_attempt where email = '${email.replaceAll("'", '')}'",
+        );
+        await auth.signInWithEmail(email);
+      } else {
+        rethrow;
+      }
+    }
+    final token = await _tokenFromMail(email, since);
+    if (token == null) throw SignInRefused(email);
+    await auth.exchangeToken(token);
+    return _session(api, auth);
+  }
+
   ApiPersonSession _session(ApiClient api, ApiAuthService auth) =>
       ApiPersonSession(
         api,
@@ -402,6 +446,12 @@ class ApiArena implements Arena {
   @override
   Future<PersonSession> signInWithLinkSession(String url, {String? address}) =>
       run.signInWithLinkSession(url, address: address);
+
+  @override
+  Future<PersonSession> signInWithEmailLinkSession(
+    Person p, {
+    String? address,
+  }) => run.signInWithEmailLinkSession(p.email!, address: address);
 
   @override
   DateTime start(int n) => DateTime(run.base.year, run.base.month + _n * 4 + n);

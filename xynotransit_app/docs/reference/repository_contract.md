@@ -40,7 +40,7 @@ periods and meeting dates, who may do what (every operation), a deactivated
 person, a closed period, live reports, decks with 0, 1 and N reports, deck words
 (inherit and freeze), the summary against the pure computation
 (`computeSummary`) over the same data (also after a person is switched off), and
-too many sign-in requests (the 429 carries `Retry-After`).
+too many sign-in requests (the 429 carries `Retry-After`), link recovery (a manager's plain link needs the current password, a recovery link and a link from the mailbox do not, the first password never does), and the per-person cap on wrong current passwords (10 in 15 minutes, the 10th ends every session with a 401 in plain words, later tries get a 429 with `Retry-After`).
 
 A scenario that passes on one side and fails on the other is a real difference.
 Fix the wrong side. The in-memory side is `lib/data/memory_repository.dart` and
@@ -84,6 +84,7 @@ never produces must be listed in `serverOnly` in that test, so a new key in
   nothing. A deactivated person's session ends at once (401 "Please sign in.").
 - The words for a manager only call are "Only the manager can do this." (the
   role value in the JSON stays `controller`).
+- `createSignInLink(personId, hours, recovery)` sends `recovery` (default false); the answer echoes it. It is only true for a person who has a password.
 - A 429 carries `Retry-After` in seconds. The client turns "Try again later."
   into "Try again in 5 minutes." (`ApiException.retryAfterSeconds`).
 - A name with odd spaces (a non breaking space from a paste) is not refused:

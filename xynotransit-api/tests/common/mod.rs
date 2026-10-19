@@ -523,6 +523,41 @@ impl TestApp {
         .unwrap()
     }
 
+    /// Write a wrong-current-password failure of a person that is `age_minutes` old.
+    pub async fn add_change_failure(&self, person_id: &str, addr: Option<&str>, age_minutes: i64) {
+        sqlx::query(
+            "insert into login_failure (username_key, address_key, at)
+             values ($1, $2, now() - make_interval(mins => $3::int))",
+        )
+        .bind(self.state.limit_keys.change_person(person_id))
+        .bind(self.state.limit_keys.change_address(addr))
+        .bind(age_minutes as i32)
+        .execute(&self.state.pool)
+        .await
+        .unwrap();
+    }
+
+    /// Wrong-current-password failures stored for a person (all addresses).
+    pub async fn change_failures(&self, person_id: &str) -> i64 {
+        sqlx::query_scalar("select count(*) from login_failure where username_key = $1")
+            .bind(self.state.limit_keys.change_person(person_id))
+            .fetch_one(&self.state.pool)
+            .await
+            .unwrap()
+    }
+
+    /// Wrong-current-password failures of a person from one address.
+    pub async fn change_pair_failures(&self, person_id: &str, addr: Option<&str>) -> i64 {
+        sqlx::query_scalar(
+            "select count(*) from login_failure where username_key = $1 and address_key = $2",
+        )
+        .bind(self.state.limit_keys.change_person(person_id))
+        .bind(self.state.limit_keys.change_address(addr))
+        .fetch_one(&self.state.pool)
+        .await
+        .unwrap()
+    }
+
     pub async fn sql(&self, q: &str) {
         sqlx::query(q).execute(&self.state.pool).await.unwrap();
     }

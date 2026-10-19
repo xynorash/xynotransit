@@ -769,15 +769,14 @@ async fn a_wrong_current_password_counts_against_the_pair_and_only_that() {
             "try {i}"
         );
     }
-    assert_eq!(app.pair_failures("ana", Some(A)).await, 5);
+    assert_eq!(app.change_pair_failures(ANA, Some(A)).await, 5);
+    // These failures are kept apart from the sign-in ones.
+    assert_eq!(app.pair_failures("ana", Some(A)).await, 0);
     // The sixth try from the same address is locked, right password or not ...
     let (s, ra, v) = change(PW, A, tok.clone()).await;
     assert_eq!((s, ra), (StatusCode::TOO_MANY_REQUESTS, true), "{v}");
-    // ... and so is the sign-in of that pair: it is the same counter.
-    assert_eq!(
-        try_login(&app, "ana", PW, A, None).await.0,
-        StatusCode::TOO_MANY_REQUESTS
-    );
+    // ... and no sign-in failure was written for that pair: change failures never count for it.
+    assert_eq!(app.pair_failures("ana", Some(A)).await, 0);
     // From another address the right current password works, even though the name has had a
     // hundred failures from elsewhere and the pair at C is locked.
     let (s, _, v) = change(PW, B, tok.clone()).await;

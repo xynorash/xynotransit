@@ -34,7 +34,7 @@ Apply `initdb/10-internal-signin.sql` to a database that already lives (`scripts
 
 Passwords are added next to the sign-in links; links stay the way to get started and to recover.
 
-1. Before starting the new API image, bring the database up to date: `scripts/migrate.sh` (it applies `initdb/12-passwords.sql`; existing people get a username from their email, for example `rosa.rakoto`). Take a backup first (`scripts/backup.sh`).
+1. Before starting the new API image, bring the database up to date: `scripts/migrate.sh` (it applies every missing file, in particular `initdb/12-passwords.sql`, `13-hashed-keys.sql` and `14-link-origin.sql`; existing people get a username from their email, for example `rosa.rakoto`). Take a backup first (`scripts/backup.sh`).
 2. Hashing uses Argon2id with the OWASP minimum (19 MiB per hash, at most 2 at a time), which fits the 1 GB machine. Do not set `PASSWORD_HASH_MEMORY_KIB` or `PASSWORD_HASH_ITERATIONS` in production; they exist for the test suite.
 3. Set or reset a password from the app (People, "Reset password": the manager sees a temporary password once) or from the server:
 

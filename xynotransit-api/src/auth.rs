@@ -29,13 +29,17 @@ impl Role {
     }
 }
 
-/// How the session began: with a sign-in link or with the password. A fresh link session may
-/// choose a new password without the old one (see `POST /api/auth/password`). Tokens made before
-/// this claim existed count as `Password`.
+/// How the session began. `Link`: a sign-in link that allows recovery (asked for by email, or made
+/// with the recovery option); a fresh one may choose a new password without the old one (see
+/// `POST /api/auth/password`). `LinkPlain`: any other link (a manager's or the server command's
+/// without recovery); it always needs the current password of a person who has one. `Password`:
+/// the password. Tokens made before this claim existed count as `Password`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Via {
     Link,
+    #[serde(rename = "link-plain")]
+    LinkPlain,
     #[default]
     Password,
 }
@@ -50,7 +54,7 @@ struct Claims {
     /// adds 1 to the epoch, which ends every older token. Tokens from before this existed have 0.
     #[serde(default)]
     ep: i32,
-    /// "link" or "password".
+    /// "link", "link-plain" or "password".
     #[serde(default)]
     via: Via,
 }
@@ -158,7 +162,7 @@ pub struct AuthUser {
 }
 
 impl AuthUser {
-    /// A session that began with a sign-in link, at most `LINK_RECOVERY_MINUTES` ago.
+    /// A session that began with a recovery sign-in link, at most `LINK_RECOVERY_MINUTES` ago.
     pub fn fresh_link_session(&self) -> bool {
         let age = Utc::now().timestamp() - self.session_issued_at;
         self.via == Via::Link && (0..=crate::rules::LINK_RECOVERY_MINUTES * 60).contains(&age)

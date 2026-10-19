@@ -23,6 +23,7 @@ pub const GENERATED_LOCAL_MAX: usize = 40;
 pub mod msg {
     pub const HOURS_INVALID: &str = "Choose a validity from 1 hour to 168 hours.";
     pub const TOO_MANY: &str = "Too many sign-in links created. Try again later.";
+    pub const RECOVERY_INVALID: &str = "Recovery must be true or false.";
     pub const SWITCHED_OFF: &str = "This person is switched off.";
 }
 
@@ -140,6 +141,8 @@ pub struct SignInLink {
     pub url: String,
     pub expires_at: DateTime<Utc>,
     pub person_id: Uuid,
+    /// True when a session from this link may choose a new password without the current one.
+    pub recovery: bool,
 }
 
 impl SignInLink {
@@ -149,39 +152,58 @@ impl SignInLink {
 }
 
 /// Create one single-use sign-in link and its audit row, inside the caller's transaction.
-/// The person must exist (the caller checked that they are active). `issued_by` is the manager,
-/// or `None` for the server command.
+/// The person must exist (the caller checked that they are active). `issued_by` is the manager
+/// (origin `admin`), or `None` for the server command (origin `cli`).
+/// `recovery` asks for a link that lets the person choose a new password without the old one; it
+/// only applies to a person who has a password (anyone else needs no such thing), else it is false.
+/// The answer says what was really made.
 pub async fn create_sign_in_link(
     conn: &mut PgConnection,
     public_url: &str,
     person_id: Uuid,
     hours: i64,
     issued_by: Option<Uuid>,
+    recovery: bool,
 ) -> Result<SignInLink, sqlx::Error> {
+    let origin = if issued_by.is_some() { "admin" } else { "cli" };
+    let recovery = recovery
+        && sqlx::query_scalar::<_, bool>(
+            "select password_hash is not null from person where id = $1",
+        )
+        .bind(person_id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .unwrap_or(false);
     let token = random_token();
     let expires_at: DateTime<Utc> = sqlx::query_scalar(
-        "insert into login_token (token_hash, person_id, expires_at)
-         values ($1, $2, now() + make_interval(hours => $3::int))
+        "insert into login_token (token_hash, person_id, expires_at, origin, allow_recovery)
+         values ($1, $2, now() + make_interval(hours => $3::int), $4, $5)
          returning expires_at",
     )
     .bind(hash_token(&token))
     .bind(person_id)
     .bind(hours as i32)
+    .bind(origin)
+    .bind(recovery)
     .fetch_one(&mut *conn)
     .await?;
     // The audit row never holds the token or its hash.
     sqlx::query(
-        "insert into sign_in_link_audit (person_id, issued_by, expires_at) values ($1, $2, $3)",
+        "insert into sign_in_link_audit (person_id, issued_by, expires_at, origin, recovery)
+         values ($1, $2, $3, $4, $5)",
     )
     .bind(person_id)
     .bind(issued_by)
     .bind(expires_at)
+    .bind(origin)
+    .bind(recovery)
     .execute(&mut *conn)
     .await?;
     Ok(SignInLink {
         url: format!("{public_url}/auth/verify?token={token}"),
         expires_at,
         person_id,
+        recovery,
     })
 }
 
@@ -214,15 +236,21 @@ impl std::fmt::Display for CliError {
 }
 
 pub const CLI_USAGE: &str =
-    "Usage: xynotransit-api sign-in-link <email> [--hours N]  (N from 1 to 168, default 24)";
+    "Usage: xynotransit-api sign-in-link <email> [--hours N] [--recovery]  (N from 1 to 168, default 24; --recovery lets a person who has a password choose a new one without the old one: use it only when you are sure whom the link goes to)";
 
-/// Arguments after `sign-in-link`: the email and the optional `--hours N` / `--hours=N`.
-pub fn parse_cli_args(args: &[String]) -> Result<(String, i64), CliError> {
+/// Arguments after `sign-in-link`: the email, the optional `--hours N` / `--hours=N` and
+/// `--recovery`. Returns (email, hours, recovery).
+pub fn parse_cli_args(args: &[String]) -> Result<(String, i64, bool), CliError> {
     let usage = |m: &str| CliError::Usage(format!("{m}\n{CLI_USAGE}"));
     let mut email: Option<String> = None;
     let mut hours = LINK_HOURS_DEFAULT;
+    let mut recovery = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
+        if a == "--recovery" {
+            recovery = true;
+            continue;
+        }
         let value = if a == "--hours" {
             Some(
                 it.next()
@@ -248,7 +276,7 @@ pub fn parse_cli_args(args: &[String]) -> Result<(String, i64), CliError> {
         }
     }
     match email.filter(|e| !e.is_empty()) {
-        Some(e) => Ok((e, hours)),
+        Some(e) => Ok((e, hours, recovery)),
         None => Err(usage("Give the email address of the person.")),
     }
 }
@@ -260,6 +288,7 @@ pub async fn sign_in_link_for_email(
     public_url: &str,
     email: &str,
     hours: i64,
+    recovery: bool,
 ) -> Result<SignInLink, CliError> {
     let db = |e: sqlx::Error| CliError::Database(format!("Database error: {e}"));
     let email = email.trim().to_lowercase();
@@ -274,7 +303,7 @@ pub async fn sign_in_link_for_email(
     if !active {
         return Err(CliError::SwitchedOff(email));
     }
-    let link = create_sign_in_link(&mut tx, public_url, id, hours, None)
+    let link = create_sign_in_link(&mut tx, public_url, id, hours, None, recovery)
         .await
         .map_err(db)?;
     tx.commit().await.map_err(db)?;
@@ -395,8 +424,15 @@ mod tests {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
             parse_cli_args(&a(&["Boss@X.internal"])).unwrap(),
-            ("boss@x.internal".into(), 24)
+            ("boss@x.internal".into(), 24, false)
         );
+        assert!(parse_cli_args(&a(&["b@x.i", "--recovery"])).unwrap().2);
+        assert!(
+            parse_cli_args(&a(&["--recovery", "b@x.i", "--hours=2"]))
+                .unwrap()
+                .2
+        );
+        assert!(!parse_cli_args(&a(&["b@x.i", "--hours=2"])).unwrap().2);
         assert_eq!(
             parse_cli_args(&a(&["b@x.i", "--hours", "168"])).unwrap().1,
             168
@@ -411,6 +447,7 @@ mod tests {
             &["b@x.i", "--hours", "soon"],
             &["b@x.i", "c@x.i"],
             &["b@x.i", "--now"],
+            &["b@x.i", "--recovery=yes"],
             &[" "],
         ] {
             let e = parse_cli_args(&a(bad)).unwrap_err();

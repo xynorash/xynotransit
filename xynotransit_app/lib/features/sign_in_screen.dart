@@ -55,6 +55,7 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
       await ref
           .read(authServiceProvider)
           .signInWithPassword(name, _password.text);
+      ref.read(signInNoticeProvider.notifier).set(null);
       // Tell the browser the sign-in worked so it offers to save the password.
       TextInput.finishAutofillContext();
     } on RepositoryException catch (e) {
@@ -130,6 +131,19 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                       'Sign in with your username and password.',
                       style: bodyStyle(context, color: t.muted),
                     ),
+                    if (ref.watch(signInNoticeProvider) case final notice?) ...[
+                      const SizedBox(height: 12),
+                      SoftBanner(
+                        child: Semantics(
+                          liveRegion: true,
+                          child: Text(
+                            notice,
+                            key: const Key('signin-notice'),
+                            style: bodyStyle(context, size: 15, height: 1.45),
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     AutofillGroup(
                       child: Column(
@@ -270,8 +284,8 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Forgot your password? Ask your manager for a sign-in link, then choose '
-            'a new password from the account menu.',
+            'Forgot your password? Send yourself a link by email above, then '
+            'choose a new password. No email? Ask your manager to reset it.',
             style: bodyStyle(context, size: 15, color: t.muted, height: 1.4),
           ),
         ],

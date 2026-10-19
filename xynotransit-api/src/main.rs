@@ -131,11 +131,11 @@ fn healthcheck() -> bool {
     out.starts_with("HTTP/1.0 200") || out.starts_with("HTTP/1.1 200")
 }
 
-/// `xynotransit-api sign-in-link <email> [--hours N]`: prints only the URL on stdout. Problems go
+/// `xynotransit-api sign-in-link <email> [--hours N] [--recovery]`: prints only the URL on stdout. Problems go
 /// to stderr in plain words. Exit 0 on success, 1 when no link could be made, 2 for wrong usage.
 async fn sign_in_link_command(args: &[String]) -> i32 {
     use xynotransit_api::signin::{parse_cli_args, sign_in_link_for_email};
-    let (email, hours) = match parse_cli_args(args) {
+    let (email, hours, recovery) = match parse_cli_args(args) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
@@ -160,7 +160,7 @@ async fn sign_in_link_command(args: &[String]) -> i32 {
             return 1;
         }
     };
-    match sign_in_link_for_email(&pool, &public_url, &email, hours).await {
+    match sign_in_link_for_email(&pool, &public_url, &email, hours, recovery).await {
         Ok(link) => {
             println!("{}", link.url);
             0

@@ -83,7 +83,7 @@ void main() {
     );
     expect(
       find.text(
-        'Forgot your password? Ask your manager for a sign-in link, then choose a new password from the account menu.',
+        'Forgot your password? Send yourself a link by email above, then choose a new password. No email? Ask your manager to reset it.',
       ),
       findsOneWidget,
     );

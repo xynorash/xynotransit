@@ -73,8 +73,28 @@ final scenarios = <(String, Scenario, {bool lastManager})>[
     lastManager: false,
   ),
   (
-    'link recovery: a new password without the old one',
+    'a recovery link: a new password without the old one',
     lockout.linkRecovery,
+    lastManager: false,
+  ),
+  (
+    'an email link allows recovery',
+    lockout.emailLinkRecovery,
+    lastManager: false,
+  ),
+  (
+    'the first password after any link needs no old one',
+    lockout.firstPasswordAfterLink,
+    lastManager: false,
+  ),
+  (
+    'ten wrong current passwords per person end the sessions',
+    lockout.changeCap,
+    lastManager: false,
+  ),
+  (
+    'parallel wrong current passwords: never an eleventh check',
+    lockout.changeConcurrent,
     lastManager: false,
   ),
   (

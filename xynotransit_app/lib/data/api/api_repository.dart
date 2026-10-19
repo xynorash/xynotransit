@@ -367,10 +367,11 @@ class ApiRepository implements Repository {
   Future<SignInLink> createSignInLink(
     String personId, {
     int hours = 24,
+    bool recovery = false,
   }) async => parseSignInLink(
     await _api.post(
       '/persons/${Uri.encodeComponent(personId)}/sign-in-link',
-      body: {'hours': hours},
+      body: {'hours': hours, 'recovery': recovery},
     ),
   );
 

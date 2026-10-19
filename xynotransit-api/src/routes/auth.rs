@@ -106,8 +106,8 @@ async fn magic_link(
 
     let token = random_token();
     sqlx::query(
-        "insert into login_token (token_hash, person_id, expires_at)
-         values ($1, $2, now() + make_interval(mins => $3))",
+        "insert into login_token (token_hash, person_id, expires_at, origin, allow_recovery)
+         values ($1, $2, now() + make_interval(mins => $3), 'email', true)",
     )
     .bind(hash_token(&token))
     .bind(person_id)
@@ -156,15 +156,15 @@ async fn verify(
         || ApiError::unauthorized("This link has expired or was already used. Ask for a new one.");
 
     // One atomic statement: only the first caller gets the row back.
-    let used: Option<(Uuid,)> = sqlx::query_as(
+    let used: Option<(Uuid, bool)> = sqlx::query_as(
         "update login_token set used_at = now()
          where token_hash = $1 and used_at is null and expires_at > now()
-         returning person_id",
+         returning person_id, allow_recovery",
     )
     .bind(hash_token(body.token.trim()))
     .fetch_optional(&st.pool)
     .await?;
-    let (person_id,) = used.ok_or_else(expired)?;
+    let (person_id, allow_recovery) = used.ok_or_else(expired)?;
 
     let user = crate::auth::load_user(&st.pool, person_id)
         .await?
@@ -181,7 +181,11 @@ async fn verify(
         person_id,
         user.role,
         user.epoch,
-        Via::Link,
+        if allow_recovery {
+            Via::Link
+        } else {
+            Via::LinkPlain
+        },
     )?;
     Ok(Json(json!({
         "access_token": access_token,
@@ -295,9 +299,12 @@ struct ChangeBody {
 }
 
 /// Choose or change the password of the person who is signed in. A person who has one must give
-/// it (a wrong one counts against their pair like a failed sign-in), with one exception: a
-/// session that began with a sign-in link at most 15 minutes ago needs no current password (the
-/// way back for someone who forgot it; audit kind `change-via-link`). A person who has none
+/// it (a wrong one is counted per pair, per address and per person, apart from sign-in failures;
+/// the 10th in 15 minutes ends all their sessions, audit kind `change-lock`), with one exception:
+/// a session that began at most 15 minutes ago with a sign-in link that allows recovery (asked
+/// for by email, or made with the recovery option) needs no current password (the way back for
+/// someone who forgot it; audit kind `change-via-link`). Other links give a session that must
+/// give the current password like any other. A person who has none
 /// (first password after a link) does not need it either. All older sessions end and the answer
 /// carries a fresh one, which counts as a password session.
 async fn change_password(
@@ -327,7 +334,7 @@ async fn change_password(
                 .as_deref()
                 .filter(|c| !c.is_empty())
                 .ok_or_else(|| ApiError::bad(pw_msg::CURRENT_REQUIRED))?;
-            let who = Who::new(&st.limit_keys, &user.username, &client);
+            let who = Who::for_change(&st.limit_keys, &user.person_id.to_string(), &client);
             let attempt = loginlimit::begin_attempt(&st.pool, &who, Kind::Change).await?;
             let ok = if password::too_long(current) {
                 false
@@ -341,6 +348,18 @@ async fn change_password(
                 }
             };
             if !ok {
+                // The 10th wrong one in the window ends this person's sessions, this one too.
+                if loginlimit::end_sessions_at_cap(
+                    &st.pool,
+                    &who,
+                    attempt,
+                    user.person_id,
+                    user.epoch,
+                )
+                .await?
+                {
+                    return Err(ApiError::unauthorized(limit_msg::SIGNED_OUT_FOR_SAFETY));
+                }
                 return Err(ApiError::forbidden(pw_msg::CURRENT_WRONG));
             }
             loginlimit::succeed(&st.pool, &who, false).await;

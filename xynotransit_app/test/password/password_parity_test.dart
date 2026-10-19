@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:xynotransit_app/data/repository.dart';
 import 'package:xynotransit_app/domain/password_rules.dart';
 
 const _path = '../xynotransit-api/tests/fixtures/rules.json';
@@ -68,6 +69,11 @@ void main() {
     expect(l['trusted_address_days'], PasswordRules.trustDays);
     expect(l['link_recovery_minutes'], PasswordRules.linkRecovery.inMinutes);
     expect(l['login_window_minutes'], PasswordRules.window.inMinutes);
+    expect(
+      l['change_failures_per_person'],
+      PasswordRules.changeFailuresPerPerson,
+    );
+    expect(l['change_failures_window_minutes'], PasswordRules.window.inMinutes);
     expect(l['resets_per_manager_per_hour'], PasswordRules.resetsPerHour);
     expect(l['temporary_password_chars'], PasswordRules.resetLength);
   });
@@ -116,6 +122,10 @@ void main() {
     expect(m['too_many_resets'], PasswordRules.tooManyResets);
     expect(m['switched_off'], PasswordRules.switchedOff);
     expect(m['manager_only'], 'Only the manager can do this.');
+    // The 429 is shown with the wait from Retry-After in place of "later".
+    expect(m['change_too_many'], PasswordRules.tooManyPasswordAttempts);
+    expect(m['signed_out_for_safety'], PasswordRules.signedOutForSafety);
+    expect(const SignedOutForSafety().message, m['signed_out_for_safety']);
   });
 
   withRules('the policy checks run in the published order', (r) {

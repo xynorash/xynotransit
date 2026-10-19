@@ -220,7 +220,12 @@ class MemoryRepository implements Repository {
   /// The 429 for a list of failures in the window: the person may try again
   /// when enough of the oldest ones have aged out (so that fewer than [limit]
   /// remain).
-  ApiException _locked(List<DateTime> times, int limit, DateTime now) {
+  ApiException _locked(
+    List<DateTime> times,
+    int limit,
+    DateTime now, {
+    String message = 'Too many sign-in attempts. Try again in {wait}.',
+  }) {
     final oldest = times[times.length - limit];
     final wait = oldest.add(PasswordRules.window).difference(now);
     final s = wait.inMilliseconds <= 0
@@ -228,7 +233,7 @@ class MemoryRepository implements Repository {
         : (wait.inMilliseconds + 999) ~/ 1000;
     return ApiException(
       429,
-      'Too many sign-in attempts. Try again in ${waitWords(s)}.',
+      message.replaceAll('{wait}', waitWords(s)),
       retryAfterSeconds: s,
     );
   }
@@ -366,14 +371,37 @@ class MemoryRepository implements Repository {
       if (currentPassword == null || currentPassword.isEmpty) {
         throw const RepositoryException(PasswordRules.currentRequired);
       }
-      // Counts against the pair like a wrong login, but only this pair can
-      // lock it: others cannot lock a signed-in person out of their own change.
-      _checkLocks(a.username, address, now, backstop: false);
+      // Wrong current passwords are counted per person over all addresses,
+      // apart from the sign-in locks: a thief with a token cannot guess from
+      // many addresses, and an outsider's failed logins never block the
+      // signed-in person.
+      final key = 'change|${who.personId ?? _managerKey}';
+      final fails = _recentFailures(key, now);
+      const cap = PasswordRules.changeFailuresPerPerson;
+      if (fails.length >= cap) {
+        throw _locked(
+          fails,
+          cap,
+          now,
+          message: 'Too many password attempts. Try again in {wait}.',
+        );
+      }
       if (currentPassword != a.password) {
-        _noteFailure(a.username, address, now);
+        fails.add(now);
+        if (fails.length >= cap) {
+          // The last guess: every session of the person ends, so a stolen
+          // token dies. They sign in again with the password, a link or the
+          // command line.
+          a.epoch += 1;
+          passwordAudit.add((
+            kind: 'change-lock',
+            personId: who.personId ?? _managerKey,
+            issuedBy: null,
+          ));
+          throw const UnauthorizedException(PasswordRules.signedOutForSafety);
+        }
         throw const ApiException(403, PasswordRules.currentWrong);
       }
-      _recentFailures(_pairKey(a.username, address), now).clear();
       if (newPassword == a.password) {
         throw const RepositoryException(PasswordRules.sameAsCurrent);
       }
@@ -960,7 +988,11 @@ class MemoryRepository implements Repository {
   final _linkTimes = <String, List<DateTime>>{};
 
   @override
-  Future<SignInLink> createSignInLink(String personId, {int hours = 24}) async {
+  Future<SignInLink> createSignInLink(
+    String personId, {
+    int hours = 24,
+    bool recovery = false,
+  }) async {
     _requireController();
     final me = _me();
     if (hours < 1 || hours > AdminRules.maxSignInHours) {
@@ -982,11 +1014,15 @@ class MemoryRepository implements Repository {
     final token =
         'demo-${List.generate(12, (_) => random.nextInt(36).toRadixString(36)).join()}';
     final expires = now.add(Duration(hours: hours));
-    _links[token] = _IssuedLink(personId, expires);
+    // Only a person who has a password can get a recovery link; for anyone
+    // else the flag is ignored (their first password needs no old one).
+    final allow = recovery && _accounts[personId]?.password != null;
+    _links[token] = _IssuedLink(personId, expires, recovery: allow);
     return SignInLink(
       url: 'https://demo.invalid/auth/verify?token=$token',
       expiresAt: expires,
       personId: personId,
+      recovery: allow,
     );
   }
 
@@ -1009,7 +1045,23 @@ class MemoryRepository implements Repository {
     final who = _catalog.personById(p.id)!;
     final account = _accounts[who.id];
     if (account != null) _noteSuccess(account.username, address, _clock());
-    return sessionFor(p.id, viaLink: true);
+    // Only a link that allows recovery can skip the current password.
+    return sessionFor(p.id, viaLink: link.recovery);
+  }
+
+  /// A session as if the person had used a link from their mailbox: that
+  /// proves they own the address, so it allows recovery. For tests and the
+  /// contract suite (the demo sends no email).
+  AppUser emailLinkSession(String personId, {String? address}) {
+    final p = _catalog.personById(personId);
+    if (p == null || !p.active) {
+      throw const RepositoryException(
+        'This link has expired or was already used. Ask for a new one.',
+      );
+    }
+    final account = _accounts[personId];
+    if (account != null) _noteSuccess(account.username, address, _clock());
+    return sessionFor(personId, viaLink: true);
   }
 
   @override
@@ -1251,9 +1303,10 @@ class _Account {
 }
 
 class _IssuedLink {
-  _IssuedLink(this.personId, this.expiresAt);
+  _IssuedLink(this.personId, this.expiresAt, {this.recovery = false});
   final String personId;
   final DateTime expiresAt;
+  final bool recovery;
   bool used = false;
 }
 
@@ -1336,11 +1389,18 @@ class DemoAuth implements AuthService, LinkSignIn {
   }) async {
     final me = _user;
     if (me == null) throw const UnauthorizedException('Please sign in.');
-    _user = _repo.changePasswordOf(
-      me,
-      currentPassword: currentPassword,
-      newPassword: newPassword,
-    );
+    try {
+      _user = _repo.changePasswordOf(
+        me,
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+    } on UnauthorizedException catch (e) {
+      if (e.message != PasswordRules.signedOutForSafety) rethrow;
+      // Too many wrong passwords: the sessions ended. Sign out and say why.
+      await signOut();
+      throw const SignedOutForSafety();
+    }
     _c.add(_user);
   }
 

@@ -7,6 +7,7 @@ import 'package:xynotransit_app/data/memory_repository.dart';
 import 'package:xynotransit_app/data/repository.dart';
 import 'package:xynotransit_app/domain/catalog.dart';
 import 'package:xynotransit_app/domain/enums.dart';
+import 'package:xynotransit_app/domain/password_rules.dart';
 
 const _boss = Person(
   id: 'boss',
@@ -269,52 +270,151 @@ void main() {
   });
 
   group('the signed-in change', () {
-    test('wrong current counts for the pair, others cannot lock it', () async {
-      await give('rosa', _good);
-      final mine = repo.loginWithPassword(
-        'rosa.rakoto',
-        _good,
-        address: '203.0.113.7',
-      );
-      wrongTries('rosa.rakoto', '198.51.100.1', 5);
-      for (var i = 0; i < 4; i++) {
-        expect(
-          () => repo.changePasswordOf(
-            mine,
-            currentPassword: 'nope',
-            newPassword: 'another long one',
-            address: '203.0.113.7',
-          ),
-          throwsA(
-            isA<ApiException>().having((e) => e.statusCode, 'status', 403),
-          ),
+    ApiException? tryChange(AppUser who, String current, String? from) {
+      try {
+        repo.changePasswordOf(
+          who,
+          currentPassword: current,
+          newPassword: 'another long one',
+          address: from,
         );
+      } on ApiException catch (e) {
+        return e;
       }
-      // The sixth try is locked: the five are wrong tries of this pair.
+      return null;
+    }
+
+    AppUser signedIn(String? from) =>
+        repo.loginWithPassword('rosa.rakoto', _good, address: from);
+
+    test('an outsider\'s failed logins never block the change', () async {
+      await give('rosa', _good);
+      final mine = signedIn('203.0.113.7');
+      wrongTries('rosa.rakoto', '203.0.113.7', 5);
+      // 40 more failures from the same address: the address is locked too.
+      for (var i = 0; i < 40; i++) {
+        try {
+          repo.loginWithPassword('ghost${i ~/ 4}', 'x', address: '203.0.113.7');
+        } on ApiException {
+          // Wrong or locked: either way a failed login.
+        }
+      }
       expect(
-        () => repo.changePasswordOf(
-          mine,
-          currentPassword: 'nope',
-          newPassword: 'another long one',
-          address: '203.0.113.7',
-        ),
-        throwsA(isA<ApiException>()),
-      );
-      expect(
-        () => repo.changePasswordOf(
-          mine,
-          currentPassword: _good,
-          newPassword: 'another long one',
+        () => repo.loginWithPassword(
+          'rosa.rakoto',
+          _good,
           address: '203.0.113.7',
         ),
         locked(),
       );
+      expect(tryChange(mine, 'nope', '203.0.113.7')?.statusCode, 403);
+      repo.changePasswordOf(
+        mine,
+        currentPassword: _good,
+        newPassword: 'another long one',
+        address: '203.0.113.7',
+      );
     });
+
+    test('wrong changes never count toward the login locks', () async {
+      await give('rosa', _good);
+      final mine = signedIn('203.0.113.7');
+      for (var i = 0; i < 9; i++) {
+        expect(tryChange(mine, 'nope $i', '203.0.113.7')?.statusCode, 403);
+      }
+      expect(signedIn('203.0.113.7').personId, 'rosa');
+    });
+
+    test(
+      '10 failures from 10 addresses trigger the cap and end sessions',
+      () async {
+        await give('rosa', _good);
+        final sessions = [
+          for (var i = 0; i < 10; i++) signedIn('198.51.100.${i + 1}'),
+        ];
+        for (var i = 0; i < 9; i++) {
+          expect(
+            tryChange(
+              sessions[i],
+              'guess $i',
+              '198.51.100.${i + 1}',
+            )?.statusCode,
+            403,
+          );
+        }
+        final tenth = tryChange(sessions[9], 'guess 9', '198.51.100.10')!;
+        expect(tenth.statusCode, 401);
+        expect(tenth.message, PasswordRules.signedOutForSafety);
+        expect(repo.passwordAudit.last.kind, 'change-lock');
+        // Every token is dead.
+        for (final s in sessions) {
+          expect(
+            () => repo.changePasswordOf(
+              s,
+              currentPassword: _good,
+              newPassword: 'x',
+            ),
+            throwsA(isA<UnauthorizedException>()),
+          );
+        }
+        // The person signs in again, with the password.
+        final back = signedIn('203.0.113.7');
+        // Not even the right current password is checked now (no 11th check).
+        now = now.add(const Duration(minutes: 5));
+        final e = tryChange(back, _good, '203.0.113.7')!;
+        expect(e.statusCode, 429);
+        expect(
+          e.message,
+          'Too many password attempts. Try again in 10 minutes.',
+        );
+        expect(e.retryAfterSeconds, 600);
+        expect(repo.loginWithPassword('rosa.rakoto', _good).personId, 'rosa');
+        // When the window has passed, they can change it.
+        now = now.add(const Duration(minutes: 10));
+        expect(tryChange(back, _good, '203.0.113.7'), isNull);
+      },
+    );
+
+    test('failures older than 15 minutes do not count', () async {
+      await give('rosa', _good);
+      final mine = signedIn(null);
+      for (var i = 0; i < 9; i++) {
+        expect(tryChange(mine, 'nope $i', null)?.statusCode, 403);
+      }
+      now = now.add(const Duration(minutes: 15));
+      expect(tryChange(mine, 'nope', null)?.statusCode, 403);
+    });
+
+    test('the cap is per person: another person is not affected', () async {
+      await give('rosa', _good);
+      await give('ben', _good);
+      final ben = repo.loginWithPassword('ben', _good);
+      final rosa = signedIn(null);
+      for (var i = 0; i < 10; i++) {
+        tryChange(rosa, 'nope $i', null);
+      }
+      expect(tryChange(ben, 'nope', null)?.statusCode, 403);
+    });
+
+    test(
+      'a plain link counts a wrong current like any other session',
+      () async {
+        await give('rosa', _good);
+        final link = await asBoss(() => repo.createSignInLink('rosa'));
+        final s = repo.redeemSignInLink(link.url);
+        for (var i = 0; i < 9; i++) {
+          expect(tryChange(s, 'nope $i', null)?.statusCode, 403);
+        }
+        expect(tryChange(s, 'nope', null)?.statusCode, 401);
+      },
+    );
   });
 
   group('recovery by link', () {
-    Future<AppUser> linkSession() async {
-      final link = await asBoss(() => repo.createSignInLink('rosa'));
+    Future<AppUser> linkSession({bool recovery = true}) async {
+      final link = await asBoss(
+        () => repo.createSignInLink('rosa', recovery: recovery),
+      );
       return repo.redeemSignInLink(link.url);
     }
 
@@ -381,10 +481,84 @@ void main() {
     });
 
     test('a person without a password is not a recovery', () async {
-      final s = await linkSession();
+      final link = await asBoss(
+        () => repo.createSignInLink('rosa', recovery: true),
+      );
+      expect(link.recovery, isFalse, reason: 'ignored without a password');
+      final s = repo.redeemSignInLink(link.url);
       expect(repo.refreshed(s).recentLinkSession, isFalse);
       repo.changePasswordOf(s, newPassword: 'a green kitchen sink');
       expect(repo.passwordAudit.last.kind, 'change');
+    });
+
+    test(
+      'a manager link without recovery needs the current password',
+      () async {
+        await give('rosa', _good);
+        final link = await asBoss(() => repo.createSignInLink('rosa'));
+        expect(link.recovery, isFalse);
+        final s = repo.redeemSignInLink(link.url);
+        expect(repo.refreshed(s).recentLinkSession, isFalse);
+        expect(
+          () => repo.changePasswordOf(s, newPassword: 'a green kitchen sink'),
+          throwsA(
+            isA<RepositoryException>().having(
+              (e) => e.message,
+              'message',
+              'Enter your current password.',
+            ),
+          ),
+        );
+        expect(
+          () => repo.changePasswordOf(
+            s,
+            currentPassword: 'nope',
+            newPassword: 'a green kitchen sink',
+          ),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'status', 403)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  'Your current password is not right.',
+                ),
+          ),
+        );
+        repo.changePasswordOf(
+          s,
+          currentPassword: _good,
+          newPassword: 'a green kitchen sink',
+        );
+      },
+    );
+
+    test('a recovery link is used once', () async {
+      await give('rosa', _good);
+      final link = await asBoss(
+        () => repo.createSignInLink('rosa', recovery: true),
+      );
+      expect(link.recovery, isTrue);
+      repo.redeemSignInLink(link.url);
+      expect(
+        () => repo.redeemSignInLink(link.url),
+        throwsA(isA<RepositoryException>()),
+      );
+    });
+
+    test('a link from the mailbox allows recovery', () async {
+      await give('rosa', _good);
+      final s = repo.emailLinkSession('rosa');
+      expect(repo.refreshed(s).recentLinkSession, isTrue);
+      repo.changePasswordOf(s, newPassword: 'a green kitchen sink');
+    });
+
+    test('the first password after any link needs no old one', () async {
+      for (final recovery in [false, true]) {
+        final s = await linkSession(recovery: recovery);
+        repo.changePasswordOf(s, newPassword: 'a green kitchen sink');
+        await asBoss(() => repo.removePassword('rosa'));
+      }
     });
   });
 }

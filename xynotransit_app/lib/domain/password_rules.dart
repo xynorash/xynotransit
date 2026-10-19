@@ -90,6 +90,11 @@ class PasswordRules {
   static const signInAgain = 'Please sign in again.';
   static const switchedOff = 'This person is switched off.';
   static const busy = 'Busy, try again in a moment.';
+  static const tooManyPasswordAttempts =
+      'Too many password attempts. Try again later.';
+  static const signedOutForSafety =
+      'You were signed out for safety after too many wrong passwords. '
+      'Sign in again.';
   static const tooManyResets =
       'Too many temporary passwords created. Try again later.';
 
@@ -107,6 +112,12 @@ class PasswordRules {
   /// An address that signed in as the person within this many days is
   /// trusted when the backstop applies.
   static const trustDays = 30;
+
+  /// Wrong current passwords on a password change, counted per person over all
+  /// addresses in [window]. The last one ends the person's sessions. These
+  /// never count toward the sign-in locks, and sign-in failures never block a
+  /// signed-in person's change.
+  static const changeFailuresPerPerson = 10;
 
   /// A session that began with a link may choose a new password without the
   /// old one for this long.

@@ -62,6 +62,20 @@ final catalogWithInactiveProvider = StreamProvider<Catalog>(
   (ref) => ref.watch(repositoryProvider).watchCatalog(includeInactive: true),
 );
 
+/// A plain message for the sign-in screen, set when the app signed the person
+/// out for a reason they should hear (too many wrong passwords). Cleared by
+/// the sign-in screen once it has been shown and the person signs in.
+class SignInNotice extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? message) => state = message;
+}
+
+final signInNoticeProvider = NotifierProvider<SignInNotice, String?>(
+  SignInNotice.new,
+);
+
 final userProvider = StreamProvider<AppUser?>(
   (ref) => ref.watch(authServiceProvider).userChanges,
 );

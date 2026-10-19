@@ -90,10 +90,27 @@ class SignInLink {
     required this.url,
     required this.expiresAt,
     required this.personId,
+    this.recovery = false,
   });
   final String url;
   final DateTime expiresAt;
   final String personId;
+
+  /// The link lets the person choose a new password without the old one.
+  /// Only a person who has a password can get such a link.
+  final bool recovery;
+}
+
+/// The server ended the sessions of the person after too many wrong current
+/// passwords. The app signs out and tells them in plain words.
+class SignedOutForSafety extends RepositoryException {
+  const SignedOutForSafety()
+    : super(
+        'You were signed out for safety after too many wrong passwords. '
+        'Sign in again.',
+      );
+  // Same words as PasswordRules.signedOutForSafety (the domain layer is not
+  // imported here); a test holds the two together.
 }
 
 /// A temporary password a manager made for a person. Shown once.
@@ -169,7 +186,11 @@ abstract class Repository {
   /// [hours] (1 to 168). Earlier links stay valid until used or expired.
   /// Throws [RepositoryException] with plain words when it is refused (not a
   /// manager, person switched off, too many links).
-  Future<SignInLink> createSignInLink(String personId, {int hours = 24});
+  Future<SignInLink> createSignInLink(
+    String personId, {
+    int hours = 24,
+    bool recovery = false,
+  });
 
   /// Creates or updates a seat: who does what in which team.
   Future<Assignment> saveAssignment({

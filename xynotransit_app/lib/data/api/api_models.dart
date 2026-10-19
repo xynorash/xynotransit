@@ -136,6 +136,7 @@ SignInLink parseSignInLink(Object? data) => _guard(() {
     url: j['url'] as String,
     expiresAt: DateTime.parse(j['expires_at'] as String),
     personId: '${j['person_id']}',
+    recovery: j['recovery'] == true,
   );
 });
 

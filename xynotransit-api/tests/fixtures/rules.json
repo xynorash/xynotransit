@@ -84,7 +84,7 @@
     "too_many_links": "Too many links requested. Try again later."
   },
   "passwords": {
-    "_about": "Sign-in limits: login_failures_per_pair (5) wrong tries per (username, client address) per login_window_minutes lock that pair only; login_failures_per_username_backstop (100) from any addresses lock the name for everyone except addresses that signed in successfully for it within trusted_address_days; login_failures_per_address (30) apply only to a client address the server can determine. login_failures_per_username is the old name of the pair limit and is kept. A session that began with a sign-in link may choose a new password without the current one for link_recovery_minutes. Usernames and passwords (added later; the sections above are unchanged). Password length counts Unicode scalar values, spaces are kept exactly as typed, nothing is trimmed. The policy checks run in the order of policy_order and the first that fails gives its message. A password may not equal (ignoring case) the username, the email, the part of the email before the @ or the full name. Run = every character is the next or every one the previous, ignoring case, digits wrap around (1234567890). common_list is embedded in the API (src/common_passwords.txt, lowercase compare, every entry 10 characters or longer); the Dart demo may use a shorter list.",
+    "_about": "Sign-in limits: login_failures_per_pair (5) wrong tries per (username, client address) per login_window_minutes lock that pair only; login_failures_per_username_backstop (100) from any addresses lock the name for everyone except addresses that signed in successfully for it within trusted_address_days; login_failures_per_address (30) apply only to a client address the server can determine. login_failures_per_username is the old name of the pair limit and is kept. change_failures_per_person (10) wrong CURRENT passwords on POST /api/auth/password within change_failures_window_minutes (same 15) from any addresses answer 429 change_too_many with Retry-After; the 10th also ends all sessions of that person (answer 401 signed_out_for_safety, audit kind change-lock). These failures are kept apart from the login ones: they never lock a sign-in and sign-in failures never block them. A session that began with a sign-in link that allows recovery (asked for by email, or made by a manager or the server command with recovery) may choose a new password without the current one for link_recovery_minutes. Usernames and passwords (added later; the sections above are unchanged). Password length counts Unicode scalar values, spaces are kept exactly as typed, nothing is trimmed. The policy checks run in the order of policy_order and the first that fails gives its message. A password may not equal (ignoring case) the username, the email, the part of the email before the @ or the full name. Run = every character is the next or every one the previous, ignoring case, digits wrap around (1234567890). common_list is embedded in the API (src/common_passwords.txt, lowercase compare, every entry 10 characters or longer); the Dart demo may use a shorter list.",
     "limits": {
       "username_min": 3,
       "username_max": 40,
@@ -95,6 +95,8 @@
       "login_failures_per_username_backstop": 100,
       "login_failures_per_address": 30,
       "login_window_minutes": 15,
+      "change_failures_per_person": 10,
+      "change_failures_window_minutes": 15,
       "trusted_address_days": 30,
       "link_recovery_minutes": 15,
       "events_recheck_seconds": 30,
@@ -124,6 +126,9 @@
       "password_same": "Choose a password different from the current one.",
       "choose_new_password": "Choose a new password first.",
       "sign_in_again": "Please sign in again.",
+      "change_too_many": "Too many password attempts. Try again later.",
+      "signed_out_for_safety": "You were signed out for safety after too many wrong passwords. Sign in again.",
+      "recovery_invalid": "Recovery must be true or false.",
       "too_many_resets": "Too many temporary passwords created. Try again later.",
       "switched_off": "This person is switched off.",
       "manager_only": "Only the manager can do this."

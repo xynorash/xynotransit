@@ -17,6 +17,14 @@ import 'qr_view.dart';
 const signInLinkOffReason =
     'Switched off. Turn this person on in Edit person to make a link.';
 
+/// The recovery checkbox: label and the one sentence under it.
+const recoveryLabel =
+    'Recovery link: lets them choose a new password without knowing the old '
+    'one';
+const recoveryHelp =
+    'Use it when they forgot their password and you are sure the link '
+    'reaches only them. Otherwise use Reset password.';
+
 /// The words to paste into a chat next to the link.
 String signInMessage(String url) =>
     'Open this link to sign in to Xynotransit: $url';
@@ -59,6 +67,7 @@ enum _Copied { none, link, message }
 
 class _SignInLinkDialogState extends ConsumerState<SignInLinkDialog> {
   LinkValidity _validity = LinkValidity.oneDay;
+  bool _recovery = false;
   SignInLink? _link;
   bool _busy = false;
   String? _error;
@@ -79,7 +88,11 @@ class _SignInLinkDialogState extends ConsumerState<SignInLinkDialog> {
     try {
       final link = await ref
           .read(repositoryProvider)
-          .createSignInLink(widget.person.id, hours: _validity.hours);
+          .createSignInLink(
+            widget.person.id,
+            hours: _validity.hours,
+            recovery: widget.person.hasPassword && _recovery,
+          );
       if (!mounted) return;
       setState(() {
         _link = link;
@@ -205,6 +218,10 @@ class _SignInLinkDialogState extends ConsumerState<SignInLinkDialog> {
           ],
         ),
       ),
+      if (widget.person.hasPassword) ...[
+        const SizedBox(height: 14),
+        _recoveryChoice(context),
+      ],
       const SizedBox(height: 16),
       Wrap(
         spacing: 12,
@@ -225,6 +242,41 @@ class _SignInLinkDialogState extends ConsumerState<SignInLinkDialog> {
         style: bodyStyle(context, size: 14, color: t.muted, height: 1.4),
       ),
     ];
+  }
+
+  Widget _recoveryChoice(BuildContext context) {
+    final t = context.tokens;
+    return ListTileTheme(
+      data: const ListTileThemeData(
+        horizontalTitleGap: 6,
+        minLeadingWidth: 0,
+        titleAlignment: ListTileTitleAlignment.top,
+      ),
+      child: CheckboxListTile(
+        key: const Key('recovery-choice'),
+        value: _recovery,
+        onChanged: _busy ? null : (v) => setState(() => _recovery = v ?? false),
+        controlAffinity: ListTileControlAffinity.leading,
+        contentPadding: EdgeInsets.zero,
+        isThreeLine: true,
+        title: Text(
+          recoveryLabel,
+          style: bodyStyle(
+            context,
+            size: 15,
+            weight: FontWeight.w500,
+            height: 1.35,
+          ),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            recoveryHelp,
+            style: bodyStyle(context, size: 14, color: t.muted, height: 1.4),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _message(BuildContext context, String m) => Semantics(
@@ -294,6 +346,20 @@ class _SignInLinkDialogState extends ConsumerState<SignInLinkDialog> {
                   height: 1.4,
                 ),
               ),
+              if (link.recovery) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Recovery link: $name can choose a new password without '
+                  'the old one.',
+                  key: const Key('sign-in-link-recovery'),
+                  style: bodyStyle(
+                    context,
+                    size: 15,
+                    weight: FontWeight.w500,
+                    height: 1.4,
+                  ),
+                ),
+              ],
             ],
           );
           final qr = Column(
@@ -366,8 +432,12 @@ class _SignInLinkDialogState extends ConsumerState<SignInLinkDialog> {
       const SizedBox(height: 16),
       SoftBanner(
         child: Text(
-          'Anyone who has this link can sign in as $name until it is used or '
-          'it expires. Share it privately.',
+          link.recovery
+              ? 'Anyone who has this link can sign in as $name and choose a '
+                    'new password until it is used or it expires. Share it '
+                    'privately, only with $name.'
+              : 'Anyone who has this link can sign in as $name until it is '
+                    'used or it expires. Share it privately.',
           key: const Key('sign-in-link-warning'),
           style: bodyStyle(context, size: 15, height: 1.45),
         ),
