@@ -37,11 +37,12 @@
 //! PROXY_AUTH_HEADER line equal to it (constant time compare), the client is the address in
 //! exactly one PROXY_CLIENT_HEADER line, if that parses as a PUBLIC IP (`front_door_addr`). A
 //! wrong, missing or doubled key, or an unset PROXY_AUTH_KEY, means the rules above apply
-//! unchanged, and both headers of such a request are ignored completely. A request WITH the
-//! correct key but without exactly one public client address (missing, doubled, invalid or
-//! private: Netlify passes a visitor's own copy of the header on next to its own) is refused
-//! with 400, never answered from the proxy's own address, which would let a visitor spread
-//! guesses over the proxy's servers. Every limit, audit row and trusted address
+//! unchanged when the request carries NO key header, and both headers of such a request are
+//! ignored completely. A request that carries a key header at all must have exactly one,
+//! equal to the key, AND exactly one public client address (missing, doubled, invalid or
+//! private is not enough: Netlify passes a visitor's own copy of either header on next to its
+//! own); otherwise it is refused with 400, never answered from the proxy's own address, which
+//! would let a visitor spread guesses over the proxy's servers. Every limit, audit row and trusted address
 //! gets its address from the `ClientAddr` extractor, so they all see the same resolved address.
 
 use std::{
@@ -162,20 +163,15 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     ha.iter().zip(hb.iter()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
 }
 
-/// True when the request carries exactly one key header and it matches: the front door vouches
-/// for it. From then on the client header must be exactly one public address; anything else
-/// (a visitor adding their own copy, a missing header) is refused, never quietly replaced by the
-/// proxy's own address, which would let a visitor spread guesses over the proxy's servers.
-pub fn has_front_door_key(
+/// True when the request names the front door at all: any key header line is present. From then
+/// on it must be exactly one line equal to the key AND exactly one public client address
+/// (`front_door_addr`), or the request is refused. Falling back to the proxy's own address would
+/// let a visitor spread guesses over the proxy's servers by adding a copy of either header.
+pub fn names_front_door(
     cfg: Option<&crate::config::ProxyAuth>,
     headers: &axum::http::HeaderMap,
 ) -> bool {
-    let Some(cfg) = cfg else { return false };
-    let mut keys = headers.get_all(&cfg.key_header).iter();
-    match (keys.next(), keys.next()) {
-        (Some(sent), None) => constant_time_eq(sent.as_bytes(), cfg.key.as_bytes()),
-        _ => false,
-    }
+    cfg.is_some_and(|c| headers.get(&c.key_header).is_some())
 }
 
 /// The client address key given by a trusted front door, or `None` when the request does not
@@ -238,7 +234,7 @@ impl FromRequestParts<AppState> for ClientAddr {
         if let Some(addr) = front_door_addr(st.config.proxy_auth.as_ref(), &parts.headers) {
             return Ok(ClientAddr(Some(addr)));
         }
-        if has_front_door_key(st.config.proxy_auth.as_ref(), &parts.headers) {
+        if names_front_door(st.config.proxy_auth.as_ref(), &parts.headers) {
             // Vouched for by the front door but no single public address: refuse.
             tracing::warn!("front door request without exactly one public client address");
             return Err(ApiError::bad("Bad request."));
