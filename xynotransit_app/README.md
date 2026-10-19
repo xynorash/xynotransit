@@ -3,7 +3,7 @@
 A Flutter web app that replaces the monthly logistics report chase. It does three jobs:
 
 1. **Form.** Each person (employee) fills in their monthly counts, target answers and notes in their own words, and sends the report.
-2. **Overview and live table.** The manager (role controller) sees a summary dashboard with graphs, and a live table of which reports have arrived.
+2. **Overview and live table.** The manager (API role value `controller`) sees a summary dashboard with graphs, and a live table of which reports have arrived.
 3. **Slide preview and generator.** The manager turns submitted reports into a 1920x1080 slide deck, scrolls through it as one vertical stream and exports it as PDF, PPTX or a ZIP of PNGs.
 4. **Slide text.** The manager chooses the words on the slides (meeting title, date line, organisation name and more). The preview and every export show exactly those words.
 5. **People.** The manager builds the catalog in the app: teams, people, seats, and per seat the counts and targets. Nothing is a fixed list.
@@ -53,11 +53,11 @@ There are no suggestion chips. The form has free text only.
 
 ### Overview (`/manager`)
 
-A period picker and four tiles. When reports are missing, a card right under the tiles names who (up to 12 names, then "and N more"). Then the charts. Everything counts submitted reports only. Two columns from 1100 px, one below. Every chart has a text alternative with its numbers.
+A period picker and four tiles. When reports are missing, a card right under the tiles names who (up to 12 names, then "and N more"). Then the charts. Everything counts submitted reports of expected seats only (see "Who counts" below). Two columns from 1100 px, one below. Every chart has a text alternative with its numbers.
 
 | Section | What it shows | Where the numbers come from |
 | --- | --- | --- |
-| Tiles | Reports in ("N of M"), Targets met (percent of answered targets), Volume (all counts added), People missing | `expected` is the seats where seat and person are both active, `submitted` the submitted reports of the period. |
+| Tiles | Reports in ("N of M"), Targets met (percent of answered targets), Volume (all counts added), People missing | `expected` is the seats where seat and person are both active, `submitted` the submitted reports of those seats in the period (so `submitted` is never above `expected`). |
 | Who has reported | Per team, sent against still missing | `teams[].submitted` and `expected`. |
 | How targets went | Per team, met, partly met, missed | The status of every target answer in submitted reports. |
 | Volume by month | Per team, the three months of the period | The sum of all counts of a team per month. |
@@ -68,13 +68,21 @@ A period picker and four tiles. When reports are missing, a card right under the
 
 With no reports in the period the page explains it and shows only "Who has reported" and the People table. The summary reloads when the period changes, and shortly after a report is sent or the catalog changes. Data comes from `GET /api/summary` (see the API README); demo mode computes the same numbers in memory (`lib/domain/summary_compute.dart`).
 
+### Who counts (expected and submitted)
+
+One rule for the API summary, the Dart compute, the tiles, the donut, the team rows, the Reports header and the Generate hint:
+
+- **expected** = active seats of active people.
+- **submitted** (tiles, donut, team rows, header) = sent reports of those expected seats only, so submitted is never above expected.
+- Sent reports of switched-off seats or people are still real. They are listed in the Reports table, exported in the CSV, included in generated decks, and shown in the Overview people table as rows tagged **Inactive**. They are never expected and never counted as missing.
+
 ### Reports (`/manager/reports`)
 
 - At 1100 px wide or more, the slides are on the left and the table column on the right.
   - Left: a pinned header card with the title, **Generate** / **Regenerate**, **Export** (once a deck exists), the meeting date and a jump menu. Below it is one continuous vertical list of every slide in deck order: the cover, then for each team a divider and two slides per person, then one Suggestions page at the very end. A deck of 14 reports and 4 teams has 1 + 4 + 28 + 1 = 34 slides.
   - Right: the Period card and the "Reports received" table, in a column that scrolls on its own.
-- The "Reports received" card counts only seats that are expected: the seat and its person are both active (same rule as the Overview tiles and the API). Who is still missing is listed first, above the table. A search box appears from 7 reports. On a phone (under 500 px) each report is a stacked block with all its columns, with no sideways scrolling.
-- **Export data (CSV)** (above the table) downloads the sent reports of the shown period as one long table, ready for Excel: columns Period, Team, Person, Role, Seat, Type, Item, Month, Value, Status, Text, Sent at. Types: Count (one row per count and month), Target (status and comment), Note, and Missing (a seat with no sent report). UTF-8 with a byte order mark, CRLF lines, quoted cells, a leading apostrophe on text that starts with = + - @ or a tab. File name: `Xynotransit_reports_Feb_to_Apr_2026.csv`.
+- The "Reports received" card says "N of M": M is the seats that are expected (the seat and its person are both active, same rule as the Overview tiles and the API) and N the sent reports of those seats, so N is never above M. Reports of switched-off people are real: they stay in the table (tagged **Inactive**, no Edit button), in the CSV and in every generated deck; a line under the progress bar says how many there are ("Not counted above"), and the Generate hint reads "1 of 1 reports in for Feb to Apr 2026, plus 1 from a switched-off person". They are never counted as missing. Who is still missing is listed first, above the table. When one person has two seats the row says "Name · Seat title". When the words a person typed on the form (name, country, role) differ from the profile, a muted line "On the slides: ..." shows them, and the Notes column shows the number of points plus the first note (also as a tooltip). A search box appears from 7 reports. On a phone (under 500 px) each report is a stacked block with all its columns, with no sideways scrolling.
+- **Export data (CSV)** (above the table) downloads the sent reports of the shown period as one long table, ready for Excel: columns Period, Team, Person, Role, Seat, Type, Item, Month, Value, Status, Text, Sent at, then Reported name, Reported country, Reported role (the words the person typed on the form, which the slides use; empty on reports sent before those fields existed). Switched-off seats with a sent report are included; they are never listed as Missing. Types: Count (one row per count and month), Target (status and comment), Note, and Missing (a seat with no sent report). UTF-8 with a byte order mark, CRLF lines, quoted cells, a leading apostrophe on text that starts with = + - @ or a tab. File name: `Xynotransit_reports_Feb_to_Apr_2026.csv`.
 - Below 1100 px everything is one column: the table column first, then the preview header, then the slides.
 - The jump menu is a dropdown plus Previous slide and Next slide buttons.
 - The slide list is lazy: only the slides near the screen are built.
@@ -87,7 +95,7 @@ With no reports in the period the page explains it and shows only "Who has repor
 The "Slide text" screen is where the manager writes the words of the deck. Every text a manager may want to change is a field here.
 
 - A period picker at the top. Words are kept **per period**.
-- Fields sit in cards by group. Each field has a label, help, a character counter, placeholder chips (press one to insert it), a plain-words error and **Reset** (back to the built-in default). Save is disabled while a field is invalid or nothing changed. **Reset all to defaults** resets every field.
+- Fields sit in cards by group. Each field has a label, help, a character counter, placeholder chips (press one to insert it), a plain-words error and **Reset** (back to the built-in default). Save is disabled while a field is invalid or nothing changed. **Reset all to defaults** resets every field after a confirmation ("This resets every wording to the built-in text. You can still cancel by not saving." with Reset and Cancel).
 - A banner says where the words come from: "These words were carried over from Feb to Apr 2026." or "Built-in words. Nobody has changed them yet."
 - On a wide screen a **draft preview** sits beside the form, below it on a narrow one. It renders five slides (cover, one divider, KPI, results, suggestions) with the unsaved words. A field that has an error keeps its saved words in the preview. Without a deck it uses a sample person, labelled "Sample data".
 - After Save: "Saved. Regenerate the slides to use these words."
@@ -166,7 +174,7 @@ In the "Reports received" table press **Edit** on the row. The report is loaded 
 This is where the catalog is built and kept.
 
 - **Teams:** add, rename, delete. A team that still has seats cannot be deleted ("Move or remove the seats of this team first.").
-- **People:** add a person (name, optional email, Employee or Manager). With no email the server makes an internal address from the name (see "Sign in without an email") and the dialog shows it. Deactivate a person with the Active switch: they can no longer sign in and every token of theirs stops working at once. Their old reports stay. Inactive people and seats are hidden until you turn on the inactive switch. The dialog explains what saving an inactive person does and how to undo it (turn Active on and save). The page has a search (name, email, role), a team filter and a sort (order set up, name, role), and builds only the rows near the screen, so a catalog of 300 people stays fast. Deleting a team asks first; a team that still has seats is refused with a message.
+- **People:** add a person (name, optional email, Employee or Manager). With no email the server makes an internal address from the name (see "Sign in without an email") and the dialog shows it. Deactivate a person with the Active switch: they can no longer sign in and every token of theirs stops working at once. Their old reports stay. Inactive people and seats are hidden until you turn on the inactive switch; a team's "(N seats)" counts the same seats its section lists (active ones, or all when the switch is on). The dialog explains what saving an inactive person does and how to undo it (turn Active on and save). The page has a search (name, email, role), a team filter and a sort (order set up, name, role), and builds only the rows near the screen, so a catalog of 300 people stays fast. Deleting a team asks first; a team that still has seats is refused with a message.
 - **Sign-in link:** every person has a **Sign-in link** action (also in the person dialog). It opens a dialog to choose how long the link works (1 hour, 24 hours, 7 days), then shows the link in a read-only field with **Copy link** (the screen reader hears "Copied"), a QR code, the time it stops working in your own time zone, a sentence ready to paste into a chat, and the warning that anyone with the link can sign in as that person. Making another link does not turn the first off. The action is disabled for a person who is switched off, with the reason next to it. In demo mode the links are only displayed (`https://demo.invalid/auth/verify?token=demo-...`); they open nothing.
 - **Seats:** a seat is a person in a team with a role title. A person can have several seats. A deactivated seat is no longer expected in any period; its old reports stay.
 - **Counts and targets:** "What they count" on a seat opens the definitions editor.
@@ -281,7 +289,7 @@ API runtime (set in `xynotransit-db/.env`, passed by compose):
 | `SMTP_PORT` | `1025` | SMTP port. |
 | `MAIL_FROM` | `Xynotransit <no-reply@xynotransit.local>` | Sender of magic links. |
 | `BIND` | `0.0.0.0:8081` | Listen address. |
-| `BOOTSTRAP_CONTROLLER_EMAIL` | empty | At start, this person is created as an active controller when missing, or promoted and activated. |
+| `BOOTSTRAP_CONTROLLER_EMAIL` | empty | At start, this person is created as an active manager when missing, or promoted and activated. |
 | `BOOTSTRAP_CONTROLLER_NAME` | empty | Name used when the person is created. Default: the part of the email before the `@`, capitalised. |
 | `LOG_MAGIC_LINKS` | `false` | `true` logs the link at info level. Dev only. |
 | `RUST_LOG` | `info` | Log level. |
@@ -292,13 +300,13 @@ API runtime (set in `xynotransit-db/.env`, passed by compose):
 - Use a real SMTP server: set `SMTP_HOST`, `SMTP_PORT`, `MAIL_FROM`. Remove the Mailpit service.
 - Set `JWT_SECRET` to a long random value (for example `openssl rand -hex 32`).
 - Put TLS in front (a reverse proxy or load balancer) and set `PUBLIC_URL` to the https origin, so magic links point to it.
-- Set `BOOTSTRAP_CONTROLLER_EMAIL` to the real controller.
+- Set `BOOTSTRAP_CONTROLLER_EMAIL` to the real manager.
 - Do not load `xynotransit-db/examples/` (placeholder people and demo reports). Add real people in People.
 - Set `LOG_MAGIC_LINKS=false`, change `POSTGRES_PASSWORD`, and do not publish the db port.
 
 ## The deck snapshot
 
-The deck is not built live. It freezes the slide words as well as the data. **Generate** (and later **Regenerate**) asks the API to freeze the submitted reports of the period into a snapshot, built on the server in deck order (team sort, then assignment sort). The preview and every export read that snapshot, so the deck does not change under you when someone resends a report. Press Regenerate to freeze the latest submitted reports into a new snapshot and pick up newer ones. Only a manager (controller) can do this.
+The deck is not built live. It freezes the slide words as well as the data. **Generate** (and later **Regenerate**) asks the API to freeze the submitted reports of the period into a snapshot, built on the server in deck order (team sort, then assignment sort). The preview and every export read that snapshot, so the deck does not change under you when someone resends a report. Press Regenerate to freeze the latest submitted reports into a new snapshot and pick up newer ones. Only a manager can do this.
 
 ## Exports
 
@@ -338,8 +346,8 @@ Every export includes the Suggestions page (34 slides for 14 reports). File name
 - Only an active person can sign in. A deactivated person gets 401 on every request at once. Unknown addresses get the same answer as known ones, so addresses cannot be probed.
 - Magic link tokens are 32 random bytes. Only their SHA-256 is stored. A link is single use and valid 15 minutes.
 - Rate limit: at most 5 links per person per hour.
-- An employee (contributor) can read and send only their own report. Only a manager (controller) can generate decks, set the meeting date, or write into a closed period.
-- The UI split is enforced by the API too: the list of reports, the deck (read and generate), the slide texts (read and save) and live events (ticket and stream) are controller only and return 403 to employees.
+- An employee (contributor) can read and send only their own report. Only a manager can generate decks, set the meeting date, or write into a closed period.
+- The UI split is enforced by the API too: the list of reports, the deck (read and generate), the slide texts (read and save) and live events (ticket and stream) are manager only and return 403 to employees.
 - In the catalog, person emails are `null` for an employee, except their own. A manager gets all emails.
 - Live updates use a short ticket (60 seconds, single use, bound to the person), because EventSource cannot send headers.
 - Errors never show SQL; details are logged on the server.

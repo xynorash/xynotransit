@@ -9,15 +9,22 @@ import 'summary.dart';
 /// holds the two against each other.
 ///
 /// Rules, shared with the API:
-/// - only submitted reports count, a report counts whatever the seat's state is now;
+/// - only submitted reports count;
 /// - a seat is expected when the seat and its person are both switched on, also
 ///   for older periods in the trend;
+/// - `submitted`, `met`, `partly` and `missed` (headline, teams, trend, people)
+///   count only the reports of expected seats, so submitted is never more than
+///   expected; the reports of switched off seats or people are counted apart
+///   in `submittedInactive`: never expected, never missing, but real, so their
+///   counts and volume stay in the volume, in the counts and in the people list
+///   (tagged inactive);
 /// - volume is the sum of every count of every month;
 /// - counts are grouped by lower case label, per seat first and then across
 ///   seats; only counts a report has numbers for show up, and the first label
 ///   seen (live before retired, then the lower series) is the one shown;
-/// - a team shows when it has an expected seat or a report in the shown period;
-///   a switched off seat shows in the people list only when it has a report;
+/// - a team shows when it has an expected seat or a report (of any seat) in the
+///   shown period; a switched off seat shows in the people list only when it
+///   has a report;
 /// - [retired] holds counts that were taken off a seat but still sit in old reports.
 Summary computeSummary({
   required Period period,
@@ -39,10 +46,13 @@ Summary computeSummary({
     for (final m in retired[a.id] ?? const <MetricDef>[]) (m, true),
   ];
 
+  /// Every submitted report of a known seat, switched off ones too.
   List<Report> submittedOf(String periodId) => [
     for (final r in reports[periodId] ?? const <Report>[])
       if (r.isSubmitted && byId.containsKey(r.assignmentId)) r,
   ];
+
+  bool expects(Report r) => catalog.isExpected(byId[r.assignmentId]!);
 
   /// Per month sums of the known counts of one report.
   List<int> monthsOf(Report r) {
@@ -59,17 +69,19 @@ Summary computeSummary({
 
   // ---- the shown period ----
   final shown = submittedOf(period.id);
+  final shownExpected = shown.where(expects).toList();
   final shownBySeat = {for (final r in shown) r.assignmentId: r};
 
   final teams = <TeamSummary>[];
   for (final t in catalog.teams) {
     final seats = expectedSeats.where((a) => a.teamId == t.id).length;
-    final rs = shown
+    final teamReports = shown
         .where((r) => byId[r.assignmentId]!.teamId == t.id)
         .toList();
-    if (seats == 0 && rs.isEmpty) continue;
+    if (seats == 0 && teamReports.isEmpty) continue;
+    final rs = teamReports.where(expects).toList();
     final months = [0, 0, 0];
-    for (final r in rs) {
+    for (final r in teamReports) {
       final m = monthsOf(r);
       for (var i = 0; i < 3; i++) {
         months[i] += m[i];
@@ -81,6 +93,7 @@ Summary computeSummary({
         name: t.name,
         expected: seats,
         submitted: rs.length,
+        submittedInactive: teamReports.length - rs.length,
         met: rs.fold(0, (n, r) => n + r.kpiCount(KpiStatus.met)),
         partly: rs.fold(0, (n, r) => n + r.kpiCount(KpiStatus.partly)),
         missed: rs.fold(0, (n, r) => n + r.kpiCount(KpiStatus.missed)),
@@ -161,6 +174,7 @@ Summary computeSummary({
         name: catalog.personOf(a).fullName,
         role: a.roleTitle,
         team: teamName[a.teamId] ?? '',
+        active: catalog.isExpected(a),
         submitted: r != null,
         met: r?.kpiCount(KpiStatus.met) ?? 0,
         partly: r?.kpiCount(KpiStatus.partly) ?? 0,
@@ -182,17 +196,19 @@ Summary computeSummary({
   final trendPoints = [
     for (final p in [...window, period])
       () {
-        final rs = submittedOf(p.id);
+        final all = submittedOf(p.id);
+        final rs = all.where(expects).toList();
         return TrendPoint(
           periodId: p.id,
           label: p.label,
           startMonth: p.startMonth,
           expected: expectedSeats.length,
           submitted: rs.length,
+          submittedInactive: all.length - rs.length,
           met: rs.fold(0, (n, r) => n + r.kpiCount(KpiStatus.met)),
           partly: rs.fold(0, (n, r) => n + r.kpiCount(KpiStatus.partly)),
           missed: rs.fold(0, (n, r) => n + r.kpiCount(KpiStatus.missed)),
-          volumeTotal: rs.fold(0, (n, r) => n + volumeOf(r)),
+          volumeTotal: all.fold(0, (n, r) => n + volumeOf(r)),
         );
       }(),
   ];
@@ -202,7 +218,8 @@ Summary computeSummary({
     periodLabel: period.label,
     months: period.months,
     expected: expectedSeats.length,
-    submitted: shown.length,
+    submitted: shownExpected.length,
+    submittedInactive: shown.length - shownExpected.length,
     teams: teams,
     metrics: metrics,
     trend: trendPoints,

@@ -259,4 +259,164 @@ void main() {
     );
     expect(Summary.fromJson(s.toJson()).toJson(), s.toJson());
   });
+
+  group('reports of switched off people and seats (D2)', () {
+    // Ann is active. Dee was switched off, so her seat s2 is no longer
+    // expected. Cy's seat s4 was switched off on its own. All three sent.
+    final cat = Catalog(
+      teams: const [
+        Team(id: 't1', code: 'alpha', name: 'Alpha', sort: 1),
+        Team(id: 't2', code: 'beta', name: 'Beta', sort: 2),
+      ],
+      persons: const [
+        Person(id: 'p1', fullName: 'Ann'),
+        Person(id: 'p2', fullName: 'Dee', active: false),
+        Person(id: 'p3', fullName: 'Cy'),
+      ],
+      assignments: [
+        seat(
+          's1',
+          'p1',
+          't1',
+          1,
+          metrics: [m('m1', 'Sea', 0)],
+          kpis: [k('k1', 1)],
+        ),
+        seat(
+          's2',
+          'p2',
+          't2',
+          1,
+          metrics: [m('m2', 'Sea', 0)],
+          kpis: [k('k2', 1)],
+        ),
+        seat(
+          's3',
+          'p3',
+          't1',
+          2,
+          metrics: [m('m3', 'Air', 0)],
+          kpis: [k('k3', 1)],
+        ),
+        seat('s4', 'p3', 't1', 3, active: false, metrics: [m('m4', 'Air', 0)]),
+      ],
+    );
+    final rs = {
+      'P1': [
+        report(
+          'P1',
+          's1',
+          values: {
+            'm1': [1, 1, 1],
+          },
+          kpis: {'k1': KpiStatus.met},
+        ),
+        report(
+          'P1',
+          's2',
+          values: {
+            'm2': [10, 10, 10],
+          },
+          kpis: {'k2': KpiStatus.missed},
+        ),
+        report(
+          'P1',
+          's4',
+          values: {
+            'm4': [100, 0, 0],
+          },
+        ),
+      ],
+      'P0': [
+        report(
+          'P0',
+          's2',
+          values: {
+            'm2': [5, 0, 0],
+          },
+          kpis: {'k2': KpiStatus.met},
+        ),
+      ],
+    };
+    final s = computeSummary(
+      period: p1,
+      allPeriods: [p0, p1],
+      catalog: cat,
+      reports: rs,
+    );
+
+    test(
+      'expected is active seats of active people, submitted never exceeds it',
+      () {
+        expect(s.expected, 2); // s1 and s3
+        expect(s.submitted, 1); // only Ann
+        expect(s.submittedInactive, 2); // Dee and the switched off seat of Cy
+        expect(s.submitted, lessThanOrEqualTo(s.expected));
+      },
+    );
+
+    test('teams count only expected seats, but keep the volume of all', () {
+      final alpha = s.teams.firstWhere((t) => t.name == 'Alpha');
+      expect(
+        [alpha.expected, alpha.submitted, alpha.submittedInactive],
+        [2, 1, 1],
+      );
+      expect(alpha.volumeByMonth, [101, 1, 1]);
+      // Beta has no expected seat, but Dee's report keeps the row.
+      final beta = s.teams.firstWhere((t) => t.name == 'Beta');
+      expect(
+        [beta.expected, beta.submitted, beta.submittedInactive],
+        [0, 0, 1],
+      );
+      expect([beta.met, beta.partly, beta.missed], [0, 0, 0]);
+      for (final t in s.teams) {
+        expect(t.submitted, lessThanOrEqualTo(t.expected));
+      }
+    });
+
+    test('targets and the trend count expected seats; volume counts all', () {
+      expect([s.met, s.partly, s.missed], [1, 0, 0]);
+      final now = s.trend.last;
+      expect([now.expected, now.submitted, now.submittedInactive], [2, 1, 2]);
+      expect(now.volumeTotal, 1 + 1 + 1 + 30 + 100);
+      final before = s.trend.first;
+      expect(
+        [before.submitted, before.submittedInactive, before.met],
+        [0, 1, 0],
+      );
+      expect(before.submitted, lessThanOrEqualTo(before.expected));
+    });
+
+    test('the people list keeps them, tagged inactive, never missing', () {
+      expect(s.people.map((p) => (p.name, p.active, p.submitted)), [
+        ('Ann', true, true),
+        ('Cy', true, false), // s3: expected, missing
+        ('Cy', false, true), // s4: switched off, has a report
+        ('Dee', false, true),
+      ]);
+      expect(s.people.where((p) => p.active && !p.submitted).length, 1);
+    });
+
+    test('a switched off seat without a report is not listed', () {
+      final none = computeSummary(
+        period: p0,
+        allPeriods: [p0],
+        catalog: cat,
+        reports: const {},
+      );
+      expect(none.people.map((p) => p.name), ['Ann', 'Cy']);
+      expect(none.submittedInactive, 0);
+    });
+
+    test('the new numbers survive JSON, old JSON reads as zero and active', () {
+      expect(Summary.fromJson(s.toJson()).toJson(), s.toJson());
+      final old = s.toJson()..remove('submitted_inactive');
+      expect(Summary.fromJson(old).submittedInactive, 0);
+      final people = [
+        for (final p in s.people) {...p.toJson()..remove('active')},
+      ];
+      final noActive = Summary.fromJson({...s.toJson(), 'people': people});
+      expect(noActive.people.every((p) => p.active), isTrue);
+    });
+  });
 }

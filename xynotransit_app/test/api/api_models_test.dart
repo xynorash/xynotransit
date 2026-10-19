@@ -341,12 +341,15 @@ void main() {
       'generated_at': '2026-06-01T08:00:00Z',
       'expected_count': 14,
       'included_count': 2,
+      'switched_off_count': 1,
       'items': [
         {'report_id': 'r2', 'sort': 1, 'snapshot': snap},
         {'report_id': 'r1', 'sort': 0, 'snapshot': snap},
       ],
     });
     expect(d.expectedCount, 14);
+    expect(d.includedCount, 2);
+    expect(d.switchedOffCount, 1);
     expect(d.items.map((i) => i.reportId), ['r1', 'r2']);
     final s = d.items.first.snapshot;
     expect(s.months[1].short, 'Mar');
@@ -363,6 +366,7 @@ void main() {
       'items': <Object?>[],
     });
     expect(empty.items, isEmpty);
+    expect(empty.switchedOffCount, 0, reason: 'an older server sends none');
   });
 
   test('user and role', () {

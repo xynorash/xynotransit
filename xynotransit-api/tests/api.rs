@@ -322,7 +322,7 @@ async fn me_and_role_changes_take_effect_at_once() {
         )
         .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
-    assert_eq!(v["error"], "Only the controller can do this.");
+    assert_eq!(v["error"], "Only the manager can do this.");
     let (s, _) = app
         .call(
             "POST",
@@ -353,12 +353,12 @@ async fn catalog_has_the_agreed_shape() {
         v["teams"],
         json!([
             {"id": "1", "code": "tana", "name": "Tana", "sort": 1},
-            {"id": "2", "code": "abe", "name": "Antsirabe", "sort": 2},
-        ])
+        ]),
+        "a contributor only gets the teams of their own seats"
     );
 
     let persons = v["persons"].as_array().unwrap();
-    assert_eq!(persons.len(), 3, "inactive person is left out");
+    assert_eq!(persons.len(), 1, "a contributor only gets themselves");
     let ana = persons.iter().find(|p| p["id"] == ANA).unwrap();
     assert_eq!(ana["full_name"], "Ana Rakoto");
     assert_eq!(ana["email"], "ana@example.org");
@@ -370,9 +370,9 @@ async fn catalog_has_the_agreed_shape() {
         .iter()
         .map(|a| a["code"].as_str().unwrap())
         .collect();
-    assert_eq!(codes, ["ben-export", "ana-import", "cora-ops"]);
+    assert_eq!(codes, ["ana-import"]);
 
-    let a = &v["assignments"][1];
+    let a = &v["assignments"][0];
     assert_eq!(a["id"], A_ANA);
     assert_eq!(a["person_id"], ANA);
     assert_eq!(a["team_id"], "1");
@@ -392,7 +392,6 @@ async fn catalog_has_the_agreed_shape() {
             {"id": K_NOERR, "sort": 2, "text": "No errors"},
         ])
     );
-    assert_eq!(v["assignments"][2]["metrics"], json!([]));
 
     assert!(v.get("suggestions").is_none(), "note suggestions are gone");
     assert_eq!(a["active"], true);
@@ -442,7 +441,7 @@ async fn ensure_period_is_idempotent_and_normalises() {
 }
 
 #[tokio::test]
-async fn meeting_date_can_be_set_and_cleared_by_the_controller_only() {
+async fn meeting_date_can_be_set_and_cleared_by_the_manager_only() {
     let app = TestApp::new().await;
     let ana = app.login("ana@example.org").await;
     let cora = app.login("cora@example.org").await;
@@ -459,10 +458,7 @@ async fn meeting_date_can_be_set_and_cleared_by_the_controller_only() {
         .await;
     assert_eq!(
         (s, v["error"].as_str()),
-        (
-            StatusCode::FORBIDDEN,
-            Some("Only the controller can do this.")
-        )
+        (StatusCode::FORBIDDEN, Some("Only the manager can do this."))
     );
 
     let (s, v) = app
@@ -558,7 +554,7 @@ async fn sending_a_report_happy_path() {
         ])
     );
 
-    // The owner and the controller can read it; the controller can list all.
+    // The owner and the manager can read it; the manager can list all.
     for t in [&ana, &cora] {
         let (s, one) = app
             .call(
@@ -887,7 +883,7 @@ async fn contributors_can_only_send_their_own_report() {
 }
 
 #[tokio::test]
-async fn closed_period_blocks_contributors_but_not_the_controller() {
+async fn closed_period_blocks_contributors_but_not_the_manager() {
     let app = TestApp::new().await;
     let ana = app.login("ana@example.org").await;
     let cora = app.login("cora@example.org").await;
@@ -915,7 +911,7 @@ async fn fill_all(app: &TestApp, period: &str, cora: &str) {
 }
 
 #[tokio::test]
-async fn controller_generates_the_deck_and_snapshots_follow_the_contract() {
+async fn manager_generates_the_deck_and_snapshots_follow_the_contract() {
     let app = TestApp::new().await;
     let ana = app.login("ana@example.org").await;
     let cora = app.login("cora@example.org").await;
@@ -928,7 +924,7 @@ async fn controller_generates_the_deck_and_snapshots_follow_the_contract() {
     app.put_report(&ana, &period, A_ANA, ana_report()).await;
     let (s, v) = app.call("POST", &uri, Some(&ana), None).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
-    assert_eq!(v["error"], "Only the controller can do this.");
+    assert_eq!(v["error"], "Only the manager can do this.");
     assert_eq!(app.count("deck_run").await, 0);
 
     // Only Ana has sent so far: 1 of 3 expected.
@@ -993,7 +989,7 @@ async fn controller_generates_the_deck_and_snapshots_follow_the_contract() {
             ],
             "targets": [
                 {"text": "On time", "status": "met"},
-                {"text": "No errors", "status": "partly"},
+                {"text": "No errors", "status": "partly", "comment": "two slips"},
             ],
             "well": ["First good thing", "Second good thing"],
             "wrong": [],
@@ -1364,7 +1360,7 @@ async fn contributors_are_kept_out_of_the_manager_endpoints() {
     let ana = app.login("ana@example.org").await;
     let cora = app.login("cora@example.org").await;
     let period = app.ensure_period(&ana, "2026-02-01").await;
-    let msg = "Only the controller can do this.";
+    let msg = "Only the manager can do this.";
 
     for (m, uri) in [
         ("GET", format!("/api/periods/{period}/reports")),
@@ -1375,7 +1371,7 @@ async fn contributors_are_kept_out_of_the_manager_endpoints() {
         assert_eq!(s, StatusCode::FORBIDDEN, "{m} {uri}");
         assert_eq!(v["error"], msg);
         let (s, _) = app.call(m, &uri, Some(&cora), None).await;
-        assert_eq!(s, StatusCode::OK, "{m} {uri} as controller");
+        assert_eq!(s, StatusCode::OK, "{m} {uri} as manager");
     }
 
     // A ticket made by a person who has since lost the role is refused.
@@ -1400,7 +1396,7 @@ async fn contributors_are_kept_out_of_the_manager_endpoints() {
 }
 
 #[tokio::test]
-async fn a_report_is_visible_to_its_owner_and_the_controller_only() {
+async fn a_report_is_visible_to_its_owner_and_the_manager_only() {
     let app = TestApp::new().await;
     let ana = app.login("ana@example.org").await;
     let ben = app.login("ben@example.org").await;
@@ -1438,24 +1434,138 @@ async fn catalog_hides_other_peoples_emails_from_contributors() {
 
     let (s, v) = app.call("GET", "/api/catalog", Some(&ana), None).await;
     assert_eq!(s, StatusCode::OK);
+    // D9: a contributor gets only their own person, seats and the teams of those seats. No other
+    // name, role, team or email leaves the server.
     let persons = v["persons"].as_array().unwrap();
-    assert_eq!(persons.len(), 3);
-    for p in persons {
-        assert!(p["full_name"].is_string() && p["app_role"].is_string());
-        if p["id"] == ANA {
-            assert_eq!(p["email"], "ana@example.org");
-        } else {
-            assert!(p["email"].is_null(), "{p}");
-        }
+    assert_eq!(persons.len(), 1);
+    assert_eq!(persons[0]["id"], ANA);
+    assert_eq!(persons[0]["email"], "ana@example.org");
+    assert_eq!(v["teams"].as_array().unwrap().len(), 1);
+    assert_eq!(v["teams"][0]["name"], "Tana");
+    assert_eq!(v["assignments"].as_array().unwrap().len(), 1);
+    assert_eq!(v["assignments"][0]["metrics"].as_array().unwrap().len(), 2);
+    let text = v.to_string();
+    for other in [
+        "Ben Rabe",
+        "Cora Boss",
+        "Antsirabe",
+        "Export",
+        "Operations",
+        "ben@example.org",
+    ] {
+        assert!(
+            !text.contains(other),
+            "{other} leaked to a contributor: {text}"
+        );
     }
+    // Asking for inactive rows changes nothing for a contributor.
+    let (_, w) = app
+        .call(
+            "GET",
+            "/api/catalog?include_inactive=true",
+            Some(&ana),
+            None,
+        )
+        .await;
+    assert_eq!(w, v);
+
+    // A manager still sees everybody, with every email.
+    let (_, v) = app.call("GET", "/api/catalog", Some(&cora), None).await;
+    assert_eq!(v["persons"].as_array().unwrap().len(), 3);
     assert_eq!(v["teams"].as_array().unwrap().len(), 2);
     assert_eq!(v["assignments"].as_array().unwrap().len(), 3);
-    assert_eq!(v["assignments"][1]["metrics"].as_array().unwrap().len(), 2);
-
-    let (_, v) = app.call("GET", "/api/catalog", Some(&cora), None).await;
     assert!(v["persons"]
         .as_array()
         .unwrap()
         .iter()
         .all(|p| p["email"].is_string()));
+}
+
+/// D12: every 429 says in whole seconds when to try again.
+#[tokio::test]
+async fn too_many_links_answers_with_retry_after_seconds() {
+    let app = TestApp::new().await;
+    let body = || serde_json::to_vec(&json!({"email": "ana@example.org"})).unwrap();
+    for _ in 0..5 {
+        let (s, _, _) = app
+            .send(
+                "POST",
+                "/api/auth/magic-link",
+                None,
+                Some("application/json"),
+                body(),
+            )
+            .await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+    }
+    let (s, h, _) = app
+        .send(
+            "POST",
+            "/api/auth/magic-link",
+            None,
+            Some("application/json"),
+            body(),
+        )
+        .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    let wait: i64 = h["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!(
+        (3590..=3600).contains(&wait),
+        "all five just now: about an hour, got {wait}"
+    );
+
+    // The attempts are 50 minutes old: a place frees in about 10 minutes.
+    app.sql("update login_attempt set at = now() - interval '50 minutes'")
+        .await;
+    let (s, h, _) = app
+        .send(
+            "POST",
+            "/api/auth/magic-link",
+            None,
+            Some("application/json"),
+            body(),
+        )
+        .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    let wait: i64 = h["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!((595..=601).contains(&wait), "got {wait}");
+}
+
+#[tokio::test]
+async fn retry_after_counts_down_to_the_moment_a_place_frees() {
+    let app = TestApp::new().await;
+    let body = || serde_json::to_vec(&json!({"email": "ana@example.org"})).unwrap();
+    // Five attempts: 59 minutes, 40, 30, 20 and 1 minute old. The sixth waits for the oldest
+    // (1 minute left), not for the newest.
+    for i in 0..5 {
+        let (s, _, _) = app
+            .send(
+                "POST",
+                "/api/auth/magic-link",
+                None,
+                Some("application/json"),
+                body(),
+            )
+            .await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{i}");
+    }
+    app.sql(
+        "with o as (select ctid, row_number() over (order by at) n from login_attempt)
+         update login_attempt l set at = now() - (case o.n when 1 then 59 when 2 then 40
+           when 3 then 30 when 4 then 20 else 1 end) * interval '1 minute'
+         from o where l.ctid = o.ctid",
+    )
+    .await;
+    let (s, h, _) = app
+        .send(
+            "POST",
+            "/api/auth/magic-link",
+            None,
+            Some("application/json"),
+            body(),
+        )
+        .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    let wait: i64 = h["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!((55..=62).contains(&wait), "expected about 60 s, got {wait}");
 }

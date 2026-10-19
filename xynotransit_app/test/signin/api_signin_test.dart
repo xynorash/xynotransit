@@ -57,7 +57,7 @@ void main() {
   });
 
   for (final (status, message) in [
-    (403, 'Only the controller can do this.'),
+    (403, 'Only the manager can do this.'),
     (404, 'That person does not exist.'),
     (409, 'This person is switched off.'),
     (429, 'Too many sign-in links created. Try again later.'),

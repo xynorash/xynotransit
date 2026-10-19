@@ -114,7 +114,7 @@ async fn multiline_field_stores_plain_line_feeds() {
 }
 
 #[tokio::test]
-async fn deactivated_and_demoted_controllers_and_forged_tokens_are_out() {
+async fn deactivated_and_demoted_managers_and_forged_tokens_are_out() {
     let app = TestApp::new().await;
     let cora = app.login("cora@example.org").await;
     let p = app.ensure_period(&cora, "2026-02-01").await;
@@ -134,7 +134,7 @@ async fn deactivated_and_demoted_controllers_and_forged_tokens_are_out() {
         let (s, _) = app
             .call(m, &uri(&p), Some(&cora), Some(json!({"settings": {}})))
             .await;
-        // Reading is open to every active person; writing is the controller's.
+        // Reading is open to every active person; writing is the manager's.
         let want = if m == "GET" {
             StatusCode::OK
         } else {

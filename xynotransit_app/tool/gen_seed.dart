@@ -27,7 +27,7 @@ void main() {
       '-- Emails are placeholders: replace them with the real ones before people sign in.',
     )
     ..writeln(
-      '-- Set BOOTSTRAP_CONTROLLER_EMAIL on the API to make one person the controller.',
+      '-- Set BOOTSTRAP_CONTROLLER_EMAIL on the API to make one person the manager.',
     )
     ..writeln()
     ..writeln('begin;')

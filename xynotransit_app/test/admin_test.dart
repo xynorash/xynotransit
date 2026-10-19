@@ -231,8 +231,8 @@ void main() {
     s.container.read(routerProvider).go('/report');
     await tester.pumpAndSettle();
     // With a single seat the form picks it by itself.
-    if (find.text('Choose your name').evaluate().isNotEmpty) {
-      await tester.tap(find.text('Choose your name'));
+    if (find.text('Choose a seat').evaluate().isNotEmpty) {
+      await tester.tap(find.text('Choose a seat'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Bob · Clerk').last);
       await tester.pumpAndSettle();
@@ -267,8 +267,8 @@ void main() {
     s.container.read(routerProvider).go('/report');
     await tester.pumpAndSettle();
     // With a single seat the form picks it by itself.
-    if (find.text('Choose your name').evaluate().isNotEmpty) {
-      await tester.tap(find.text('Choose your name'));
+    if (find.text('Choose a seat').evaluate().isNotEmpty) {
+      await tester.tap(find.text('Choose a seat'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cleo · Dock').last);
       await tester.pumpAndSettle();
@@ -427,6 +427,44 @@ void main() {
           .active,
       isFalse,
     );
+  });
+
+  testWidgets('the seat count of a team card is the list under it', (
+    tester,
+  ) async {
+    final s = await pumpPeople(tester);
+    await addTeam(tester, 'Operations');
+    await addPersonWithSeat(
+      tester,
+      name: 'Bob',
+      email: 'bob@example.com',
+      team: 'Operations',
+      title: 'Clerk',
+      counts: ['Sea'],
+      targets: [],
+    );
+    expect(find.text('Operations  (1 seat)'), findsOneWidget);
+    final bob = (await s.repo.loadCatalog(includeInactive: true)).persons
+        .firstWhere((p) => p.fullName == 'Bob');
+    await s.repo.savePerson(
+      id: bob.id,
+      fullName: 'Bob',
+      email: '',
+      role: AppRole.contributor,
+      active: false,
+    );
+    await tester.pumpAndSettle();
+    // The owner is off: the section lists no seat, so the card says none too.
+    expect(find.text('Operations  (0 seats)'), findsOneWidget);
+    expect(find.text('Operations  (1 seat)'), findsNothing);
+    expect(find.text('0 seats'), findsOneWidget);
+    expect(find.text('Clerk · 1 count, 0 targets'), findsNothing);
+    // Both agree again when the inactive are shown.
+    await tester.tap(find.byKey(const Key('show-inactive')));
+    await tester.pumpAndSettle();
+    expect(find.text('Operations  (1 seat)'), findsOneWidget);
+    expect(find.text('1 seat'), findsOneWidget);
+    expect(find.text('Clerk · 1 count, 0 targets'), findsOneWidget);
   });
 
   group('no overflow', () {

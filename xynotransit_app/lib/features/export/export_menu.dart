@@ -8,13 +8,14 @@ import '../../core/theme/tokens.dart';
 import '../../core/widgets.dart';
 import '../../domain/deck.dart';
 import '../../domain/period.dart';
+import '../slides/alt_text.dart';
 import 'deck_export.dart';
 import 'deck_render.dart';
 import 'pptx.dart';
 
 enum _Format { pdf, pptx, png }
 
-/// Controller-only menu: PDF, PPTX or one PNG per slide (zipped).
+/// Manager-only menu: PDF, PPTX or one PNG per slide (zipped).
 class ExportMenu extends StatefulWidget {
   const ExportMenu({super.key, required this.run, required this.period});
 
@@ -66,7 +67,11 @@ class _ExportMenuState extends State<ExportMenu> {
       final base = deckFileBase(widget.period, title: meetingTitleOf(slides));
       switch (format) {
         case _Format.pdf:
-          final bytes = await buildPdf(pngs, title: deckTitleOf(slides));
+          final bytes = await buildPdf(
+            pngs,
+            title: deckTitleOf(slides),
+            notes: [for (final s in slides) slideNotes(s)],
+          );
           await _save(base, 'pdf', MimeType.pdf, bytes);
         case _Format.pptx:
           final bytes = buildPptx(

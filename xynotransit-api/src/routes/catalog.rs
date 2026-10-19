@@ -164,7 +164,7 @@ async fn catalog(
     State(st): State<AppState>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, ApiError> {
-    // Only a controller may see inactive people and seats.
+    // Only a manager may see inactive people and seats.
     let all = user.is_controller() && q.get("include_inactive").is_some_and(|v| v == "true");
     let mut conn = st.pool.acquire().await?;
 
@@ -182,7 +182,31 @@ async fn catalog(
     .fetch_all(&mut *conn)
     .await?;
 
-    let assignments = assignments_json(&mut conn, None, all).await?;
+    let mut assignments = assignments_json(&mut conn, None, all).await?;
+
+    // A contributor sees only themselves: their own person, their own seats and the teams of
+    // those seats. Nobody else's name, role or team leaves the server (managers see everything).
+    let manager = user.is_controller();
+    let me = user.person_id.to_string();
+    let (teams, persons) = if manager {
+        (teams, persons)
+    } else {
+        assignments.retain(|a| a["person_id"].as_str() == Some(me.as_str()));
+        let my_teams: Vec<String> = assignments
+            .iter()
+            .filter_map(|a| a["team_id"].as_str().map(str::to_string))
+            .collect();
+        (
+            teams
+                .into_iter()
+                .filter(|t| my_teams.contains(&t.id.to_string()))
+                .collect(),
+            persons
+                .into_iter()
+                .filter(|p| p.id == user.person_id)
+                .collect(),
+        )
+    };
 
     Ok(Json(json!({
         "teams": teams.iter().map(|t| team_json(t.id, &t.code, &t.name, t.sort)).collect::<Vec<_>>(),

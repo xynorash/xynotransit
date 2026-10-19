@@ -125,6 +125,31 @@ class FormController extends Notifier<FormModel> {
   String _draftAtKey(Period p, String assignmentId) =>
       'draftat/${Period.dateOnly(p.startMonth)}/$assignmentId';
 
+  /// Set when the person chose "Choose a seat" themselves: the remembered seat
+  /// is then not put back under them until they pick one again.
+  bool _clearedByPerson = false;
+
+  /// The key under which the last chosen seat of [personId] is kept on this device.
+  static String lastSeatKey(String? personId) => 'last_seat/${personId ?? '-'}';
+
+  /// The seat this person chose last on this device, if it is still one of
+  /// [allowed] and they did not just clear the choice.
+  String? rememberedSeat(String? personId, Iterable<String> allowed) {
+    if (_clearedByPerson) return null;
+    final id = ref.read(prefsProvider).getString(lastSeatKey(personId));
+    return id != null && allowed.contains(id) ? id : null;
+  }
+
+  /// The person picked a seat in the chooser (or "Choose a seat" for none).
+  /// A seat is remembered on this device, so after a reload they do not pick again.
+  Future<void> chooseSeat(String? id, {String? personId}) async {
+    _clearedByPerson = id == null;
+    if (id != null) {
+      unawaited(ref.read(prefsProvider).setString(lastSeatKey(personId), id));
+    }
+    await selectAssignment(id);
+  }
+
   /// Pick a person, or null to clear the choice.
   Future<void> selectAssignment(String? id) async {
     if (id == null) {

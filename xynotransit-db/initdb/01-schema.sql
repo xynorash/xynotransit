@@ -17,7 +17,7 @@ create type kpi_status    as enum ('met', 'partly', 'missed');
 create type note_kind     as enum ('well', 'wrong', 'next');          -- highlights, lowlights, next 3 months
 create type report_status as enum ('draft', 'submitted');
 create type period_status as enum ('open', 'closed');
-create type app_role      as enum ('contributor', 'controller');       -- controller generates the slides
+create type app_role      as enum ('contributor', 'controller');       -- 'controller' is the manager role; it generates the slides
 
 -- ---------- reference data ----------
 create table team (
@@ -144,7 +144,7 @@ create table report_note (
 );
 
 -- ---------- generated slides ----------
--- The controller generates the deck by hand. The snapshot freezes what each slide was built from.
+-- The manager generates the deck by hand. The snapshot freezes what each slide was built from.
 create table deck_run (
   id             uuid primary key default gen_random_uuid(),
   period_id      uuid not null references period(id),

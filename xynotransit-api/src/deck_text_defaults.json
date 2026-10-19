@@ -34,10 +34,11 @@
     },
     {
       "key": "coverPill",
-      "default": "{team} · {count}",
+      "default": "{team} · {count} {reports}",
       "tokens": [
         "team",
-        "count"
+        "count",
+        "reports"
       ],
       "max_length": 60,
       "can_be_empty": false

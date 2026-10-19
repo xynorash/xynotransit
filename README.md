@@ -41,6 +41,18 @@ To work on the app with hot reload you also need Flutter 3.47 and Rust (stable);
 [`xynotransit_app/README.md`](xynotransit_app/README.md) and
 [`xynotransit-api/README.md`](xynotransit-api/README.md).
 
+## What changed in the latest round
+
+- Number fields keep exactly what is typed. Anything that is not a whole number (0 to 1,000,000,000) shows a lasting message, counts as missing and blocks Send.
+- A switched-off person's reports stay in the Reports table, the CSV and new decks, tagged Inactive. They are never counted as missing, and "N of M" can no longer have N above M. The deck header says "plus K from a switched-off person".
+- Where one person has two seats, lists show "Name · Seat title". The employee seat picker is "Choose a seat" and remembers the last seat on the device.
+- The CSV has three new last columns: Reported name, Reported country, Reported role. The Reports table shows them under the name when they differ from the profile.
+- Employees get only their own person, seats and teams from the catalog.
+- The PDF has an invisible text layer (the slide's speaker notes), a language and a title.
+- Slides: one common chart scale unless counts differ by more than 8 times (then each count has its own scale, said on the slide); no zero labels when there are more than 3 bars per month; larger text on short results slides; target cards aligned at the top; cover chips read "Team · 2 reports"; the comment an employee typed shows under a partly or missed target when there is room.
+- The word "controller" is gone from everything users read: it says "manager". The stored role value `controller` is unchanged.
+- "Reset all to defaults" on Deck text asks first. A too-many-requests answer carries a `Retry-After` header and the sign-in screen says when to try again.
+
 ## Tests
 
 ```bash

@@ -280,13 +280,18 @@ mod tests {
             ("coverPill", "{count} {team}".into(), Ok("{count} {team}".to_string())),
             (
                 "coverPill",
+                "{team} · {count} {reports}".into(),
+                Ok("{team} · {count} {reports}".to_string()),
+            ),
+            (
+                "coverPill",
                 "{team} {met}".into(),
-                Err("{met} cannot be used in Team label on the cover. It allows {team}, {count}."),
+                Err("{met} cannot be used in Team label on the cover. It allows {team}, {count}, {reports}."),
             ),
             (
                 "coverPill",
                 "{Team}".into(),
-                Err("{Team} cannot be used in Team label on the cover. It allows {team}, {count}."),
+                Err("{Team} cannot be used in Team label on the cover. It allows {team}, {count}, {reports}."),
             ),
             (
                 "dividerSubtitle",

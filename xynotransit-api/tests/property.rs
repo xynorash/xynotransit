@@ -66,6 +66,22 @@ async fn summary_matches_brute_force_for_random_datasets() {
                 serde_json::to_string_pretty(&got).unwrap(),
                 serde_json::to_string_pretty(&want).unwrap()
             );
+            // The rule itself, not only the brute force copy of it: nobody counts above expected.
+            assert!(
+                got["submitted"].as_i64() <= got["expected"].as_i64(),
+                "seed {seed}"
+            );
+            for row in got["teams"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(got["trend"].as_array().unwrap())
+            {
+                assert!(
+                    row["submitted"].as_i64() <= row["expected"].as_i64(),
+                    "seed {seed}: {row}"
+                );
+            }
             compared += 1;
         }
     }
@@ -93,9 +109,10 @@ async fn decks_match_brute_force_for_random_datasets() {
             )
             .await;
         assert_eq!(s, 201, "seed {seed}: {got}");
-        let (expected, want) = d.deck(p);
+        let (expected, switched_off, want) = d.deck(p);
         assert_eq!(got["expected_count"], expected, "seed {seed}");
         assert_eq!(got["included_count"], want.len(), "seed {seed}");
+        assert_eq!(got["switched_off_count"], switched_off, "seed {seed}");
         let items = got["items"].as_array().unwrap();
         assert_eq!(items.len(), want.len(), "seed {seed}");
         for (i, (item, (rid, snap))) in items.iter().zip(&want).enumerate() {
@@ -128,6 +145,7 @@ async fn generated_data_has_the_variety_the_properties_need() {
     // A guard against a generator that quietly stops producing the hard cases.
     let (mut mixed_case, mut retired_values, mut legacy, mut drafts, mut inactive) =
         (0, 0, 0, 0, 0);
+    let mut switched_off_reports = 0;
     for seed in 0..300u64 {
         let d = Dataset::generate(seed);
         for r in &d.reports {
@@ -136,6 +154,7 @@ async fn generated_data_has_the_variety_the_properties_need() {
             retired_values += r.values.iter().any(|v| d.mdefs[v.0].retired) as i32;
         }
         inactive += d.seats.iter().any(|s| !s.active) as i32;
+        switched_off_reports += d.reports.iter().any(|r| r.submitted && !d.on(r.seat)) as i32;
         mixed_case += d.mdefs.iter().any(|a| {
             d.mdefs.iter().any(|b| {
                 a.seat == b.seat
@@ -150,6 +169,10 @@ async fn generated_data_has_the_variety_the_properties_need() {
         ("legacy reports", legacy),
         ("drafts", drafts),
         ("inactive seats", inactive),
+        (
+            "reports of switched-off seats or people",
+            switched_off_reports,
+        ),
     ] {
         assert!(n > 20, "only {n} cases with {what}");
     }

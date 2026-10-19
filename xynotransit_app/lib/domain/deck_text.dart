@@ -85,9 +85,11 @@ const deckTextFields = <DeckTextField>[
     key: 'coverPill',
     group: DeckTextGroup.cover,
     label: 'Team label on the cover',
-    help: 'One label per team at the bottom of the cover.',
-    defaultValue: '{team} · {count}',
-    tokens: ['team', 'count'],
+    help:
+        'One label per team at the bottom of the cover. {count} is the number '
+        'of reports and {reports} is the word "report" or "reports".',
+    defaultValue: '{team} · {count} {reports}',
+    tokens: ['team', 'count', 'reports'],
     maxLength: 60,
   ),
   DeckTextField(

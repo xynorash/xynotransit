@@ -8,8 +8,11 @@ import '../repository.dart';
 
 /// The server refused with a status code. [message] is the server's own words.
 class ApiException extends RepositoryException {
-  const ApiException(this.statusCode, super.message);
+  const ApiException(this.statusCode, super.message, {this.retryAfterSeconds});
   final int statusCode;
+
+  /// From the `Retry-After` header of a 429, in seconds, when the server sent one.
+  final int? retryAfterSeconds;
 }
 
 /// 401: not signed in, or the sign-in is no longer valid.
@@ -82,8 +85,24 @@ bool isUnreachableStatus(int status) =>
 Duration defaultRetryDelay(int attempt) =>
     Duration(milliseconds: 300 << (attempt > 4 ? 4 : attempt));
 
-/// Turns an error response into the exception the UI shows.
-ApiException errorFromResponse(int status, String body) {
+/// "30 seconds", "5 minutes", "2 hours": how long to wait, rounded up.
+String waitWords(int seconds) {
+  String unit(int n, String one) => '$n ${n == 1 ? one : '${one}s'}';
+  if (seconds < 60) return unit(seconds < 1 ? 1 : seconds, 'second');
+  if (seconds < 3600) return unit((seconds + 59) ~/ 60, 'minute');
+  return unit((seconds + 3599) ~/ 3600, 'hour');
+}
+
+/// Seconds from a `Retry-After` header value, or null. Only the form with a
+/// whole number of seconds is read; a date or anything else is ignored.
+int? parseRetryAfter(String? header) {
+  final v = int.tryParse((header ?? '').trim());
+  return v == null || v < 0 || v > 31536000 ? null : v;
+}
+
+/// Turns an error response into the exception the UI shows. A 429 with a
+/// `Retry-After` says when to try again: "Try again in 5 minutes."
+ApiException errorFromResponse(int status, String body, {String? retryAfter}) {
   String? message;
   try {
     final j = jsonDecode(body);
@@ -95,9 +114,15 @@ ApiException errorFromResponse(int status, String body) {
     // Not JSON (an HTML error page from a proxy, say): use the fallback text.
   }
   message ??= fallbackMessage(status);
-  return status == 401
-      ? UnauthorizedException(message)
-      : ApiException(status, message);
+  if (status == 401) return UnauthorizedException(message);
+  final wait = status == 429 ? parseRetryAfter(retryAfter) : null;
+  if (wait != null) {
+    final base = message.replaceFirst(RegExp(r'\s*Try again later\.?$'), '');
+    message =
+        '${base.isEmpty ? 'Too many requests.' : base} '
+        'Try again in ${waitWords(wait)}.';
+  }
+  return ApiException(status, message, retryAfterSeconds: wait);
 }
 
 /// Thin JSON client: bearer token, error mapping, transport failures.
@@ -210,6 +235,7 @@ class ApiClient {
       final err = errorFromResponse(
         res.statusCode,
         utf8.decode(bytes, allowMalformed: true),
+        retryAfter: res.headers['retry-after'],
       );
       if (err is UnauthorizedException &&
           token != null &&

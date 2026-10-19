@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(email) = &config.bootstrap_controller_email {
         let n =
             bootstrap_controller(&pool, email, config.bootstrap_controller_name.as_deref()).await?;
-        tracing::info!(changed = n, "bootstrap controller checked");
+        tracing::info!(changed = n, "bootstrap manager checked");
     }
 
     let mailer = Mailer::smtp(

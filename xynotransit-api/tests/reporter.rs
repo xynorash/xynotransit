@@ -142,7 +142,7 @@ async fn deck_with_some_reports_counts_expected_and_included() {
 }
 
 #[tokio::test]
-async fn deck_text_is_readable_by_an_employee_but_only_the_controller_writes() {
+async fn deck_text_is_readable_by_an_employee_but_only_the_manager_writes() {
     let app = TestApp::new().await;
     let ana = app.login("ana@example.org").await;
     let p = app.ensure_period(&ana, "2026-02-01").await;

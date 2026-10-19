@@ -3,7 +3,7 @@
 -- Example data, not loaded automatically: a fresh database starts with an empty catalog.
 -- Load it by hand with psql after the schema, if you want to try the app with people in it.
 -- Emails are placeholders: replace them with the real ones before people sign in.
--- Set BOOTSTRAP_CONTROLLER_EMAIL on the API to make one person the controller.
+-- Set BOOTSTRAP_CONTROLLER_EMAIL on the API to make one person the manager.
 
 begin;
 

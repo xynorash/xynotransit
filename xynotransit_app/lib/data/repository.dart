@@ -74,7 +74,7 @@ abstract class Repository {
   /// Latest generated deck of the period, live.
   Stream<DeckRun?> watchDeck(String periodId);
 
-  /// Controller only. Freezes the submitted reports into a new deck run.
+  /// Manager only. Freezes the submitted reports into a new deck run.
   /// Works with any number of reports, including none.
   Future<DeckRun> generateDeck(Period period, Catalog catalog);
 

@@ -1,4 +1,4 @@
-//! The manager's summary dashboard numbers. Controller only.
+//! The manager's summary dashboard numbers. Manager only.
 
 use std::collections::HashMap;
 

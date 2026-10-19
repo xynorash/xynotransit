@@ -151,3 +151,19 @@ Future<void> internalSignIn(Arena a) async {
     isNotEmpty,
   );
 }
+
+/// Too many sign-in requests: the app is told when to try again.
+Future<void> signInLimit(Arena a) async {
+  final limit = await a.provokeSignInLimit('ct${a.tag}-limit@contract.example');
+  if (limit == null) return; // this backend has no limit (the demo)
+  expect(limit.retryAfter, isNotNull, reason: 'a 429 carries Retry-After');
+  expect(limit.retryAfter, inInclusiveRange(1, 3600));
+  expect(
+    limit.message,
+    matches(
+      RegExp(r'^Too many .*\. Try again in \d+ (second|minute|hour)s?\.$'),
+    ),
+    reason: limit.message,
+  );
+  expect(limit.message, isNot(contains('later')));
+}

@@ -20,6 +20,11 @@ const csvHeader = [
   'Status',
   'Text',
   'Sent at',
+  // The words the person typed on the form, the ones the slides use. They come
+  // after the first twelve columns, so a file reader built for those still works.
+  'Reported name',
+  'Reported country',
+  'Reported role',
 ];
 
 /// A text cell that a spreadsheet could read as a formula gets a leading
@@ -54,6 +59,11 @@ String _stamp(DateTime? d) {
 
 /// The period's submitted reports as CSV text (CRLF lines, no BOM).
 ///
+/// A switched-off seat is listed when it has a sent report (those reports are
+/// real) and never as Missing. The last three columns hold the name, country
+/// and role as the person typed them (empty on reports sent before those
+/// fields existed).
+///
 /// Types: Count (one row per count and month), Target (status and comment),
 /// Note (one row per note) and Missing (a seat with no sent report).
 String buildReportsCsv({
@@ -68,6 +78,9 @@ String buildReportsCsv({
   final rows = <List<Object?>>[csvHeader];
   final months = period.months;
   for (final a in catalog.assignments) {
+    final typed = byAssignment[a.id]?.reporter;
+    // Nobody is waiting for a switched-off seat.
+    if (byAssignment[a.id] == null && !catalog.isExpected(a)) continue;
     final person = catalog.personOf(a).fullName;
     final team = catalog.teamOf(a).name;
     List<Object?> row({
@@ -91,6 +104,9 @@ String buildReportsCsv({
       status,
       text,
       _stamp(sent),
+      typed?.name.trim() ?? '',
+      typed?.country.trim() ?? '',
+      typed?.role.trim() ?? '',
     ];
     final r = byAssignment[a.id];
     if (r == null) {

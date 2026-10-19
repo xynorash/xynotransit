@@ -316,6 +316,36 @@ class ApiArena implements Arena {
     return out != null && out.startsWith('1');
   }
 
+  @override
+  Future<({String message, int? retryAfter})?> provokeSignInLimit(
+    String email,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final api = ApiClient(
+      baseUrl: '$contractApi/api',
+      tokens: TokenStore(await SharedPreferences.getInstance()),
+    );
+    final auth = ApiAuthService(api);
+    try {
+      for (var i = 0; i < 12; i++) {
+        try {
+          await auth.signInWithEmail(email);
+        } on ApiException catch (e) {
+          if (e.statusCode != 429) rethrow;
+          return (message: e.message, retryAfter: e.retryAfterSeconds);
+        }
+      }
+      return null;
+    } finally {
+      api.close();
+      if (run.sqlAvailable) {
+        await psql(
+          "delete from login_attempt where email = '${email.replaceAll("'", '')}'",
+        );
+      }
+    }
+  }
+
   // Other managers share this stack; the guard is proven by the API's own
   // Rust tests, which run on a database of their own.
   @override

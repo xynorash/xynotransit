@@ -33,6 +33,10 @@ class VolumesChart extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(p.title, maxLines: 1, style: _titleStyle),
+        if (p.ownScale) ...[
+          const SizedBox(height: _noteGap),
+          Text(ownScaleNote, maxLines: 1, style: _scaleNoteStyle),
+        ],
         const SizedBox(height: _titleGap),
         _Legend(s: s, plan: p),
         const SizedBox(height: _legendGap),
@@ -48,8 +52,42 @@ const _titleGap = 20.0;
 const _legendGap = 16.0;
 const _groupGap = 24.0;
 const _monthTop = 12.0;
+const _noteGap = 4.0;
+
+/// Printed under the title when the counts differ so much in size that each
+/// one is drawn on its own scale.
+const ownScaleNote = 'Each count has its own scale';
+
+/// The largest series maximum may be this many times the smallest non-zero
+/// one before the counts stop sharing one scale.
+const commonScaleRatio = 8;
+
+/// The tallest month of every count.
+List<int> seriesMaxima(ReportSnapshot s) => [
+  for (final m in s.metrics) m.values.fold<int>(0, math.max),
+];
+
+/// True when one count is so much bigger than another that a common scale
+/// would flatten the small one: every count then gets its own scale. One
+/// count alone, or counts of the same order of size, share one scale.
+bool volumesOwnScale(ReportSnapshot s) {
+  final maxima = seriesMaxima(s);
+  final nonZero = maxima.where((v) => v > 0).toList();
+  if (nonZero.length < 2) return false;
+  return nonZero.reduce(math.max) > commonScaleRatio * nonZero.reduce(math.min);
+}
+
+/// Zero values show their label only while a month has this many bars or
+/// fewer; with more, twelve zeros would clutter the chart (the totals and the
+/// legend carry the facts) and a thin tick on the baseline stays.
+const zeroLabelMaxBars = 3;
+
+/// Is the number above a bar drawn?
+bool showBarLabel(int value, int barsPerMonth) =>
+    value > 0 || barsPerMonth <= zeroLabelMaxBars;
 
 final _titleStyle = st(32, weight: FontWeight.w700, color: SlidePalette.paper);
+final _scaleNoteStyle = st(20, color: SlidePalette.panelText, height: 1.2);
 
 TextStyle _numberStyle(double size, Color color) =>
     st(size, weight: FontWeight.w700, color: color, height: 1.05);
@@ -92,9 +130,13 @@ class VolumesPlan {
     required this.rotated,
     required this.slot,
     required this.monthHeight,
+    required this.ownScale,
   });
 
   final String title;
+
+  /// True: each count is drawn on its own scale and the panel says so.
+  final bool ownScale;
 
   /// Columns of the totals grid, type sizes and the most lines of a label
   /// (null: as many as it needs).
@@ -169,7 +211,13 @@ VolumesPlan planVolumes(ReportSnapshot s, Size size) {
   final w = size.width;
   final h = size.height;
   final title = 'Volumes per month, ${s.firstMonthName} to ${s.lastMonthName}';
-  final titleH = _box(title, _titleStyle, w).height;
+  final ownScale = volumesOwnScale(s);
+  final titleH =
+      _box(title, _titleStyle, w).height +
+      (ownScale
+          ? _noteGap +
+                _box(ownScaleNote, _scaleNoteStyle, w, maxLines: 1).height
+          : 0);
 
   // Bars and their numbers depend on the width only.
   final gap = n <= 2 ? 14.0 : (n <= 3 ? 12.0 : (n <= 5 ? 8.0 : 6.0));
@@ -247,6 +295,7 @@ VolumesPlan planVolumes(ReportSnapshot s, Size size) {
       rotated: rotated,
       slot: slot,
       monthHeight: monthH,
+      ownScale: ownScale,
     );
   }
 
@@ -352,18 +401,20 @@ class _Chart extends StatelessWidget {
           0.0,
           box.maxHeight - plan.monthHeight - plan.slot - 6,
         );
-        final peak = math.max(
-          1,
-          s.metrics.expand((m) => m.values).fold<int>(0, math.max),
-        );
-        final scale = room / peak;
+        // One scale for all counts, or one per count when they differ a lot.
+        final maxima = seriesMaxima(s);
+        final common = math.max(1, maxima.fold<int>(0, math.max));
+        final scales = [
+          for (final m in maxima)
+            room / (plan.ownScale ? math.max(1, m) : common),
+        ];
         return Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             for (var m = 0; m < 3; m++) ...[
               if (m > 0) SizedBox(width: plan.groupGap),
               Expanded(
-                child: _MonthGroup(s: s, plan: plan, month: m, scale: scale),
+                child: _MonthGroup(s: s, plan: plan, month: m, scales: scales),
               ),
             ],
           ],
@@ -378,13 +429,15 @@ class _MonthGroup extends StatelessWidget {
     required this.s,
     required this.plan,
     required this.month,
-    required this.scale,
+    required this.scales,
   });
 
   final ReportSnapshot s;
   final VolumesPlan plan;
   final int month;
-  final double scale;
+
+  /// Pixels per unit, per count.
+  final List<double> scales;
 
   @override
   Widget build(BuildContext context) {
@@ -402,7 +455,11 @@ class _MonthGroup extends StatelessWidget {
                 plan: plan,
                 value: s.metrics[i].values[month],
                 color: seriesColor(s.metrics[i].series),
-                scale: scale,
+                scale: scales[i],
+                showLabel: showBarLabel(
+                  s.metrics[i].values[month],
+                  s.metrics.length,
+                ),
               ),
             ],
           ],
@@ -429,8 +486,10 @@ class _Bar extends StatelessWidget {
     required this.value,
     required this.color,
     required this.scale,
+    required this.showLabel,
   });
 
+  final bool showLabel;
   final VolumesPlan plan;
   final int value;
   final Color color;
@@ -452,17 +511,19 @@ class _Bar extends StatelessWidget {
         children: [
           SizedBox(
             height: plan.slot,
-            child: OverflowBox(
-              maxWidth: double.infinity,
-              maxHeight: double.infinity,
-              alignment: Alignment.bottomCenter,
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: plan.rotated
-                    ? RotatedBox(quarterTurns: 3, child: label)
-                    : label,
-              ),
-            ),
+            child: !showLabel
+                ? null
+                : OverflowBox(
+                    maxWidth: double.infinity,
+                    maxHeight: double.infinity,
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: plan.rotated
+                          ? RotatedBox(quarterTurns: 3, child: label)
+                          : label,
+                    ),
+                  ),
           ),
           Container(
             width: plan.barWidth,
@@ -470,7 +531,9 @@ class _Bar extends StatelessWidget {
             decoration: BoxDecoration(
               color: color,
               borderRadius: BorderRadius.vertical(
-                top: Radius.circular(math.min(8, plan.barWidth / 3)),
+                top: Radius.circular(
+                  value == 0 ? 1.5 : math.min(8, plan.barWidth / 3),
+                ),
               ),
             ),
           ),

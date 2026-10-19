@@ -92,10 +92,12 @@ TextStyle kpiTextStyle(double size) => TextStyle(
 
 /// Height one card needs for [text], measured with the real font.
 double kpiNeed(String text, KpiFit f) {
-  final tw = f.label ? f.width - 80 : f.width - 56 - kpiChipWidth - 16;
-  final h = measureText(text, kpiTextStyle(f.fontSize), tw).height;
-  // The card has a 1 px border on every side.
+  // The card has a 1 px border on every side: it takes 2 px of the width the
+  // text may use and 2 px of the height.
   const border = 2.0;
+  final tw =
+      (f.label ? f.width - 80 : f.width - 56 - kpiChipWidth - 16) - border;
+  final h = measureText(text, kpiTextStyle(f.fontSize), tw).height;
   return border +
       (f.label
           ? 2 * kpiLabelPad + kpiLabelHeight + 6 + h

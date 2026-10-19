@@ -98,6 +98,27 @@ List<SnapshotTarget> targetsOf(
     ),
 ];
 
+/// A target with the comment the employee typed under it.
+class CommentedTarget extends SnapshotTarget {
+  const CommentedTarget(String text, KpiStatus? status, String comment)
+    : super(text: text, status: status, comment: comment);
+}
+
+/// Targets of [n] seats of every status, each with a [commentLength] comment.
+List<SnapshotTarget> commentedTargets(
+  int n, {
+  int len = 40,
+  int commentLength = 200,
+  bool wideLetters = false,
+}) => [
+  for (var i = 0; i < n; i++)
+    CommentedTarget(
+      '${i + 1} ${words(len - 2)}',
+      KpiStatus.values[i % 3],
+      wideLetters ? wide(commentLength) : words(commentLength),
+    ),
+];
+
 List<String> notesOf(int n, int len, {bool wideLetters = true}) => [
   for (var i = 0; i < n; i++)
     wideLetters ? wide(len) : '${i + 1} ${words(len - 2)}',
@@ -232,6 +253,97 @@ List<MatrixCase> slideMatrix() {
       ),
     );
   }
+  // One huge count beside a tiny one: separate scales, and the note says so.
+  out.add(
+    MatrixCase(
+      'values',
+      '2 counts 1000000000 beside 12',
+      KpiSlideSpec(
+        snap(
+          metrics: metricsOf(
+            2,
+            each: const [
+              [1000000000, 1000000000, 1000000000],
+              [12, 12, 12],
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+  out.add(
+    MatrixCase(
+      'values',
+      '3 counts 1000000000 beside 12 and 0',
+      KpiSlideSpec(
+        snap(
+          metrics: metricsOf(
+            3,
+            each: const [
+              [1000000000, 400000000, 1000000000],
+              [12, 3, 12],
+              [0, 0, 0],
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+  // Counts of the same order of size share one scale and print no note.
+  out.add(
+    MatrixCase(
+      'values',
+      '3 counts within 8 times',
+      KpiSlideSpec(
+        snap(
+          metrics: metricsOf(
+            3,
+            each: const [
+              [800, 900, 1000],
+              [125, 100, 120],
+              [400, 380, 500],
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+  // Twelve zero bars: baseline ticks only, no twelve zeros.
+  out.add(
+    MatrixCase(
+      'values',
+      '4 counts all 0 (12 zero bars)',
+      KpiSlideSpec(
+        snap(
+          metrics: metricsOf(
+            4,
+            each: const [
+              [0, 0, 0],
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+  out.add(
+    MatrixCase(
+      'values',
+      '4 counts some 0',
+      KpiSlideSpec(
+        snap(
+          metrics: metricsOf(
+            4,
+            each: const [
+              [0, 5, 0],
+              [0, 0, 0],
+              [3, 0, 8],
+              [0, 0, 1],
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
   out.add(
     MatrixCase(
       'values',
@@ -291,6 +403,90 @@ List<MatrixCase> slideMatrix() {
       ),
     );
   }
+  // Comments typed under the targets: one muted line when there is room,
+  // never in the dense grid, never overflowing.
+  for (final n in [1, 2, 3, 4, 6, 7, 10]) {
+    out.add(
+      MatrixCase(
+        'targets',
+        '$n targets with 200 character comments',
+        KpiSlideSpec(snap(targets: commentedTargets(n, len: 30))),
+      ),
+    );
+  }
+  out.add(
+    MatrixCase(
+      'targets',
+      '3 targets with short comments',
+      KpiSlideSpec(
+        snap(targets: commentedTargets(3, len: 30, commentLength: 25)),
+      ),
+    ),
+  );
+  out.add(
+    MatrixCase(
+      'targets',
+      '4 targets x80 with wide 200 character comments',
+      KpiSlideSpec(
+        snap(targets: commentedTargets(4, len: 80, wideLetters: true)),
+      ),
+    ),
+  );
+  out.add(
+    MatrixCase(
+      'targets',
+      '5 targets x200 with comments',
+      KpiSlideSpec(snap(targets: commentedTargets(5, len: 200))),
+    ),
+  );
+
+  // Short and long targets side by side: every label at the same height.
+  out.add(
+    MatrixCase(
+      'targets',
+      '4 targets one line mixed with 3 lines',
+      KpiSlideSpec(
+        snap(
+          targets: targetsOf(
+            4,
+            text: (i) => i.isEven ? 'On time' : words(150),
+            status: (i) =>
+                [KpiStatus.met, KpiStatus.partly, KpiStatus.missed, null][i],
+          ),
+        ),
+      ),
+    ),
+  );
+  out.add(
+    MatrixCase(
+      'targets',
+      '4 targets one line mixed with 2 lines (labels)',
+      KpiSlideSpec(
+        snap(
+          targets: targetsOf(
+            4,
+            text: (i) => i.isEven ? 'On time' : words(40),
+            status: (i) =>
+                [KpiStatus.met, KpiStatus.partly, KpiStatus.missed, null][i],
+          ),
+        ),
+      ),
+    ),
+  );
+  out.add(
+    MatrixCase(
+      'targets',
+      '3 targets one line mixed with 3 lines',
+      KpiSlideSpec(
+        snap(
+          targets: targetsOf(
+            3,
+            text: (i) => i == 1 ? words(150) : 'Short target ${i + 1}',
+          ),
+        ),
+      ),
+    ),
+  );
   out.add(
     MatrixCase(
       'targets',
@@ -341,6 +537,22 @@ List<MatrixCase> slideMatrix() {
       );
     }
   }
+  out.add(
+    MatrixCase(
+      'notes',
+      '1 short line per column',
+      ResultsSlideSpec(
+        snap(well: ['Two routes'], wrong: ['One late'], next: ['Hire two']),
+      ),
+    ),
+  );
+  out.add(
+    MatrixCase(
+      'notes',
+      '1 short line in one column only',
+      ResultsSlideSpec(snap(well: ['Two routes'], wrong: [], next: [])),
+    ),
+  );
   out.add(
     MatrixCase(
       'notes',
@@ -470,6 +682,18 @@ List<MatrixCase> slideMatrix() {
         periodLabel: 'Feb to Apr 2026',
         meetingDate: DateTime(2026, 6, 9),
         teamCounts: countries,
+      ),
+    ),
+  );
+  out.add(
+    MatrixCase(
+      'cover',
+      'cover 12 countries with report counts',
+      CoverSpec(
+        periodLabel: 'Feb to Apr 2026',
+        meetingDate: DateTime(2026, 6, 9),
+        teamCounts: [for (final (name, n) in countries) (name, n == 2 ? 1 : n)],
+        texts: DeckTexts.defaults,
       ),
     ),
   );

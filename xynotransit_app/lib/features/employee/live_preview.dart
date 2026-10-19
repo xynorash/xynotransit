@@ -75,7 +75,7 @@ class _PreviewHints extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Preview of your two slides. Empty numbers count as 0. It updates as you type.',
+          'Preview of your two slides. In this preview empty numbers show as 0. You must fill every month before you send. It updates as you type.',
           style: style,
         ),
         const SizedBox(height: 4),
@@ -157,7 +157,7 @@ class _CollapsiblePreviewState extends State<CollapsiblePreview> {
           Semantics(
             button: true,
             expanded: _open,
-            label: 'Preview your slides. Empty numbers count as 0',
+            label: 'Preview your slides. In this preview empty numbers show as 0. You must fill every month before you send',
             excludeSemantics: true,
             onTap: () => setState(() => _open = !_open),
             child: InkWell(
@@ -184,7 +184,7 @@ class _CollapsiblePreviewState extends State<CollapsiblePreview> {
                               ),
                             ),
                             Text(
-                              _open ? 'Tap to hide' : 'Tap to see how they look. Empty numbers count as 0.',
+                              _open ? 'Tap to hide' : 'Tap to see how they look. Empty numbers show as 0 here. Fill every month before you send.',
                               style: bodyStyle(
                                 context,
                                 size: 14,

@@ -16,7 +16,8 @@ pub enum ApiError {
     Forbidden(String),
     NotFound(String),
     Conflict(String),
-    TooManyRequests(String),
+    /// Message and the seconds until the caller may try again (sent as `Retry-After`).
+    TooManyRequests(String, u64),
     TooLarge,
     MethodNotAllowed,
     UnsupportedMedia,
@@ -41,13 +42,17 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let mut retry_after = None;
         let (status, msg) = match self {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m),
             ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
-            ApiError::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m),
+            ApiError::TooManyRequests(m, secs) => {
+                retry_after = Some(secs.max(1));
+                (StatusCode::TOO_MANY_REQUESTS, m)
+            }
             ApiError::TooLarge => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "That request is too large.".to_string(),
@@ -69,7 +74,12 @@ impl IntoResponse for ApiError {
                 "Something went wrong on our side. Try again in a moment.".to_string(),
             ),
         };
-        (status, Json(json!({ "error": msg }))).into_response()
+        let mut res = (status, Json(json!({ "error": msg }))).into_response();
+        if let Some(secs) = retry_after {
+            res.headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, secs.into());
+        }
+        res
     }
 }
 

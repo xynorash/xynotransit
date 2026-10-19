@@ -55,6 +55,11 @@ final scenarios = <(String, Scenario, {bool lastManager})>[
     signin.internalSignIn,
     lastManager: false,
   ),
+  (
+    'too many sign-in requests say when to retry',
+    signin.signInLimit,
+    lastManager: false,
+  ),
   ('things at the same time', concurrent.sameTime, lastManager: false),
 ];
 

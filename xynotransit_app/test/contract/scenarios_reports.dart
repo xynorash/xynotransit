@@ -487,7 +487,7 @@ Future<void> roles(Arena a) async {
   final cat = await emp.loadCatalog();
   final seat = cat.assignmentById(s.assignment.id)!;
 
-  // Controller only, every one of them.
+  // Manager only, every one of them.
   Future<void> only(Future<Object?> f, String op) =>
       expectRefused(f, onlyController, why: op);
   await only(emp.setMeetingDate(p.id, DateTime(2080, 2, 2)), 'setMeetingDate');
@@ -638,18 +638,39 @@ Future<void> deactivated(Arena a) async {
     7,
     reason: 'the old report stays',
   );
-  // The deck holds active seats of active people only.
+  // The deck keeps the report of the switched-off person: two reports are in,
+  // one of them from a switched-off person, who is not part of "expected".
   final deck = await boss.generateDeck(p, cat);
-  expect(deck.includedCount, 1);
+  expect(deck.includedCount, 2);
+  expect(deck.switchedOffCount, 1);
   expect(deck.expectedCount, cat.expectedCount);
-  // The summary still counts what was sent, and still lists the person.
+  expect(deck.items.length, 2);
+  // The summary: submitted counts only expected seats (so never more than
+  // expected); the switched-off person is counted apart and still listed,
+  // tagged inactive, never missing.
   final sum = await boss.loadSummary(p.id);
-  expect(sum.submitted, 2);
+  expect(sum.submitted, 1);
+  expect(sum.submittedInactive, 1);
   expect(sum.expected, cat.expectedCount);
-  expect(sum.people.map((x) => x.assignmentId), contains(s.assignment.id));
+  expect(sum.submitted, lessThanOrEqualTo(sum.expected));
+  final row = sum.people.firstWhere((x) => x.assignmentId == s.assignment.id);
+  expect(row.submitted, isTrue);
+  expect(row.active, isFalse);
   expect(
-    sum.people.firstWhere((x) => x.assignmentId == s.assignment.id).submitted,
+    sum.people.firstWhere((x) => x.assignmentId == keep.assignment.id).active,
     isTrue,
+  );
+  final teamRow = sum.teams.firstWhere((t) => t.name == team.name);
+  expect(
+    [teamRow.expected, teamRow.submitted, teamRow.submittedInactive],
+    [1, 1, 1],
+  );
+  expect(sum.trend.last.submitted, 1);
+  expect(sum.trend.last.submittedInactive, 1);
+  // The old report counts in the volume and the counts.
+  expect(
+    sum.metrics.map((m) => m.label),
+    contains(s.assignment.metrics.first.label),
   );
 
   // Back on.

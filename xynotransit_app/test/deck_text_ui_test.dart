@@ -30,6 +30,11 @@ Future<void> tapButton(WidgetTester tester, Finder f) async {
 String textOf(WidgetTester tester, String key) =>
     tester.widget<TextField>(fieldOf(key)).controller!.text;
 
+Finder inDialog(String label) => find.descendant(
+  of: find.byType(AlertDialog),
+  matching: find.widgetWithText(TextButton, label),
+);
+
 Finder inDraft(Finder f) =>
     find.descendant(of: find.byType(DraftPreview), matching: f);
 
@@ -140,6 +145,22 @@ void main() {
     expect(textOf(tester, 'title'), DeckTexts.defaults['title']);
     expect(textOf(tester, 'suggestionsTitle'), 'Ideas');
     await tapButton(tester, find.text('Reset all to defaults'));
+    // It asks first. Cancel changes nothing.
+    expect(
+      find.text(
+        'This resets every wording to the built-in text. You can still '
+        'cancel by not saving.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(inDialog('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(textOf(tester, 'suggestionsTitle'), 'Ideas');
+    await tapButton(tester, find.text('Reset all to defaults'));
+    await tester.tap(inDialog('Reset'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
     expect(textOf(tester, 'suggestionsTitle'), 'Suggestions');
     expect(saveEnabled(tester), isFalse);
   });

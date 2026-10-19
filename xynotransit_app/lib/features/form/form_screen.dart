@@ -64,7 +64,7 @@ class FormHeader extends StatelessWidget {
   }
 }
 
-/// Assignments the signed-in person may report for. Controllers can pick anyone.
+/// Assignments the signed-in person may report for. Managers can pick anyone.
 List<Assignment> allowedAssignments(Catalog catalog, AppUser? user) {
   if (user == null) return const [];
   if (user.isController) return catalog.assignments;
@@ -86,13 +86,24 @@ class _AutoSelect extends ConsumerWidget {
       final allowed = allowedAssignments(catalog, user);
       final current = form.assignmentId;
       final stale = current != null && !allowed.any((a) => a.id == current);
-      final auto = current == null && allowed.length == 1;
-      if (stale || auto) {
+      // Anyone with one seat gets it. With several, the seat chosen last on
+      // this device comes back (unless they just cleared the choice).
+      final pick = current != null
+          ? null
+          : allowed.length == 1
+          ? allowed.first.id
+          : allowed.length > 1
+          ? ref.read(formControllerProvider.notifier).rememberedSeat(
+              user.personId,
+              [for (final a in allowed) a.id],
+            )
+          : null;
+      if (stale || pick != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           unawaited(
             ref
                 .read(formControllerProvider.notifier)
-                .selectAssignment(auto ? allowed.first.id : null),
+                .selectAssignment(stale ? null : pick),
           );
         });
       }
@@ -271,7 +282,6 @@ class PeriodPersonCard extends ConsumerWidget {
                 catalog: catalog,
                 allowed: allowed,
                 selected: selected,
-                epoch: form.epoch,
                 withNames: isManager,
               ),
             ),
@@ -293,7 +303,7 @@ class PeriodPersonCard extends ConsumerWidget {
             const SizedBox(height: 12),
             SoftBanner(
               child: Text(
-                'Your account is not linked to a person yet. Ask the controller to add your email.',
+                'Your account is not linked to a person yet. Ask the manager to add your email.',
                 style: bodyStyle(context, size: 15, height: 1.4),
               ),
             ),
@@ -320,21 +330,25 @@ class PeriodPersonCard extends ConsumerWidget {
   }
 }
 
-/// Picks the seat to report for. Controllers see everyone, grouped by team;
-/// an employee with several seats sees the role titles of their seats.
+/// Picks the seat to report for. Managers see everyone, grouped by team; an
+/// employee with several seats sees their own. Every entry reads
+/// "Name · Seat title". The choice is remembered on this device.
+///
+/// The drop-down holds no state of its own (the value comes from the form),
+/// so choosing a seat never leaves a copy of the popup behind.
 class _SeatChooser extends ConsumerWidget {
   const _SeatChooser({
     required this.catalog,
     required this.allowed,
     required this.selected,
-    required this.epoch,
     required this.withNames,
   });
 
   final Catalog catalog;
   final List<Assignment> allowed;
   final String? selected;
-  final int epoch;
+
+  /// Group the seats by team (managers choose among everyone).
   final bool withNames;
 
   @override
@@ -343,9 +357,13 @@ class _SeatChooser extends ConsumerWidget {
     final items = <DropdownMenuItem<String?>>[
       const DropdownMenuItem<String?>(
         value: null,
-        child: Text('Choose your name'),
+        child: Text('Choose a seat'),
       ),
     ];
+    DropdownMenuItem<String?> seat(Assignment a) => DropdownMenuItem<String?>(
+      value: a.id,
+      child: Text(catalog.labelOf(a), overflow: TextOverflow.ellipsis),
+    );
     if (withNames) {
       for (final team in catalog.teams) {
         final inTeam = allowed.where((a) => a.teamId == team.id).toList();
@@ -364,30 +382,26 @@ class _SeatChooser extends ConsumerWidget {
             ),
           ),
         );
-        for (final a in inTeam) {
-          items.add(
-            DropdownMenuItem<String?>(
-              value: a.id,
-              child: Text(catalog.labelOf(a)),
-            ),
-          );
-        }
+        items.addAll(inTeam.map(seat));
       }
     } else {
-      for (final a in allowed) {
-        items.add(
-          DropdownMenuItem<String?>(value: a.id, child: Text(a.roleTitle)),
-        );
-      }
+      items.addAll(allowed.map(seat));
     }
-    return DropdownButtonFormField<String?>(
-      initialValue: selected,
-      key: ValueKey('person-${selected ?? 'none'}-${allowed.length}-$epoch'),
-      isExpanded: true,
+    final personId = ref.watch(userProvider).value?.personId;
+    return InputDecorator(
       decoration: xInput(context),
-      items: items,
-      onChanged: (id) => unawaited(
-        ref.read(formControllerProvider.notifier).selectAssignment(id),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String?>(
+          value: selected,
+          isExpanded: true,
+          isDense: true,
+          items: items,
+          onChanged: (id) => unawaited(
+            ref
+                .read(formControllerProvider.notifier)
+                .chooseSeat(id, personId: personId),
+          ),
+        ),
       ),
     );
   }
@@ -583,38 +597,10 @@ class NumbersCard extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      ExcludeSemantics(
-                        child: Container(
-                          width: 12,
-                          height: 12,
-                          decoration: BoxDecoration(
-                            color: seriesColor(assignment.metrics[i].series),
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          assignment.metrics[i].label,
-                          style: bodyStyle(
-                            context,
-                            weight: FontWeight.w700,
-                            height: 1.3,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Semantics(
-                        liveRegion: true,
-                        child: Text(
-                          'Total ${thousands(total(assignment.metrics[i].id))}',
-                          style: monoStyle(context),
-                        ),
-                      ),
-                    ],
+                  _CountHeader(
+                    label: assignment.metrics[i].label,
+                    color: seriesColor(assignment.metrics[i].series),
+                    total: total(assignment.metrics[i].id),
                   ),
                   const SizedBox(height: 10),
                   _MonthFields(
@@ -632,6 +618,61 @@ class NumbersCard extends ConsumerWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// Colour dot, name of the count and its running total. At large text the
+/// total moves under the name, so the longest total never overflows.
+class _CountHeader extends StatelessWidget {
+  const _CountHeader({
+    required this.label,
+    required this.color,
+    required this.total,
+  });
+
+  final String label;
+  final Color color;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    final big = MediaQuery.textScalerOf(context).scale(22) / 22 > 1.3;
+    final totalText = Semantics(
+      liveRegion: true,
+      child: Text('Total ${thousands(total)}', style: monoStyle(context)),
+    );
+    final name = Text(
+      label,
+      style: bodyStyle(context, weight: FontWeight.w700, height: 1.3),
+    );
+    return Row(
+      crossAxisAlignment: big
+          ? CrossAxisAlignment.start
+          : CrossAxisAlignment.center,
+      children: [
+        ExcludeSemantics(
+          child: Container(
+            width: 12,
+            height: 12,
+            margin: EdgeInsets.only(top: big ? 8 : 0),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: big
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [name, totalText],
+                )
+              : name,
+        ),
+        if (!big) ...[const SizedBox(width: 8), totalText],
+      ],
     );
   }
 }
@@ -672,32 +713,46 @@ class _MonthFields extends ConsumerWidget {
     );
     return LayoutBuilder(
       builder: (context, box) {
-        final stacked = box.maxWidth < _needed * 3 + 20;
+        // The box must show 13 characters ("1,000,000,000"), which take more
+        // room at large text, so the boxes stack earlier then.
+        final scale = MediaQuery.textScalerOf(context).scale(22) / 22;
+        final stacked = box.maxWidth < _needed * scale * 3 + 20;
+        final labelAbove = scale > 1.3;
         if (stacked) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               for (var m = 0; m < 3; m++) ...[
                 if (m > 0) const SizedBox(height: 10),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      width: 56,
-                      height: 46,
-                      child: Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: ExcludeSemantics(
-                          child: Text(
-                            months[m].short,
-                            style: monoStyle(context, size: 13),
+                if (labelAbove) ...[
+                  ExcludeSemantics(
+                    child: Text(
+                      months[m].short,
+                      style: monoStyle(context, size: 13),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  field(m),
+                ] else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 56,
+                        height: 46,
+                        child: Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: ExcludeSemantics(
+                            child: Text(
+                              months[m].short,
+                              style: monoStyle(context, size: 13),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    Expanded(child: field(m)),
-                  ],
-                ),
+                      Expanded(child: field(m)),
+                    ],
+                  ),
               ],
             ],
           );
@@ -781,12 +836,16 @@ class KpiCard extends ConsumerWidget {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        for (final (j, s) in KpiStatus.values.indexed) ...[
-                          if (j > 0) const SizedBox(width: 6),
-                          Expanded(
-                            child: _Segment(
+                    Builder(
+                      builder: (context) {
+                        // At large text the three words no longer fit side by
+                        // side on a phone ("Misse d"), so they stack.
+                        final stacked =
+                            MediaQuery.textScalerOf(context).scale(16) / 16 >
+                            1.3;
+                        final segments = <Widget>[
+                          for (final (j, s) in KpiStatus.values.indexed)
+                            _Segment(
                               focusNode: j == 0
                                   ? ref
                                         .read(fieldFocusProvider)
@@ -801,9 +860,26 @@ class KpiCard extends ConsumerWidget {
                                   .read(formControllerProvider.notifier)
                                   .setKpi(assignment.kpis[i].id, s),
                             ),
-                          ),
-                        ],
-                      ],
+                        ];
+                        return stacked
+                            ? Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  for (final (j, w) in segments.indexed) ...[
+                                    if (j > 0) const SizedBox(height: 6),
+                                    w,
+                                  ],
+                                ],
+                              )
+                            : Row(
+                                children: [
+                                  for (final (j, w) in segments.indexed) ...[
+                                    if (j > 0) const SizedBox(width: 6),
+                                    Expanded(child: w),
+                                  ],
+                                ],
+                              );
+                      },
                     ),
                     if (attempted && kpis[assignment.kpis[i].id] == null)
                       Padding(

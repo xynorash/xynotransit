@@ -163,4 +163,98 @@ void main() {
     expect(t.token, isNull);
     expect(t.cachedUser, isNull);
   });
+
+  group('429 with Retry-After says when to try again (D12)', () {
+    http.Response limited(String? retryAfter, [String? error]) => http.Response(
+      jsonEncode({
+        'error': error ?? 'Too many links requested. Try again later.',
+      }),
+      429,
+      headers: {'content-type': 'application/json', 'retry-after': ?retryAfter},
+    );
+
+    for (final c in [
+      ('1', 'Too many links requested. Try again in 1 second.'),
+      ('45', 'Too many links requested. Try again in 45 seconds.'),
+      ('60', 'Too many links requested. Try again in 1 minute.'),
+      ('61', 'Too many links requested. Try again in 2 minutes.'),
+      ('1800', 'Too many links requested. Try again in 30 minutes.'),
+      ('3600', 'Too many links requested. Try again in 1 hour.'),
+      ('7201', 'Too many links requested. Try again in 3 hours.'),
+    ]) {
+      test('Retry-After ${c.$1}', () async {
+        final api = await clientFor((r) async => limited(c.$1));
+        await expectLater(
+          api.post('/auth/magic-link', auth: false),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'status', 429)
+                .having((e) => e.retryAfterSeconds, 'seconds', int.parse(c.$1))
+                .having((e) => e.message, 'message', c.$2),
+          ),
+        );
+      });
+    }
+
+    test('a message without "Try again later" gets the wait added', () async {
+      final api = await clientFor(
+        (r) async => limited('120', 'Too many sign-in links created.'),
+      );
+      await expectLater(
+        api.get('/x'),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.message,
+            'message',
+            'Too many sign-in links created. Try again in 2 minutes.',
+          ),
+        ),
+      );
+    });
+
+    for (final bad in [
+      null,
+      '',
+      'soon',
+      '-5',
+      'Wed, 21 Oct 2026 07:28:00 GMT',
+    ]) {
+      test(
+        'no usable header (${bad ?? 'none'}) keeps the server words',
+        () async {
+          final api = await clientFor((r) async => limited(bad));
+          await expectLater(
+            api.get('/x'),
+            throwsA(
+              isA<ApiException>()
+                  .having((e) => e.retryAfterSeconds, 'seconds', isNull)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    'Too many links requested. Try again later.',
+                  ),
+            ),
+          );
+        },
+      );
+    }
+
+    test('only a 429 reads the header', () async {
+      final api = await clientFor(
+        (r) async => http.Response(
+          jsonEncode({'error': 'Clash.'}),
+          409,
+          headers: {'content-type': 'application/json', 'retry-after': '30'},
+        ),
+      );
+      await expectLater(
+        api.get('/x'),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.retryAfterSeconds, 'seconds', isNull)
+              .having((e) => e.message, 'message', 'Clash.'),
+        ),
+      );
+    });
+  });
 }

@@ -22,6 +22,7 @@ class DeckRun {
     required this.generatedAt,
     required this.expectedCount,
     required this.includedCount,
+    this.switchedOffCount = 0,
     required List<DeckItem> items,
     this.texts = DeckTexts.empty,
   }) : items = List.unmodifiable(
@@ -32,7 +33,14 @@ class DeckRun {
   final String periodId;
   final DateTime generatedAt;
   final int expectedCount;
+
+  /// Every report in the deck, also those of switched off seats or people.
   final int includedCount;
+
+  /// How many of the included reports belong to a switched off seat or person
+  /// (never part of [expectedCount]). The header says "N of M reports in, plus
+  /// K from a switched-off person" with N = included minus this.
+  final int switchedOffCount;
   final List<DeckItem> items;
 
   /// The words of the deck, frozen when it was generated.

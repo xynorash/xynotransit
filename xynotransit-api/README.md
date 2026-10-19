@@ -6,7 +6,7 @@ See `../xynotransit_app/README.md` for the whole system and `../xynotransit-db/R
 
 ## Run
 
-Needs a Postgres with the schema: every file of `xynotransit-db/initdb/` in name order (`01` to `10`; a database that lives on is brought up to date with `xynotransit-db/scripts/migrate.sh`). The catalog starts empty: the first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app.
+Needs a Postgres with the schema: every file of `xynotransit-db/initdb/` in name order (`01` to `11`; a database that lives on is brought up to date with `xynotransit-db/scripts/migrate.sh`). The catalog starts empty: the first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app.
 
 ```bash
 cd ../xynotransit-db && docker compose up -d db      # database on 127.0.0.1:5432
@@ -32,7 +32,7 @@ Or use the full stack with `docker compose up -d --build` in `xynotransit-db`. T
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | none | Sign in to the mail server. Set both or neither. |
 | `MAIL_FROM` | `Xynotransit <no-reply@xynotransit.local>` | Sender. |
 | `BIND` | `0.0.0.0:8081` | Listen address. |
-| `BOOTSTRAP_CONTROLLER_EMAIL` | none | At start, that person becomes an active controller. Created when missing, promoted and activated when present. |
+| `BOOTSTRAP_CONTROLLER_EMAIL` | none | At start, that person becomes an active manager (the stored role value is still `controller`). Created when missing, promoted and activated when present. |
 | `BOOTSTRAP_CONTROLLER_NAME` | capitalised part of the email before the `@` | Name used only when the person is created. |
 | `INTERNAL_EMAIL_DOMAINS` | `xynotransit.internal` | Comma separated. An address at one of these domains is internal: it never receives mail (see "Sign in without an email"). The first domain is used for addresses the server generates. |
 | `LOG_MAGIC_LINKS` | `false` | Logs links at info level. Dev only. |
@@ -50,30 +50,30 @@ All except `/api/health` and the two auth endpoints need `Authorization: Bearer 
 | `POST /api/auth/magic-link` | anyone | `{email}`. Always 202 (no enumeration). 429 "Too many links requested. Try again later." after 5 requests per hour, counted per normalised email string in `login_attempt`, so known and unknown addresses behave the same. |
 | `POST /api/auth/verify` | anyone | `{token}`. Returns `{access_token, expires_at, user}`. Single use. |
 | `GET /api/me` | signed in | `{person_id, role, label}`. |
-| `GET /api/catalog` | signed in | Teams, persons, assignments with metrics and KPIs. Every person and assignment has `active`. A contributor sees active rows only, with `email` null for everyone but themselves. A controller can add `?include_inactive=true` to get inactive persons and seats too. Retired counts and targets are never listed. |
-| `POST /api/teams` | controller | `{name}` (1 to 60). Returns 201 `{id, code, name, sort}`; the code is a slug of the name, sort is last plus one. 409 when the name is used. |
-| `PATCH /api/teams/{id}` | controller | `{name?, sort?}`. |
-| `DELETE /api/teams/{id}` | controller | 204. 409 "Move or remove the seats of this team first." while any seat (active or not) is in it. |
-| `POST /api/persons` | controller | `{full_name, email?, app_role}`. Email is trimmed and lowercased, 409 when used. When `email` is missing, null or blank the server makes a unique internal address from the name (`rosa.rakoto@xynotransit.internal`, then `rosa.rakoto2@...`). An address typed at an internal domain is kept as typed. 201 with the person, including the address. |
-| `POST /api/persons/{id}/sign-in-link` | controller | `{hours?}` (a whole number from 1 to 168, default 24; send `{}` for the default). 201 `{url, expires_at, person_id}`: `url` is `{PUBLIC_URL}/auth/verify?token=...`, `expires_at` is RFC 3339 UTC (`2026-10-20T08:30:00Z`). The link is single use and goes through `POST /api/auth/verify` like a magic link. 400 "Choose a validity from 1 hour to 168 hours.", 404 unknown person, 409 "This person is switched off.", 429 "Too many sign-in links created. Try again later." after 30 links per issuing manager per hour. Making another link does not cancel an earlier one. Every link adds a row to `sign_in_link_audit` (never the token). |
-| `PATCH /api/persons/{id}` | controller | `{full_name?, email?, app_role?, active?}`. 409 "There must be at least one manager." when it would leave no active controller. An inactive person cannot sign in and every token of theirs stops working (401). |
-| `POST /api/assignments` | controller | `{person_id, team_id, role_title}`. 201 with the seat. 409 when that person already has that role in that team. |
-| `PATCH /api/assignments/{id}` | controller | `{team_id?, role_title?, active?, sort?}`. Inactive seats are no longer expected in any period; their old reports stay. |
-| `PUT /api/assignments/{id}/definitions` | controller | `{metrics:[{id?,label}], kpis:[{id?,text}]}` in one transaction. 0 to 8 counts (name 1 to 60, unique ignoring case; list order is the series order), 0 to 10 targets (text 1 to 200). An entry with an `id` keeps its row; entries without one are added; listed-out rows are retired, never deleted. A target with changed text is retired and replaced, so old reports keep their wording. Returns the seat as in the catalog. |
-| `GET /api/summary?period_id=...&trend=6` | controller | Numbers for the manager dashboard: headline counts, teams, counts grouped by name (ignoring case), the trend over up to `trend` periods (1 to 24, default 6, oldest first) and people. Only submitted reports count. |
+| `GET /api/catalog` | signed in | Teams, persons, assignments with metrics and KPIs. Every person and assignment has `active`. A contributor sees ONLY themselves: their own person, their own active seats and the teams of those seats (no other name, role or team), with active rows only. A manager can add `?include_inactive=true` to get inactive persons and seats too. Retired counts and targets are never listed. |
+| `POST /api/teams` | manager | `{name}` (1 to 60). Returns 201 `{id, code, name, sort}`; the code is a slug of the name, sort is last plus one. 409 when the name is used. |
+| `PATCH /api/teams/{id}` | manager | `{name?, sort?}`. |
+| `DELETE /api/teams/{id}` | manager | 204. 409 "Move or remove the seats of this team first." while any seat (active or not) is in it. |
+| `POST /api/persons` | manager | `{full_name, email?, app_role}`. Email is trimmed and lowercased, 409 when used. When `email` is missing, null or blank the server makes a unique internal address from the name (`rosa.rakoto@xynotransit.internal`, then `rosa.rakoto2@...`). An address typed at an internal domain is kept as typed. 201 with the person, including the address. |
+| `POST /api/persons/{id}/sign-in-link` | manager | `{hours?}` (a whole number from 1 to 168, default 24; send `{}` for the default). 201 `{url, expires_at, person_id}`: `url` is `{PUBLIC_URL}/auth/verify?token=...`, `expires_at` is RFC 3339 UTC (`2026-10-20T08:30:00Z`). The link is single use and goes through `POST /api/auth/verify` like a magic link. 400 "Choose a validity from 1 hour to 168 hours.", 404 unknown person, 409 "This person is switched off.", 429 "Too many sign-in links created. Try again later." after 30 links per issuing manager per hour. Making another link does not cancel an earlier one. Every link adds a row to `sign_in_link_audit` (never the token). |
+| `PATCH /api/persons/{id}` | manager | `{full_name?, email?, app_role?, active?}`. 409 "There must be at least one manager." when it would leave no active manager. An inactive person cannot sign in and every token of theirs stops working (401). |
+| `POST /api/assignments` | manager | `{person_id, team_id, role_title}`. 201 with the seat. 409 when that person already has that role in that team. |
+| `PATCH /api/assignments/{id}` | manager | `{team_id?, role_title?, active?, sort?}`. Inactive seats are no longer expected in any period; their old reports stay. |
+| `PUT /api/assignments/{id}/definitions` | manager | `{metrics:[{id?,label}], kpis:[{id?,text}]}` in one transaction. 0 to 8 counts (name 1 to 60, unique ignoring case; list order is the series order), 0 to 10 targets (text 1 to 200). An entry with an `id` keeps its row; entries without one are added; listed-out rows are retired, never deleted. A target with changed text is retired and replaced, so old reports keep their wording. Returns the seat as in the catalog. |
+| `GET /api/summary?period_id=...&trend=6` | manager | Numbers for the manager dashboard: headline counts, teams, counts grouped by name (ignoring case), the trend over up to `trend` periods (1 to 24, default 6, oldest first) and people. Only submitted reports count. `expected` is the active seats of active people; `submitted`, `met`, `partly` and `missed` (headline, `teams[]`, `trend[]`) count only the reports of those expected seats, so `submitted <= expected`. `submitted_inactive` counts the reports of switched-off seats or people (never expected, never missing); their counts and volume still add into `metrics`, team volume and `volume_total`, and `people[]` lists them with `active: false`. |
 | `POST /api/periods/ensure` | signed in | `{start_month}`. Creates the period if missing. |
-| `PATCH /api/periods/{id}` | controller | `{meeting_date}`. |
-| `GET /api/periods/{id}/reports` | controller | All reports of the period. |
-| `GET /api/periods/{id}/reports/{assignment_id}` | owner of the seat, controller | One report or 404. Others get 403 "You can only see your own report." |
-| `PUT /api/periods/{id}/reports/{assignment_id}` | owner of the seat, controller | Validate, replace and submit in one transaction. Others get 403 "You can only send your own report." Body adds `reporter:{name,country,role}` (required, each trimmed, 1 to 80 characters, plain text; 400 "Enter your name.", "Enter your country.", "Enter your role." first). Stored in `report.reporter_*`; report JSON returns `reporter` or null for reports sent before it existed. |
-| `GET /api/periods/{id}/deck` | controller | Latest deck run or `null`. Has `texts`, the words frozen into that deck (old decks with none read as the defaults). |
-| `POST /api/periods/{id}/deck` | controller | Build and freeze a deck from the submitted reports (any number, zero too: cover and suggestions page only), including the effective slide texts, in one transaction. 201. `expected_count` is the active seats, `included_count` the submitted reports. |
+| `PATCH /api/periods/{id}` | manager | `{meeting_date}`. |
+| `GET /api/periods/{id}/reports` | manager | All reports of the period. |
+| `GET /api/periods/{id}/reports/{assignment_id}` | owner of the seat, manager | One report or 404. Others get 403 "You can only see your own report." |
+| `PUT /api/periods/{id}/reports/{assignment_id}` | owner of the seat, manager | Validate, replace and submit in one transaction. Others get 403 "You can only send your own report." Body adds `reporter:{name,country,role}` (required, each trimmed, 1 to 80 characters, plain text; 400 "Enter your name.", "Enter your country.", "Enter your role." first). Stored in `report.reporter_*`; report JSON returns `reporter` or null for reports sent before it existed. |
+| `GET /api/periods/{id}/deck` | manager | Latest deck run or `null`. Has `texts`, the words frozen into that deck (old decks with none read as the defaults). |
+| `POST /api/periods/{id}/deck` | manager | Build and freeze a deck from the submitted reports (any number, zero too: cover and suggestions page only), including the effective slide texts, in one transaction. 201. `expected_count` is the active seats of active people. `included_count` is every submitted report of the period, including those of switched-off seats or people; `switched_off_count` (also in the GET) says how many of those came from a switched-off seat or person (so the header reads "1 of 1 reports in, plus 1 from a switched-off person" as `included_count - switched_off_count` of `expected_count`). |
 | `GET /api/periods/{id}/deck-text` | every active person (employees need it for the live preview) | `{settings, inherited_from, updated_at}`. `settings` has every key of `deck_text_defaults.json`. A period without its own words inherits the latest earlier period's (`inherited_from` is its label, such as "Feb to Apr 2026"), else the built-in defaults (`"defaults"`). `inherited_from` and `updated_at` are null when the period has its own. 404 for an unknown period. |
-| `PUT /api/periods/{id}/deck-text` | controller | `{settings:{...}}`. Missing keys take the defaults, unknown keys are 400, values are trimmed. Per key: empty only where allowed, at most N characters, only the allowed `{placeholders}`, no control or invisible characters (line breaks only in `suggestionsBody`). Returns the same shape with `inherited_from` null. Editing never changes an existing deck. |
-| `POST /api/events/ticket` | controller | `{ticket}`, 60 seconds, single use. |
-| `GET /api/events?ticket=...&period_id=...` | controller (checked again when the ticket is used) | Server-Sent Events: `data: {"kind":"reports"|"deck","period_id":"..."}`, heartbeat `: ping` every 20 seconds. |
+| `PUT /api/periods/{id}/deck-text` | manager | `{settings:{...}}`. Missing keys take the defaults, unknown keys are 400, values are trimmed. Per key: empty only where allowed, at most N characters, only the allowed `{placeholders}`, no control or invisible characters (line breaks only in `suggestionsBody`). Returns the same shape with `inherited_from` null. Editing never changes an existing deck. |
+| `POST /api/events/ticket` | manager | `{ticket}`, 60 seconds, single use. |
+| `GET /api/events?ticket=...&period_id=...` | manager (checked again when the ticket is used) | Server-Sent Events: `data: {"kind":"reports"|"deck","period_id":"..."}`, heartbeat `: ping` every 20 seconds. |
 
-Roles: `contributor` (employee) and `controller` (manager). A refused controller-only call answers 403 `{"error":"Only the controller can do this."}`. The role is read from the database on every request, so the UI split is not the security boundary; this table is.
+Roles: `contributor` (employee) and manager. The role value in JSON and in the database enum is still `controller`; every message says manager. A refused manager-only call answers 403 `{"error":"Only the manager can do this."}`. The role is read from the database on every request, so the UI split is not the security boundary; this table is.
 
 ## Sign in without an email
 
@@ -95,8 +95,8 @@ docker compose exec api xynotransit-api sign-in-link manager@xynotransit.interna
 - **Magic link:** a random 32 byte token; only its SHA-256 is stored in `login_token` (15 minute expiry, `used_at`). Verify is one atomic update, so only one use succeeds. The rate limit counts rows in `login_attempt` (keyed by the normalised email string, written for unknown addresses too) under a per email advisory lock. Mail is sent in a background task so response time does not reveal whether an address exists.
 - **Auth:** the JWT (sub = person_id, 7 days) only proves who. Role and active flag are read from the database on every request.
 - **Catalog:** managers build it through the admin endpoints. Counts keep their `series` (0 to 7) as list order; a reorder first parks rows at 1000 and up because of the partial unique index on `(assignment_id, series)`. Notes are free text only: the `note_suggestion` table is kept but no longer read.
-- **Reports:** PUT runs in one transaction: authorise (own seat or controller), validate, upsert as draft, replace values, KPI results and notes, call `submit_report`.
-- **Deck texts:** keys, defaults, placeholders and limits live in `deck_text_defaults.json` (copies in `src/` and `tests/fixtures/`, a test checks they match the app copy in `xynotransit_app/docs/reference/`). Texts are stored per period and frozen into each deck run.
+- **Reports:** PUT runs in one transaction: authorise (own seat or manager), validate, upsert as draft, replace values, KPI results and notes, call `submit_report`.
+- **Deck texts:** keys, defaults, placeholders and limits live in `deck_text_defaults.json` (copies in `src/` and `tests/fixtures/`, a test checks they match the app copy in `xynotransit_app/docs/reference/`). Texts are stored per period and frozen into each deck run. `coverPill` is `{team} · {count} {reports}` by default (`{reports}` is "report" or "reports"); decks and periods that already stored their words keep them.
 - **Decks:** snapshots are built on the server from submitted reports. Name and role come from the report's reporter words, and the snapshot field `team` carries the reporter's country (legacy reports without reporter words use the catalog profile). The app groups slides by country (case-insensitive, whitespace collapsed, first spelling shown, first appearance order); `snapshot::country_key` is the reference. The dashboard summary still groups by catalog teams (assumption). `tests/fixtures/snapshot_case.json` is the shared contract proven by the Rust and Dart tests. Old decks stay frozen when a report is sent again.
 - **Live updates:** triggers in `02-api.sql` send `NOTIFY xt_changes` with `{kind, period_id}`. One `PgListener` task (reconnects with backoff) fans out through a broadcast channel to SSE clients. Responses carry `X-Accel-Buffering: no`.
 - **Single source of rules:** every limit and fixed message lives in `src/rules.rs` (constants and `rules::msg`). `tests/fixtures/rules.json` repeats them for the other side (the Flutter tests read `../xynotransit-api/tests/fixtures/rules.json`); `rules_json_matches_code` fails when the two drift apart. Add keys, never rename one. Deck text limits stay in `deck_text_defaults.json`.
@@ -105,7 +105,8 @@ docker compose exec api xynotransit-api sign-in-link manager@xynotransit.interna
 - **Limits:** body 256 KB (413), request 30 s until the answer starts (408; open event streams are not cut), database statements 20 s, a transaction idle for more than 30 s is ended by the database, 10 pooled connections. No CORS layer (same origin through nginx).
 - **Shutdown:** on SIGTERM or Ctrl-C the server stops taking connections, ends the event streams at once, lets requests that are running finish (up to `SHUTDOWN_GRACE_SECS`), then exits. `tests/ops.rs` proves it with a request held by a table lock.
 - **Deck content:** a slide shows the counts and targets the report was answered against, also when the manager changed or retired them since (the deck reads the definitions that the report has answers for). If a retired count and a renumbered live count share a series number, the slide renumbers them so no two bars share a colour.
-- **Who is expected:** a seat is expected in a period when the seat and its person are both switched on (summary `expected`, deck `expected_count`, the views). Old reports of a switched off seat or person stay, still count in the summary totals (so `submitted` can exceed `expected`) and still list the person, but the deck only holds active seats of active people.
+- **Who is expected:** a seat is expected in a period when the seat and its person are both switched on (summary `expected`, deck `expected_count`, the views). Reports of a switched-off seat or person stay: they are not counted in `submitted` (so it never exceeds `expected`), they are listed apart (`submitted_inactive`, `people[].active=false`), their numbers still add into counts and volume, `GET /periods/{id}/reports` returns them, and a deck includes them (`included_count`, `switched_off_count`).
+- **Too many requests:** every 429 carries `Retry-After` (whole seconds until the hourly window frees a place, 1 to 3600). The sign-in screen reads it.
 - **Summary names:** the shown name of a count (counts with the same name ignoring case are added) is chosen by rule, not alphabet: a live name beats a retired one, then the lower series, then the id.
 - Database errors are logged, never returned.
 
@@ -126,7 +127,7 @@ cargo test
 | `tests/fuzz.rs` | malformed and random input (wrong types, huge numbers, unicode, NUL, deep nesting, huge arrays, duplicate ids, hostile paths and queries) to every endpoint as nobody, a bad token, an employee, a manager and a switched off person: never a 5xx, always `{"error"}` on 4xx, no SQL or paths in a body. `FUZZ_ITERS`, `FUZZ_SEED` |
 | `tests/concurrency.rs` | the same report sent 16 times at once, definitions edited at once, decks made while people send, a double click on the magic link, the sign-in limit under parallel requests, two managers demoting each other |
 | `tests/ops.rs` | request ids, headers, JSON for 404/405/408/413/415/400, 503 health, panic to JSON, logs without secrets, graceful shutdown |
-| `tests/data_review.rs` | edge cases: fresh install, empty period, years 2000 and 2100, team without seats, a person with two seats in one team, a seat or person switched off after reporting, deck faithfulness after definition edits |
+| `tests/data_review.rs` | edge cases: fresh install, empty period, years 2000 and 2100, team without seats, a person with two seats in one team, a seat or person switched off after reporting (never counted above expected, still listed and in the deck), deck faithfulness after definition edits |
 | `tests/internal_signin.rs` | people without email, generated addresses, sign-in links (single use, expiry, roles, 404/409/429, audit without tokens), internal addresses get no mail and the same rate limit, the `sign-in-link` command run as a real binary (output, exit codes), the migration run twice |
 | `tests/perf.rs` | 300 seats x 24 periods x 8 counts: every call must answer in under 300 ms (release; debug has 1500 ms) |
 
@@ -137,7 +138,7 @@ Integration tests need Postgres. Each test creates a throwaway database and drop
 ## Layout
 
 ```
-src/main.rs        start, logging, config, bootstrap controller, signals
+src/main.rs        start, logging, config, bootstrap manager, signals
 src/http.rs        request id and logging, JSON errors for every status, security headers, panic to JSON
 src/config.rs      env settings
 src/auth.rs        JWT, current user loading
@@ -156,7 +157,7 @@ tests/fixtures/rules.json   the limits and messages for other test suites (see a
 
 ## Slide texts (deck-text)
 
-The words of the slides are stored per period and frozen into each deck. Only a controller can call these endpoints (403 "Only the controller can do this.").
+The words of the slides are stored per period and frozen into each deck. Only a manager can call these endpoints (403 "Only the manager can do this.").
 
 - Keys, defaults, allowed placeholders and limits come from `src/deck_text_defaults.json`, a copy of `../xynotransit_app/docs/reference/deck_text_defaults.json` (also kept as `tests/fixtures/deck_text_defaults.json`). A unit test asserts the copies are byte-identical; it is skipped with a message when the Flutter project is not next to this one.
 - Messages match the app's: "<Label> cannot be empty.", "<Label> can be at most N characters.", "{x} cannot be used in <Label>. It allows {a}, {b}." (or "It allows no placeholders."), plus "Use plain text in <Label>." for control or invisible characters, "<key> is not a text setting." for unknown keys and "<Label> must be text." for non-strings.

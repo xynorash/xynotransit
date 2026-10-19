@@ -41,7 +41,7 @@ void main() {
   setUpAll(loadAppFonts);
 
   group('redirects', () {
-    testWidgets('/ sends a controller to the overview', (tester) async {
+    testWidgets('/ sends a manager to the overview', (tester) async {
       final h = await pumpApp(tester, demo: true, location: '/');
       expect(where(h), '/manager');
       expect(find.text('Overview'), findsWidgets);
@@ -78,7 +78,7 @@ void main() {
       expect(find.text('Overview'), findsNothing);
     });
 
-    testWidgets('a controller may open /report', (tester) async {
+    testWidgets('a manager may open /report', (tester) async {
       final h = await pumpApp(tester, demo: true, location: '/report');
       expect(where(h), '/report');
     });
@@ -94,13 +94,13 @@ void main() {
       expect(find.text('Reports received'), findsNothing);
     });
 
-    testWidgets('switching the demo user back to the controller stays put', (
+    testWidgets('switching the demo user back to the manager stays put', (
       tester,
     ) async {
       final h = await pumpApp(tester, demo: true, user: rova, location: '/');
       h.auth.actAs(DemoAuth.controller);
       await tester.pumpAndSettle();
-      // Nothing forces a controller away from the form.
+      // Nothing forces a manager away from the form.
       expect(where(h), '/report');
       await go(tester, h, '/manager');
       expect(where(h), '/manager');
@@ -158,7 +158,7 @@ void main() {
       for (final t in [
         'Your numbers, month by month',
         'Who you are',
-        'Choose your name',
+        'Choose a seat',
         'Send report',
         'Logistics Report Builder',
       ]) {
@@ -200,7 +200,7 @@ void main() {
       expect(find.text('‹ Back to the dashboard'), findsOneWidget);
       expect(find.text('Your numbers, month by month'), findsOneWidget);
       expect(find.text('Rova · Import'), findsWidgets);
-      expect(find.text('Choose your name'), findsNothing);
+      expect(find.text('Choose a seat'), findsNothing);
       expect(
         find.textContaining('You already sent this report on'),
         findsOneWidget,

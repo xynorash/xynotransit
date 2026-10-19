@@ -168,7 +168,8 @@ void main() {
         ),
       );
       expect(find.text('TUESDAY 09 JUNE 2026'), findsOneWidget);
-      expect(find.text('Tana · 7'), findsOneWidget);
+      expect(find.text('Tana · 7 reports'), findsOneWidget);
+      expect(find.text('Tamatave · 1 report'), findsOneWidget);
       await expectLater(
         find.byType(SlideCover),
         matchesGoldenFile('goldens/cover.png'),

@@ -320,6 +320,7 @@ DeckRun parseDeck(Object? data) => _guard(() {
     generatedAt: parseTime(j['generated_at']),
     expectedCount: (j['expected_count'] as num).toInt(),
     includedCount: (j['included_count'] as num).toInt(),
+    switchedOffCount: ((j['switched_off_count'] ?? 0) as num).toInt(),
     items: [
       for (final it in rowsOf(j['items']))
         DeckItem(

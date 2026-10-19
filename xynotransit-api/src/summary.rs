@@ -1,5 +1,13 @@
 //! The manager's summary: pure aggregation over rows the route loads.
 //! Only submitted reports are passed in. Volume is the sum of every count.
+//!
+//! The rule for who counts (the Dart summary and every view follow it):
+//! - `expected` is the number of active seats of active people (`SeatIn::active`).
+//! - `submitted`, `met`, `partly` and `missed` (headline, teams, trend) count only the reports of
+//!   expected seats, so `submitted <= expected` always.
+//! - `submitted_inactive` counts the reports of switched-off seats or people. They are never
+//!   expected and never missing, but they are real: their counts and volume are included in
+//!   metrics, team and period volume, and they are listed in `people` with `active: false`.
 
 use std::collections::HashMap;
 
@@ -75,6 +83,12 @@ pub fn build(input: &SummaryInput) -> Value {
     let shown = input.shown.id;
     let seat_team: HashMap<Uuid, i32> = input.seats.iter().map(|s| (s.id, s.team_id)).collect();
     let active_total = input.seats.iter().filter(|s| s.active).count();
+    let active_seats: std::collections::HashSet<Uuid> = input
+        .seats
+        .iter()
+        .filter(|s| s.active)
+        .map(|s| s.id)
+        .collect();
 
     let shown_reports: Vec<&ReportIn> = input
         .reports
@@ -87,6 +101,11 @@ pub fn build(input: &SummaryInput) -> Value {
         .filter(|v| v.period_id == shown && v.month < 3)
         .collect();
 
+    let submitted_active = shown_reports
+        .iter()
+        .filter(|r| active_seats.contains(&r.assignment_id))
+        .count();
+
     // Teams: those with active seats, or with something submitted in this period.
     let mut teams = Vec::new();
     for t in &input.teams {
@@ -95,13 +114,17 @@ pub fn build(input: &SummaryInput) -> Value {
             .iter()
             .filter(|s| s.team_id == t.id && s.active)
             .count();
-        let reports: Vec<&&ReportIn> = shown_reports
+        let team_reports: Vec<&&ReportIn> = shown_reports
             .iter()
             .filter(|r| seat_team.get(&r.assignment_id) == Some(&t.id))
             .collect();
-        if expected == 0 && reports.is_empty() {
+        if expected == 0 && team_reports.is_empty() {
             continue;
         }
+        let reports: Vec<&&&ReportIn> = team_reports
+            .iter()
+            .filter(|r| active_seats.contains(&r.assignment_id))
+            .collect();
         let mut volume = [0i64; 3];
         for v in &shown_values {
             if seat_team.get(&v.assignment_id) == Some(&t.id) {
@@ -113,6 +136,7 @@ pub fn build(input: &SummaryInput) -> Value {
             "name": t.name,
             "expected": expected,
             "submitted": reports.len(),
+            "submitted_inactive": team_reports.len() - reports.len(),
             "met": reports.iter().map(|r| r.met).sum::<i64>(),
             "partly": reports.iter().map(|r| r.partly).sum::<i64>(),
             "missed": reports.iter().map(|r| r.missed).sum::<i64>(),
@@ -173,10 +197,14 @@ pub fn build(input: &SummaryInput) -> Value {
         .periods
         .iter()
         .map(|p| {
-            let rs: Vec<&ReportIn> = input
+            let all: Vec<&ReportIn> = input
                 .reports
                 .iter()
                 .filter(|r| r.period_id == p.id)
+                .collect();
+            let rs: Vec<&&ReportIn> = all
+                .iter()
+                .filter(|r| active_seats.contains(&r.assignment_id))
                 .collect();
             json!({
                 "period_id": p.id.to_string(),
@@ -184,6 +212,7 @@ pub fn build(input: &SummaryInput) -> Value {
                 "start_month": date(p.start_month),
                 "expected": active_total,
                 "submitted": rs.len(),
+                "submitted_inactive": all.len() - rs.len(),
                 "met": rs.iter().map(|r| r.met).sum::<i64>(),
                 "partly": rs.iter().map(|r| r.partly).sum::<i64>(),
                 "missed": rs.iter().map(|r| r.missed).sum::<i64>(),
@@ -209,6 +238,7 @@ pub fn build(input: &SummaryInput) -> Value {
                 "name": s.name,
                 "role": s.role,
                 "team": team_by_id.get(&s.team_id).copied().unwrap_or(""),
+                "active": s.active,
                 "submitted": report.is_some(),
                 "met": report.map_or(0, |r| r.met),
                 "partly": report.map_or(0, |r| r.partly),
@@ -233,7 +263,8 @@ pub fn build(input: &SummaryInput) -> Value {
         "period_label": period_label(input.shown.start_month),
         "months": months,
         "expected": active_total,
-        "submitted": shown_reports.len(),
+        "submitted": submitted_active,
+        "submitted_inactive": shown_reports.len() - submitted_active,
         "teams": teams,
         "metrics": metrics.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
         "trend": trend,
@@ -363,12 +394,12 @@ mod tests {
         assert_eq!(teams.len(), 2);
         assert_eq!(
             teams[0],
-            json!({"team_id": "1", "name": "Tana", "expected": 2, "submitted": 1,
+            json!({"team_id": "1", "name": "Tana", "expected": 2, "submitted": 1, "submitted_inactive": 0,
                    "met": 2, "partly": 1, "missed": 0, "volume_by_month": [1, 2, 7]})
         );
         assert_eq!(
             teams[1],
-            json!({"team_id": "2", "name": "Abe", "expected": 1, "submitted": 1,
+            json!({"team_id": "2", "name": "Abe", "expected": 1, "submitted": 1, "submitted_inactive": 0,
                    "met": 0, "partly": 1, "missed": 2, "volume_by_month": [10, 0, 5]})
         );
     }
@@ -399,8 +430,9 @@ mod tests {
         assert_eq!(
             t[0],
             json!({"period_id": id(100).to_string(), "label": "Nov 2025 to Jan 2026",
-                   "start_month": "2025-11-01", "expected": 3, "submitted": 2,
-                   "met": 4, "partly": 0, "missed": 1, "volume_total": 107})
+                   "start_month": "2025-11-01", "expected": 3, "submitted": 1,
+                   "submitted_inactive": 1,
+                   "met": 1, "partly": 0, "missed": 1, "volume_total": 107})
         );
         assert_eq!(t[1]["label"], "Feb to Apr 2026");
         assert_eq!(t[1]["submitted"], 2);
@@ -422,6 +454,77 @@ mod tests {
         assert_eq!(p[1]["met"], 0);
         assert_eq!(p[2]["missed"], 2);
         assert_eq!(p[2]["volume_total"], 15);
+    }
+
+    /// Dan (seat 4, inactive) and Eve (seat 5, her person was switched off, so the seat reads
+    /// inactive) both sent a report in the shown period. Hand-computed:
+    /// expected = Ben, Ana, Cora = 3. Active reports: Ben, Cora = 2. Inactive reports: Dan, Eve.
+    fn with_switched_off_reports() -> SummaryInput {
+        let mut input = fixture();
+        input.seats.push(seat(5, "Eve", 3, false));
+        input.reports.push(rep(101, 4, 5, 0, 0));
+        input.reports.push(rep(101, 5, 1, 1, 1));
+        input.values.push(val(101, 4, "Boxes", 1, 50));
+        input.values.push(val(101, 5, "Files", 2, 1000));
+        input.volumes = vec![(id(100), 107), (id(101), 1075)];
+        input
+    }
+
+    #[test]
+    fn switched_off_reports_never_push_submitted_over_expected() {
+        let s = build(&with_switched_off_reports());
+        assert_eq!(s["expected"], 3);
+        assert_eq!(s["submitted"], 2);
+        assert_eq!(s["submitted_inactive"], 2);
+        // The team of a switched-off person with only a report shows 0 of 0, volume kept.
+        let teams = s["teams"].as_array().unwrap();
+        let abe = &teams[1];
+        assert_eq!(abe["expected"], 1);
+        assert_eq!(abe["submitted"], 1);
+        assert_eq!(abe["submitted_inactive"], 1);
+        assert_eq!(abe["met"], 0);
+        assert_eq!(abe["volume_by_month"], json!([10, 50, 5]));
+        let empty = &teams[2];
+        assert_eq!(empty["name"], "Empty");
+        assert_eq!(empty["expected"], 0);
+        assert_eq!(empty["submitted"], 0);
+        assert_eq!(empty["submitted_inactive"], 1);
+        assert_eq!(empty["met"], 0);
+        assert_eq!(empty["volume_by_month"], json!([0, 0, 1000]));
+        // Trend: same rule.
+        let t = &s["trend"][1];
+        assert_eq!(t["expected"], 3);
+        assert_eq!(t["submitted"], 2);
+        assert_eq!(t["submitted_inactive"], 2);
+        assert_eq!(t["met"], 2);
+        assert_eq!(t["volume_total"], 1075);
+    }
+
+    #[test]
+    fn switched_off_people_are_listed_tagged_inactive() {
+        let s = build(&with_switched_off_reports());
+        let p = s["people"].as_array().unwrap();
+        let rows: Vec<(&str, bool, bool)> = p
+            .iter()
+            .map(|x| {
+                (
+                    x["name"].as_str().unwrap(),
+                    x["active"].as_bool().unwrap(),
+                    x["submitted"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("Ben", true, true),
+                ("Ana", true, false),
+                ("Cora", true, true),
+                ("Dan", false, true),
+                ("Eve", false, true)
+            ]
+        );
+        assert_eq!(p[4]["volume_total"], 1000);
     }
 
     #[test]

@@ -74,9 +74,7 @@ class _PeopleScreenBodyState extends ConsumerState<PeopleScreenBody> {
 
   List<Widget> _content(BuildContext context, Catalog c) {
     final t = context.tokens;
-    final persons = {for (final p in c.persons) p.id: p};
-    bool visible(Assignment a) =>
-        _showInactive || (a.active && (persons[a.personId]?.active ?? false));
+    bool visible(Assignment a) => _seatVisible(c, a, _showInactive);
     final q = _query.trim().toLowerCase();
     final filtering = q.isNotEmpty || _teamId != null;
     bool matches(Person p, [Assignment? a]) =>
@@ -124,7 +122,7 @@ class _PeopleScreenBodyState extends ConsumerState<PeopleScreenBody> {
         style: bodyStyle(context, size: 16, color: t.muted, height: 1.45),
       ),
       const SizedBox(height: 16),
-      _TeamsCard(catalog: c),
+      _TeamsCard(catalog: c, showInactive: _showInactive),
       const SizedBox(height: 16),
       Wrap(
         spacing: 12,
@@ -262,6 +260,11 @@ class _PeopleScreenBodyState extends ConsumerState<PeopleScreenBody> {
   }
 }
 
+/// Whether a seat is listed: active seats of active people, or every seat when
+/// "Show inactive" is on. The team lines and the sections use this one rule.
+bool _seatVisible(Catalog c, Assignment a, bool showInactive) =>
+    showInactive || c.isExpected(a);
+
 enum _SeatSort { setUp, name, role }
 
 class _SectionHead extends StatelessWidget {
@@ -380,8 +383,12 @@ class _Filters extends StatelessWidget {
 }
 
 class _TeamsCard extends ConsumerStatefulWidget {
-  const _TeamsCard({required this.catalog});
+  const _TeamsCard({required this.catalog, required this.showInactive});
   final Catalog catalog;
+
+  /// Same switch as the sections below, so the seat count in a team's line is
+  /// the number of seats listed under that team.
+  final bool showInactive;
 
   @override
   ConsumerState<_TeamsCard> createState() => _TeamsCardState();
@@ -490,7 +497,12 @@ class _TeamsCardState extends ConsumerState<_TeamsCard> {
   }
 
   Widget _teamRow(BuildContext context, Team team, Repository repo, Catalog c) {
-    final seats = c.assignmentsOfTeam(team).length;
+    // The count follows the list below (active seats of active people, or all
+    // when "Show inactive" is on). Deleting depends on every seat, listed or not.
+    final all = c.assignmentsOfTeam(team);
+    final seats = all
+        .where((a) => _seatVisible(c, a, widget.showInactive))
+        .length;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Wrap(
@@ -519,7 +531,7 @@ class _TeamsCardState extends ConsumerState<_TeamsCard> {
             onPressed: () async {
               // A team with seats is refused with a clear message; only a
               // real deletion needs a second look.
-              if (seats == 0) {
+              if (all.isEmpty) {
                 final ok = await showDialog<bool>(
                   context: context,
                   builder: (ctx) => AlertDialog(

@@ -207,14 +207,14 @@ void main() {
       expect((await repo.loadDeckTexts(p.id)).inheritedFrom, 'defaults');
     });
 
-    test('controller only, and the period must exist', () async {
+    test('manager only, and the period must exist', () async {
       final p = await repo.ensurePeriod(MemoryRepository.demoStart);
       user = const AppUser(
         personId: 'p-rova',
         role: AppRole.contributor,
         label: 'Rova',
       );
-      const only = 'Only the controller can do this.';
+      const only = 'Only the manager can do this.';
       // Every signed-in person can read the words (the live preview needs them).
       expect((await repo.loadDeckTexts(p.id)).texts, DeckTexts.defaults);
       await expectLater(

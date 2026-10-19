@@ -190,6 +190,11 @@ class MemoryArena implements Arena {
   }
 
   @override
+  Future<({String message, int? retryAfter})?> provokeSignInLimit(
+    String email,
+  ) async => null;
+
+  @override
   bool get canTestLastManager => true;
 
   @override

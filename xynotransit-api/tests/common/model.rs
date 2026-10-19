@@ -462,19 +462,28 @@ impl Dataset {
             let expected = (0..self.seats.len())
                 .filter(|&s| self.seats[s].team == t && self.on(s))
                 .count();
-            let reps: Vec<&&Report> = shown_reports
+            let all_reps: Vec<&&Report> = shown_reports
                 .iter()
                 .filter(|r| self.seats[r.seat].team == t)
                 .collect();
-            if expected == 0 && reps.is_empty() {
+            if expected == 0 && all_reps.is_empty() {
                 continue;
             }
+            // New rule: only the reports of expected seats are "submitted"; the others are
+            // counted apart and their volume still adds up.
+            let reps: Vec<&&Report> = all_reps
+                .iter()
+                .filter(|r| self.on(r.seat))
+                .copied()
+                .collect();
             let mut vol = [0i64; 3];
             let (mut met, mut partly, mut missed) = (0, 0, 0);
-            for r in &reps {
+            for r in &all_reps {
                 for (_, m, v) in &r.values {
                     vol[*m] += v;
                 }
+            }
+            for r in &reps {
                 let c = self.kpi_counts(r);
                 met += c.0;
                 partly += c.1;
@@ -483,6 +492,7 @@ impl Dataset {
             teams.push(json!({
                 "team_id": self.teams[t].id.to_string(), "name": self.teams[t].name,
                 "expected": expected, "submitted": reps.len(),
+                "submitted_inactive": all_reps.len() - reps.len(),
                 "met": met, "partly": partly, "missed": missed, "volume_by_month": vol,
             }));
         }
@@ -578,10 +588,15 @@ impl Dataset {
         let trend_rows: Vec<Value> = earlier
             .iter()
             .map(|&p| {
-                let reps: Vec<&Report> = self
+                let all_reps: Vec<&Report> = self
                     .reports
                     .iter()
                     .filter(|r| r.period == p && r.submitted)
+                    .collect();
+                let reps: Vec<&Report> = all_reps
+                    .iter()
+                    .filter(|r| self.on(r.seat))
+                    .copied()
                     .collect();
                 let (mut met, mut partly, mut missed) = (0, 0, 0);
                 for r in &reps {
@@ -594,8 +609,10 @@ impl Dataset {
                 json!({
                     "period_id": self.periods[p].id.to_string(), "label": self.label_of(p),
                     "start_month": format!("{y}-{m:02}-01"), "expected": active_total,
-                    "submitted": reps.len(), "met": met, "partly": partly, "missed": missed,
-                    "volume_total": reps.iter().map(|r| seat_total(r)).sum::<i64>(),
+                    "submitted": reps.len(),
+                    "submitted_inactive": all_reps.len() - reps.len(),
+                    "met": met, "partly": partly, "missed": missed,
+                    "volume_total": all_reps.iter().map(|r| seat_total(r)).sum::<i64>(),
                 })
             })
             .collect();
@@ -612,6 +629,7 @@ impl Dataset {
                 "name": self.persons[self.seats[s].person].1,
                 "role": self.seats[s].role,
                 "team": self.teams[self.seats[s].team].name,
+                "active": self.on(s),
                 "submitted": rep.is_some(),
                 "met": c.0, "partly": c.1, "missed": c.2,
                 "volume_total": rep.map(|r| seat_total(r)).unwrap_or(0),
@@ -634,7 +652,8 @@ impl Dataset {
             "period_label": self.label_of(shown),
             "months": months,
             "expected": active_total,
-            "submitted": shown_reports.len(),
+            "submitted": shown_reports.iter().filter(|r| self.on(r.seat)).count(),
+            "submitted_inactive": shown_reports.iter().filter(|r| !self.on(r.seat)).count(),
             "teams": teams,
             "metrics": metrics.into_iter().map(|m| m.1).collect::<Vec<_>>(),
             "trend": trend_rows,
@@ -642,18 +661,18 @@ impl Dataset {
         })
     }
 
-    /// The slides POST /periods/{id}/deck must freeze: one per submitted report of an active seat.
-    pub fn deck(&self, p: usize) -> (usize, Vec<(Uuid, Value)>) {
+    /// The slides POST /periods/{id}/deck must freeze: one per submitted report, switched-off
+    /// seats and people included. Returns (expected, switched_off, slides).
+    pub fn deck(&self, p: usize) -> (usize, usize, Vec<(Uuid, Value)>) {
         let expected = (0..self.seats.len()).filter(|&s| self.on(s)).count();
         let (y, m) = self.start(p);
         let mut slides = Vec::new();
+        let mut switched_off = 0;
         for s in self.deck_order() {
-            if !self.on(s) {
-                continue;
-            }
             let Some(r) = self.report_of(p, s) else {
                 continue;
             };
+            switched_off += !self.on(s) as usize;
             let seat = &self.seats[s];
             let (name, role, country) = match &r.reporter {
                 Some((n, c, ro)) => (n.clone(), ro.clone(), c.clone()),
@@ -699,8 +718,11 @@ impl Dataset {
             let targets: Vec<Value> = ks
                 .iter()
                 .map(|&i| {
-                    let st = r.kpis.iter().find(|k| k.0 == i).unwrap().1;
-                    json!({"text": self.kdefs[i].text, "status": st})
+                    let k = r.kpis.iter().find(|k| k.0 == i).unwrap();
+                    match k.2.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+                        Some(c) => json!({"text": self.kdefs[i].text, "status": k.1, "comment": c}),
+                        None => json!({"text": self.kdefs[i].text, "status": k.1}),
+                    }
                 })
                 .collect();
             let notes = |kind: &str| -> Vec<String> {
@@ -732,6 +754,6 @@ impl Dataset {
                 }),
             ));
         }
-        (expected, slides)
+        (expected, switched_off, slides)
     }
 }

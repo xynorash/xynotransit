@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
@@ -14,12 +15,33 @@ import '../slides/slide_words.dart';
 import '../../domain/period.dart';
 import '../../domain/report.dart';
 import '../export/export_menu.dart';
+import '../table/report_counts.dart';
 import '../slides/alt_text.dart';
 import '../slides/slide_view.dart';
 
+/// The scroll controller of the slide list. A new scroll view (the page opened
+/// again, or the layout switched between one and two columns) starts at the
+/// top, so the jump menu must say slide 1 then, not the slide it said when the
+/// old view went away.
+class _NavController extends ScrollController {
+  _NavController(this._nav);
+
+  final SlideNav _nav;
+
+  @override
+  void attach(ScrollPosition position) {
+    super.attach(position);
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (_nav._disposed || !hasClients) return;
+      _nav.current.value = 0;
+      _nav._track();
+    });
+  }
+}
+
 /// Drives the vertical slide list: jump to a slide and report which one is in view.
 class SlideNav {
-  final controller = ScrollController();
+  late final controller = _NavController(this);
   final anchorKey = GlobalKey(debugLabel: 'slides-anchor');
 
   /// Index of the slide nearest the top of the view.
@@ -72,7 +94,10 @@ class SlideNav {
     current.value = i.clamp(0, count == 0 ? 0 : count - 1);
   }
 
+  bool _disposed = false;
+
   void dispose() {
+    _disposed = true;
     controller.dispose();
     current.dispose();
   }
@@ -221,7 +246,7 @@ class _GenerateControlsState extends ConsumerState<GenerateControls> {
 
   Future<void> _generate() async {
     final period = ref.read(periodProvider).value;
-    final catalog = ref.read(catalogProvider).value;
+    final catalog = ref.read(catalogWithInactiveProvider).value;
     if (period == null || catalog == null) return;
     setState(() {
       _busy = true;
@@ -235,7 +260,7 @@ class _GenerateControlsState extends ConsumerState<GenerateControls> {
     } on Object {
       if (mounted) {
         setState(
-          () => _error = 'Could not generate. Only the controller can do this.',
+          () => _error = 'Could not generate. Only the manager can do this.',
         );
       }
     } finally {
@@ -246,27 +271,36 @@ class _GenerateControlsState extends ConsumerState<GenerateControls> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final catalog = ref.watch(catalogProvider).value;
+    final isController = ref.watch(isControllerProvider);
+    // Switched-off people have reports too; the deck includes them.
+    final catalog =
+        (isController
+                ? ref.watch(catalogWithInactiveProvider)
+                : ref.watch(catalogProvider))
+            .value;
     final period = ref.watch(periodProvider).value;
     final reports = ref.watch(reportsProvider).value ?? const [];
     final deck = ref.watch(deckProvider).value;
-    final isController = ref.watch(isControllerProvider);
     if (catalog == null || period == null) return const SizedBox.shrink();
-    final n = reports.where((r) => r.isSubmitted).length;
-    final total = catalog.assignments.length;
-    final hint = '$n of $total reports in for ${period.label}';
+    // "N of M": reports of expected seats against expected seats, so N never
+    // passes M. Reports of switched-off people come on top, named apart.
+    final counts = ReportCounts.of(catalog, reports);
+    final n = counts.submitted;
+    final total = counts.expected;
+    final plus = counts.switchedOff > 0 ? ', ${counts.switchedOffNote}' : '';
+    final hint = '$n of $total reports in for ${period.label}$plus';
     final inIds = {
       for (final r in reports)
         if (r.isSubmitted) r.assignmentId,
     };
     final missing = [
       for (final a in catalog.assignments)
-        if (!inIds.contains(a.id)) catalog.labelOf(a),
+        if (catalog.isExpected(a) && !inIds.contains(a.id)) catalog.labelOf(a),
     ];
 
     if (!isController) {
       return Text(
-        'The controller generates the slides when everyone is done. $hint.',
+        'The manager generates the slides when everyone is done. $hint.',
         style: bodyStyle(context, size: 15, color: t.muted, height: 1.4),
       );
     }
@@ -306,13 +340,13 @@ class _GenerateControlsState extends ConsumerState<GenerateControls> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  n == 0
+                  n + counts.switchedOff == 0
                       ? 'No reports are in yet. The deck will only have the cover and the suggestions page.'
-                      : '$n of $total reports are in. Generate the slides with what you have?',
+                      : '$n of $total reports are in$plus. Generate the slides with what you have?',
                   key: const ValueKey('confirm-text'),
                   style: bodyStyle(context, size: 15, height: 1.4),
                 ),
-                if (missing.isNotEmpty && n > 0) ...[
+                if (missing.isNotEmpty && n + counts.switchedOff > 0) ...[
                   const SizedBox(height: 8),
                   Text(
                     'Still missing',
@@ -380,7 +414,7 @@ class _GenerateControlsState extends ConsumerState<GenerateControls> {
   }
 }
 
-/// Shows the meeting date of [period] and lets the controller change it.
+/// Shows the meeting date of [period] and lets the manager change it.
 class MeetingDateButton extends ConsumerWidget {
   const MeetingDateButton({super.key, required this.period});
 
@@ -506,7 +540,7 @@ class SlideListSliver extends ConsumerWidget {
           padding: const EdgeInsets.only(top: 16),
           child: DashedBox(
             child: Text(
-              'No slides yet. When the controller generates them, every slide of the deck '
+              'No slides yet. When the manager generates them, every slide of the deck '
               'appears here in order, exactly as it will be presented.',
               textAlign: TextAlign.center,
               style: bodyStyle(context, size: 15, color: t.muted, height: 1.4),

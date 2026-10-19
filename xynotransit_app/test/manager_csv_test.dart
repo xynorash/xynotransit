@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xynotransit_app/data/demo_data.dart';
+import 'package:xynotransit_app/domain/catalog.dart';
 import 'package:xynotransit_app/domain/enums.dart';
 import 'package:xynotransit_app/domain/report.dart';
 import 'package:xynotransit_app/features/table/csv_export.dart';
@@ -183,6 +184,102 @@ void main() {
       '2026-02',
       '2026-03',
       '2026-04',
+    });
+  });
+
+  group('typed words and switched-off people', () {
+    Report sent(Assignment a, {Reporter? reporter}) => Report(
+      periodId: testPeriod.id,
+      assignmentId: a.id,
+      status: ReportStatus.submitted,
+      submittedAt: DateTime.utc(2026, 5, 1, 9, 5),
+      values: {
+        for (final m in a.metrics) m.id: [1, 2, 3],
+      },
+      reporter: reporter,
+    );
+
+    test('the last three columns hold the typed name, country and role', () {
+      expect(csvHeader.sublist(12), [
+        'Reported name',
+        'Reported country',
+        'Reported role',
+      ]);
+      // The first twelve keep their place for old consumers.
+      expect(csvHeader.sublist(0, 4), ['Period', 'Team', 'Person', 'Role']);
+      final a = testCatalog.assignments.firstWhere((x) => x.hasCounts);
+      final rows = parseCsv(
+        buildReportsCsv(
+          period: testPeriod,
+          catalog: testCatalog,
+          reports: [
+            sent(
+              a,
+              reporter: const Reporter(
+                name: 'R. Rakoto, "Rosa"',
+                country: 'Kenya',
+                role: '=Lead',
+              ),
+            ),
+          ],
+        ),
+      );
+      final counts = rows.where((r) => r[5] == 'Count').toList();
+      expect(counts, isNotEmpty);
+      for (final r in counts) {
+        expect(r[12], 'R. Rakoto, "Rosa"');
+        expect(r[13], 'Kenya');
+        expect(r[14], "'=Lead", reason: 'formula starters stay text');
+        // The profile columns still say what the profile says.
+        expect(r[2], testCatalog.personOf(a).fullName);
+      }
+      // A missing seat has no typed words.
+      final missing = rows.firstWhere((r) => r[5] == 'Missing');
+      expect(missing.sublist(12), ['', '', '']);
+    });
+
+    test('a report sent before the typed words existed has empty cells', () {
+      final a = testCatalog.assignments.firstWhere((x) => x.hasCounts);
+      final rows = parseCsv(
+        buildReportsCsv(
+          period: testPeriod,
+          catalog: testCatalog,
+          reports: [sent(a)],
+        ),
+      );
+      expect(rows.firstWhere((r) => r[5] == 'Count').sublist(12), ['', '', '']);
+    });
+
+    test('a switched-off person keeps their report and is never missing', () {
+      final off = testCatalog.assignments.firstWhere((x) => x.hasCounts);
+      final people = [
+        for (final p in testCatalog.persons)
+          p.id == off.personId
+              ? Person(id: p.id, fullName: p.fullName, active: false)
+              : p,
+      ];
+      final cat = Catalog(
+        teams: testCatalog.teams,
+        persons: people,
+        assignments: testCatalog.assignments,
+      );
+      final withReport = parseCsv(
+        buildReportsCsv(period: testPeriod, catalog: cat, reports: [sent(off)]),
+      );
+      expect(
+        withReport.where((r) => r[4] == off.code && r[5] == 'Count'),
+        isNotEmpty,
+        reason: 'their sent report is still exported',
+      );
+      final without = parseCsv(
+        buildReportsCsv(period: testPeriod, catalog: cat, reports: const []),
+      );
+      expect(
+        without.where((r) => r[4] == off.code),
+        isEmpty,
+        reason: 'a switched-off seat is nobody to wait for',
+      );
+      expect(without.where((r) => r[5] == 'Missing').length, cat.expectedCount);
     });
   });
 }

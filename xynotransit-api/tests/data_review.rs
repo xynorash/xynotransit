@@ -435,22 +435,35 @@ async fn a_seat_that_is_switched_off_after_its_report_was_sent() {
     let (s, v) = app.put_report(&ana, &p, A_ANA, ana_report()).await;
     assert_eq!(s, StatusCode::NOT_FOUND, "{v}");
     assert_eq!(v["error"], "That seat does not exist.");
-    // The summary no longer expects the seat but still counts what was sent (README: old reports
-    // still count), and the person still shows because a report exists.
+    // The summary no longer expects the seat and does not count its report as submitted (so
+    // submitted never exceeds expected), but the report is kept apart and the seat still shows,
+    // tagged inactive, because a report exists.
     let after = summary(&app, &t, &p).await;
     assert_eq!(after["expected"], 2);
-    assert_eq!(after["submitted"], 2);
+    assert_eq!(after["submitted"], 1);
+    assert_eq!(after["submitted_inactive"], 1);
     assert!(after["people"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|x| x["assignment_id"] == A_ANA && x["submitted"] == true));
-    // The deck is for active seats only: expected 2, one slide (Ben) plus none for Ana.
+        .any(|x| x["assignment_id"] == A_ANA && x["submitted"] == true && x["active"] == false));
+    // The old report is still in the deck: expected 2 seats, 2 slides, 1 of them from a switched-off seat.
     let d = deck(&app, &t, &p).await;
     assert_eq!(
-        (d["expected_count"].as_i64(), d["included_count"].as_i64()),
-        (Some(2), Some(1))
+        (
+            d["expected_count"].as_i64(),
+            d["included_count"].as_i64(),
+            d["switched_off_count"].as_i64()
+        ),
+        (Some(2), Some(2), Some(1))
     );
+    assert_eq!(d["items"].as_array().unwrap().len(), 2);
+    // The manager's report list still has it.
+    let (s, list) = app
+        .call("GET", &format!("/api/periods/{p}/reports"), Some(&t), None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(list.as_array().unwrap().len(), 2);
     // Switch it on again and its report is back in the deck, untouched.
     app.call(
         "PATCH",
@@ -461,6 +474,65 @@ async fn a_seat_that_is_switched_off_after_its_report_was_sent() {
     .await;
     let d = deck(&app, &t, &p).await;
     assert_eq!(d["included_count"], 2);
+    assert_eq!(d["switched_off_count"], 0);
+}
+
+/// D2 as the black-box test found it: a person is deactivated after sending. Nothing may read
+/// "2 of 1", and the report must stay visible everywhere a manager looks.
+#[tokio::test]
+async fn a_deactivated_person_with_a_sent_report_never_makes_submitted_exceed_expected() {
+    let app = TestApp::new().await;
+    let t = boss(&app).await;
+    let ana = app.token_for(ANA, false);
+    let p = app.ensure_period(&t, "2026-02-01").await;
+    app.put_report(&ana, &p, A_ANA, ana_report()).await;
+    app.put_report(&t, &p, A_BEN, ben_report()).await;
+    let (s, v) = app
+        .call(
+            "PATCH",
+            &format!("/api/persons/{ANA}"),
+            Some(&t),
+            Some(json!({"active": false})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+
+    let sm = summary(&app, &t, &p).await;
+    // Cora (manager) and Ben are expected; Ana is switched off.
+    assert_eq!(sm["expected"], 2, "{sm}");
+    assert_eq!(sm["submitted"], 1, "{sm}");
+    assert_eq!(sm["submitted_inactive"], 1, "{sm}");
+    for team in sm["teams"].as_array().unwrap() {
+        assert!(
+            team["submitted"].as_i64() <= team["expected"].as_i64(),
+            "{team}"
+        );
+    }
+    let tr = sm["trend"].as_array().unwrap().last().unwrap().clone();
+    assert!(tr["submitted"].as_i64() <= tr["expected"].as_i64(), "{tr}");
+    assert!(sm["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|x| x["name"] == "Ana Rakoto" && x["active"] == false && x["submitted"] == true));
+
+    let (s, list) = app
+        .call("GET", &format!("/api/periods/{p}/reports"), Some(&t), None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(list.as_array().unwrap().len(), 2);
+
+    let d = deck(&app, &t, &p).await;
+    assert_eq!(d["expected_count"], 2);
+    assert_eq!(d["included_count"], 2);
+    assert_eq!(d["switched_off_count"], 1);
+    let who: Vec<String> = d["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["snapshot"].to_string())
+        .collect();
+    assert!(who.iter().any(|j| j.contains("Ana")), "{who:?}");
 }
 
 #[tokio::test]

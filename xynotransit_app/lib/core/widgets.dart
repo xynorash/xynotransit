@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../domain/numbers.dart';
 import 'format.dart';
@@ -391,54 +390,40 @@ class Labeled extends StatelessWidget {
 /// Plain message when a number is over [countMax].
 const numberTooLargeMessage = 'A number can be at most $countMax.';
 
-/// Reads a pasted or typed whole number. Spaces, thin spaces and commas are
-/// thousands separators and are dropped. Returns the digits, or a plain
-/// message when the text is not a whole number from 0 up to [countMax].
+/// Plain message when the text is not a whole number.
+const wholeNumbersOnlyMessage =
+    'Whole numbers only: no dots, commas or letters.';
+
+/// Reads a pasted or typed whole number: digits, with spaces, thin spaces or
+/// no-break spaces as thousands separators (dropped). Returns the digits, or a
+/// plain message when the text is not a whole number from 0 up to [countMax].
+/// Dots, commas, signs and letters are never guessed at: the text is refused.
 ({String? digits, String? problem}) parseWholeNumber(String raw) {
-  final cleaned = raw.replaceAll(RegExp(r"[\s\u00A0\u202F,'\u2019_]"), '');
+  final cleaned = raw.replaceAll(RegExp(r'[\s   ]'), '');
   if (cleaned.isEmpty) return (digits: '', problem: null);
-  if (!RegExp(r'^\d+$').hasMatch(cleaned)) {
-    final decimalOrNegative = RegExp(r'[.\-\u2212]').hasMatch(cleaned);
-    return (
-      digits: null,
-      problem: decimalOrNegative ? 'Whole numbers only' : 'Digits only',
-    );
+  if (!RegExp(r'^[0-9]+$').hasMatch(cleaned)) {
+    return (digits: null, problem: wholeNumbersOnlyMessage);
   }
-  final trimmed = cleaned.replaceFirst(RegExp(r'^0+(?=\d)'), '');
+  final trimmed = cleaned.replaceFirst(RegExp(r'^0+(?=[0-9])'), '');
   if (parseCount(trimmed) == null) {
     return (digits: null, problem: numberTooLargeMessage);
   }
   return (digits: trimmed, problem: null);
 }
 
-class _WholeNumberFormatter extends TextInputFormatter {
-  _WholeNumberFormatter(this.onProblem);
+/// Pixels the field's border and decoration take besides its padding.
+const _chrome = 10.0;
 
-  final ValueChanged<String?> onProblem;
-
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final r = parseWholeNumber(newValue.text);
-    if (r.problem != null) {
-      onProblem(r.problem);
-      return oldValue;
-    }
-    onProblem(null);
-    if (r.digits == newValue.text) return newValue;
-    return TextEditingValue(
-      text: r.digits!,
-      selection: TextSelection.collapsed(offset: r.digits!.length),
-    );
-  }
-}
+/// The widest number a count can show with separators.
+const _widestNumber = '0,000,000,000';
 
 /// Whole-number input that keeps its text in sync with an outside value.
-/// Accepts pasted text with spaces or thousands separators, refuses decimals,
-/// minus signs and letters with a plain message, and shows thousands
-/// separators while the field is not being edited.
+///
+/// The text stays exactly as typed: nothing is dropped. When it is not a whole
+/// number (see [parseWholeNumber]) the field is invalid: the value counts as
+/// missing (null), a plain message stays under the field with a red outline.
+/// Separators show only when a valid value is left, and the text size shrinks
+/// when needed so the largest number (13 characters) always fits.
 class NumberField extends StatefulWidget {
   const NumberField({
     super.key,
@@ -466,24 +451,27 @@ class _NumberFieldState extends State<NumberField> {
     text: _show(widget.value, false),
   );
   FocusNode? _own;
-  String? _problem;
+
+  /// The text last written with separators; anything else is as typed.
+  String? _display = '';
 
   FocusNode get _focus => widget.focusNode ?? (_own ??= FocusNode());
 
-  late final _formatter = _WholeNumberFormatter((p) {
-    if (p != _problem) {
-      // Called from inside the text input: show it after this frame.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() => _problem = p);
-      });
-    }
-  });
+  String _show(int? v, bool focused) {
+    if (v == null) return _display = '';
+    final text = focused ? v.toString() : thousands(v);
+    _display = focused ? null : text;
+    return text;
+  }
 
-  static String _show(int? v, bool focused) => v == null
-      ? ''
-      : focused
-      ? v.toString()
-      : thousands(v);
+  /// The value the text stands for: null when empty or not a whole number.
+  int? _valueOf(String text) {
+    // Separators the field wrote itself are not typed text.
+    final plain = text == _display ? text.replaceAll(',', '') : text;
+    final r = parseWholeNumber(plain);
+    if (r.problem != null || r.digits!.isEmpty) return null;
+    return int.parse(r.digits!);
+  }
 
   @override
   void initState() {
@@ -492,12 +480,11 @@ class _NumberFieldState extends State<NumberField> {
   }
 
   void _onFocus() {
-    final text = _show(
-      parseCount(_c.text.replaceAll(',', '')),
-      _focus.hasFocus,
-    );
+    // Only text that is a valid number is rewritten; anything else stays as typed.
+    final v = _valueOf(_c.text);
+    if (v == null) return;
+    final text = _show(v, _focus.hasFocus);
     if (text != _c.text) _c.text = text;
-    if (!_focus.hasFocus && _problem != null) setState(() => _problem = null);
   }
 
   @override
@@ -507,8 +494,7 @@ class _NumberFieldState extends State<NumberField> {
       (old.focusNode ?? _own)?.removeListener(_onFocus);
       _focus.addListener(_onFocus);
     }
-    final typed = parseCount(_c.text.replaceAll(',', ''));
-    if (typed != widget.value) {
+    if (_valueOf(_c.text) != widget.value) {
       _c.text = _show(widget.value, _focus.hasFocus);
     }
   }
@@ -521,12 +507,47 @@ class _NumberFieldState extends State<NumberField> {
     super.dispose();
   }
 
+  void _changed(String s) {
+    setState(() {});
+    widget.onChanged(_valueOf(s));
+  }
+
+  /// Font size at which [_widestNumber] fits [inner] pixels, at most [size].
+  double _fit(BuildContext context, double inner, double size) {
+    final scaler = MediaQuery.textScalerOf(context);
+    double width(double s) {
+      final p = TextPainter(
+        text: TextSpan(
+          text: _widestNumber,
+          style: monoStyle(
+            context,
+            size: s,
+            weight: FontWeight.w500,
+          ).copyWith(letterSpacing: 0),
+        ),
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+      )..layout();
+      final w = p.width;
+      p.dispose();
+      return w;
+    }
+
+    final w = width(size);
+    if (w <= inner || inner <= 0) return size;
+    return (size * inner / w * 0.96).clamp(9.0, size);
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final error = _problem ?? widget.errorText;
+    final problem = parseWholeNumber(
+      _c.text == _display ? _c.text.replaceAll(',', '') : _c.text,
+    ).problem;
+    final error = problem ?? widget.errorText;
+    const pad = 4.0;
     final deco = xInput(context, hint: '0').copyWith(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+      contentPadding: const EdgeInsets.symmetric(horizontal: pad, vertical: 8),
       errorText: error,
       errorMaxLines: 3,
       errorStyle: bodyStyle(context, size: 13, color: t.bad, height: 1.25),
@@ -539,22 +560,21 @@ class _NumberFieldState extends State<NumberField> {
         borderSide: BorderSide(color: t.bad, width: 2),
       ),
     );
-    final field = TextField(
-      controller: _c,
-      focusNode: _focus,
-      textAlign: TextAlign.center,
-      keyboardType: TextInputType.number,
-      inputFormatters: [_formatter],
-      textInputAction: TextInputAction.next,
-      style: monoStyle(
-        context,
-        size: 22,
-        weight: FontWeight.w500,
-        color: t.ink,
-      ),
-      decoration: deco,
-      onChanged: (s) => widget.onChanged(
-        s.isEmpty ? null : parseCount(s.replaceAll(',', '')),
+    final field = LayoutBuilder(
+      builder: (context, box) => TextField(
+        controller: _c,
+        focusNode: _focus,
+        textAlign: TextAlign.center,
+        keyboardType: TextInputType.number,
+        textInputAction: TextInputAction.next,
+        style: monoStyle(
+          context,
+          size: _fit(context, box.maxWidth - 2 * pad - _chrome, 22),
+          weight: FontWeight.w500,
+          color: t.ink,
+        ).copyWith(letterSpacing: 0),
+        decoration: deco,
+        onChanged: _changed,
       ),
     );
     final name = widget.semanticLabel;

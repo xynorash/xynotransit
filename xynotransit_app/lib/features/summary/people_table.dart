@@ -88,7 +88,7 @@ class _PeopleTableCardState extends State<PeopleTableCard> {
     final t = context.tokens;
     final all = _sorted();
     final rows = all.take(_limit).toList();
-    final missing = widget.people.where((p) => !p.submitted).length;
+    final missing = widget.people.where((p) => p.active && !p.submitted).length;
     return ChartCard(
       title: 'People',
       explain:
@@ -278,7 +278,9 @@ class _PersonRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final p = person;
-    final label = StringBuffer('${p.name}, ${p.role}, ${p.team}: ');
+    final label = StringBuffer(
+      '${p.name}, ${p.role}, ${p.team}${p.active ? '' : ', inactive'}: ',
+    );
     if (p.submitted) {
       label.write(
         'report sent. ${p.met} met, ${p.partly} partly, ${p.missed} missed. '
@@ -309,14 +311,43 @@ class _PersonRow extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        p.name,
-                        style: bodyStyle(
-                          context,
-                          size: 15,
-                          weight: FontWeight.w500,
-                          height: 1.3,
-                        ),
+                      Wrap(
+                        spacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(
+                            p.name,
+                            style: bodyStyle(
+                              context,
+                              size: 15,
+                              weight: FontWeight.w500,
+                              height: 1.3,
+                            ),
+                          ),
+                          if (!p.active)
+                            Container(
+                              key: ValueKey('inactive-${p.assignmentId}'),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: t.soft,
+                                border: Border.all(color: t.line),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Inactive',
+                                style: bodyStyle(
+                                  context,
+                                  size: 12,
+                                  weight: FontWeight.w700,
+                                  color: t.muted,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                       Text(
                         '${p.role} · ${p.team}',

@@ -34,90 +34,9 @@ double contrast(Color a, Color b) {
 void main() {
   setUpAll(loadAppFonts);
 
-  group('parseWholeNumber', () {
-    test('accepts separators and spaces', () {
-      expect(parseWholeNumber('1 200').digits, '1200');
-      expect(parseWholeNumber('1,234,567').digits, '1234567');
-      expect(parseWholeNumber('1 200').digits, '1200');
-      expect(parseWholeNumber("1'200").digits, '1200');
-      expect(parseWholeNumber('  ').digits, '');
-      expect(parseWholeNumber('007').digits, '7');
-      expect(parseWholeNumber('0').digits, '0');
-    });
-    test('refuses decimals, negatives, letters and huge numbers', () {
-      expect(parseWholeNumber('12.5').problem, 'Whole numbers only');
-      expect(parseWholeNumber('-5').problem, 'Whole numbers only');
-      expect(parseWholeNumber('−5').problem, 'Whole numbers only');
-      expect(parseWholeNumber('12a').problem, 'Digits only');
-      expect(
-        parseWholeNumber('1000000001').problem,
-        'A number can be at most 1000000000.',
-      );
-      expect(parseWholeNumber('1000000000').digits, '1000000000');
-      expect(parseWholeNumber('1 000 000 000').digits, '1000000000');
-      expect(parseWholeNumber('999999999').digits, '999999999');
-      expect(parseWholeNumber('abc').problem, 'Digits only');
-    });
-  });
-
   group('number fields', () {
-    testWidgets('paste with spaces and commas is read as a number', (t) async {
-      final c = await pumpCustom(t, customCatalog(1));
-      await t.enterText(numberText(0), '1 234,567');
-      await t.pump();
-      expect(c.read(formControllerProvider).report!.values['m0']![0], 1234567);
-      expect(textOf(t, 0), '1234567');
-    });
-
-    testWidgets('the documented maximum is accepted, one more is refused', (
-      t,
-    ) async {
-      final c = await pumpCustom(t, customCatalog(1));
-      await t.enterText(numberText(0), '1 000 000 000');
-      await t.pump();
-      expect(
-        c.read(formControllerProvider).report!.values['m0']![0],
-        1000000000,
-      );
-      expect(textOf(t, 0), '1000000000');
-      await t.enterText(numberText(0), '1000000001');
-      await t.pump();
-      await t.pump();
-      expect(textOf(t, 0), '1000000000');
-      expect(find.text('A number can be at most 1000000000.'), findsOneWidget);
-      for (final bad in ['12.5', '-5', 'abc']) {
-        await t.enterText(numberText(0), bad);
-        await t.pump();
-        await t.pump();
-        expect(textOf(t, 0), '1000000000');
-        expect(
-          c.read(formControllerProvider).report!.values['m0']![0],
-          1000000000,
-        );
-      }
-    });
-
-    testWidgets('a decimal or minus sign is refused with a plain message', (
-      t,
-    ) async {
-      final c = await pumpCustom(t, customCatalog(1));
-      await t.enterText(numberText(0), '12');
-      await t.enterText(numberText(0), '12.5');
-      await t.pump();
-      await t.pump();
-      expect(textOf(t, 0), '12');
-      expect(find.text('Whole numbers only'), findsOneWidget);
-      expect(c.read(formControllerProvider).report!.values['m0']![0], 12);
-      await t.enterText(numberText(0), '-3');
-      await t.pump();
-      await t.pump();
-      expect(textOf(t, 0), '12');
-      // The next good entry clears the message.
-      await t.enterText(numberText(0), '13');
-      await t.pump();
-      await t.pump();
-      expect(find.text('Whole numbers only'), findsNothing);
-    });
+    // Typing, pasting, refusing and the width of the field are in
+    // employee_numbers_test.dart.
 
     testWidgets('thousands separators show when the field is left', (t) async {
       await pumpCustom(t, customCatalog(1));

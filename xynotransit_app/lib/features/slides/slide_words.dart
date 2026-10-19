@@ -55,8 +55,11 @@ class SlideWords {
     return meetingDate == null ? '' : longDate(meetingDate).toUpperCase();
   }
 
-  String coverPill(String team, int count) =>
-      texts.render('coverPill', {'team': team, 'count': count});
+  String coverPill(String team, int count) => texts.render('coverPill', {
+    'team': team,
+    'count': count,
+    'reports': count == 1 ? 'report' : 'reports',
+  });
 
   Map<String, Object?> divider(
     String team,

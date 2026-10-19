@@ -8,7 +8,7 @@ Choices made where the spec was silent.
 - PNG export is a ZIP with one PNG per slide. PPTX slides are full-bleed pictures of 3840 x 2160 (twice the 1920 x 1080 slide, for sharp projection), and the speaker notes hold the full content of the slide, one fact per line, so the notes stand in for the picture.
 - A cover or divider with more team pills than fit ends with one last pill reading "+N more".
 - A bar chart slide lays its totals out 3 to a row for up to 6 counts and 4 to a row for 7 and 8 counts.
-- A meeting date control was added for controllers because period.meeting_date had no UI.
+- A meeting date control was added for managers because period.meeting_date had no UI.
 - A demo mode with an in-memory backend was added so the app runs without a server. It is on when API_BASE_URL is not set.
 - The axum API (xynotransit-api) replaced the Supabase backend of the spec. What that changed:
   - There is no row level security. Authorization is done in the API, and the role is re-read from the database on every request.
@@ -17,11 +17,11 @@ Choices made where the spec was silent.
   - Deck snapshots are built on the server from submitted reports, never from client JSON.
   - New tables live in a separate file (initdb/02-api.sql). The core schema is untouched.
 - An ensure period endpoint (POST /api/periods/ensure) lets any member open a new period. The start month is normalised to the first of the month.
-- Closed period rule: when a period is closed, only a controller can send or change reports in it. A period is closed with SQL, there is no UI for it.
+- Closed period rule: when a period is closed, only a manager can send or change reports in it. A period is closed with SQL, there is no UI for it.
 - Sending a report validates in plain words, and sending again replaces the earlier report, never duplicates it.
 - Slides never draw text below 20 px (18 px for the value labels of the bars). Up to 6 targets sit in one column. 7 to 10 targets, and 6 targets that are too long for one column at 20 px, switch to a two-column grid of compact cards; a text that still does not fit ends with an ellipsis on the slide (the full text stays in the alt text and notes).
 - The emails in the seed files are placeholders (name@xynotransit.example).
-- Nobody is controller until BOOTSTRAP_CONTROLLER_EMAIL is set on the API. It creates the person when missing (name from BOOTSTRAP_CONTROLLER_NAME, else the capitalised part of the email before the @) and promotes and activates it when present.
+- Nobody is a manager until BOOTSTRAP_CONTROLLER_EMAIL is set on the API. It creates the person when missing (name from BOOTSTRAP_CONTROLLER_NAME, else the capitalised part of the email before the @) and promotes and activates it when present.
 - A magic link is valid 15 minutes, works once, and at most 5 links per person per hour are sent.
 - The login session (JWT) lasts 7 days and is kept in shared_preferences.
 - Numbers in the form are whole numbers, 0 or more, up to 1000000000. Notes are 1 to 70 characters, at most 3 per box. Target comments are at most 200 characters.
@@ -33,7 +33,7 @@ Choices made where the spec was silent.
 - There is no connectivity_plus, so the send retry is timer based (every 15 seconds).
 - The default period on first load is the current quarter, so older periods are picked in the dropdown.
 - Layout swapped on request: on the manager dashboard the slides are left as one vertical stream and the table and period on the right; below 1100 px the dashboard column comes first.
-- UI split by role on request: employees see only their form; managers see the dashboard with slides, table and exports; the API enforces the same split (list of reports, deck and live events are controller only).
+- UI split by role on request: employees see only their form; managers see the dashboard with slides, table and exports; the API enforces the same split (list of reports, deck and live events are manager only).
 - Routes: employees land on /report, managers on /manager. / and /signin redirect by role, and an employee who opens /manager is sent to /report.
 - A manager fixes a report with Edit in the table, which loads it into the form (/report), then "Back to the dashboard".
 - The catalog hides other people's emails from employees (their own stays visible); managers get all emails.
@@ -44,11 +44,11 @@ Choices made where the spec was silent.
 - Target comments are optional free text. They are shown on the manager Overview ("What people wrote"), not on the slides.
 - The last active manager cannot be demoted or deactivated.
 - Editing counts or targets retires the old row and adds a new one (a rename of a count keeps its row). Old reports keep the wording and counts they were answered against.
-- Deactivating a person or seat deletes nothing. Old reports stay and still count in totals. A seat is expected to report only when the seat and its person are both active; the Overview tiles, the Reports table and the API count it the same way. The person dialog says what saving an inactive person does and how to undo it (turn Active on again and save).
+- Deactivating a person or seat deletes nothing. Old reports stay: they remain in the Reports table (tagged Inactive), the CSV, generated decks and the Overview people table. A seat is expected to report only when the seat and its person are both active; "N of M" everywhere (Overview tiles, donut, team rows, Reports header, API) counts only the sent reports of expected seats, so N is never above M, and reports of switched-off people are never counted as missing and are named apart ("plus 1 from a switched-off person"). The person dialog says what saving an inactive person does and how to undo it (turn Active on again and save).
 - Summary: only submitted reports count; volume is the sum of all counts; counts with the same name (ignoring case) are added across seats; expected for older periods in the trend is the active seats now.
 - Demo mode lets people, teams, seats and definitions be edited too, in memory only.
 - Manager routes: /manager is Overview, /manager/reports is Reports (slides, the received table and exports), /manager/deck is Deck text, /manager/people is People.
-- Export data (CSV) on the Reports page downloads the shown period's sent reports as one long table (Period, Team, Person, Role, Seat, Type, Item, Month, Value, Status, Text, Sent at). Types: Count (one row per count and month), Target (status and comment), Note (one row per note) and Missing (a seat with no sent report). The file is UTF-8 with a byte order mark so Excel reads accents, lines end with CRLF, cells follow RFC 4180 quoting, and a text cell that starts with = + - @ or a tab gets a leading apostrophe so a spreadsheet never runs it as a formula. The name is Xynotransit_reports_<period>.csv.
+- Export data (CSV) on the Reports page downloads the shown period's sent reports as one long table (Period, Team, Person, Role, Seat, Type, Item, Month, Value, Status, Text, Sent at, Reported name, Reported country, Reported role; the last three hold the words the person typed on the form, kept after the first twelve so old readers still work). Types: Count (one row per count and month), Target (status and comment), Note (one row per note) and Missing (a seat with no sent report). The file is UTF-8 with a byte order mark so Excel reads accents, lines end with CRLF, cells follow RFC 4180 quoting, and a text cell that starts with = + - @ or a tab gets a leading apostrophe so a spreadsheet never runs it as a formula. The name is Xynotransit_reports_<period>.csv.
 - Large lists: the People screen builds only the rows near the screen, with search, team filter and sort; the Overview people table shows 100 rows and a button for more, with search and Missing only; deleting a team asks first.
 - Slide words are customizable. Every text a manager may want to change is a field (see the README, "Deck text"); the words in the code are only the defaults.
 - Words are stored per period. A period without its own words inherits the latest earlier period's (by start month), else the built-in defaults.
@@ -63,3 +63,6 @@ Choices made where the spec was silent.
 - Only a manager can read or save slide words (API: 403 for others).
 - Known gap: the divider spec does not carry the period label yet, so `{period}` in the divider small line renders empty (`dividerPeriodLabel` in `slide_view.dart`). The default text does not use it.
 - The Suggestions footer is "{title} · {period}", because the footer template needs a team.
+- Reset all to defaults on Deck text asks first (Reset or Cancel); nothing is saved until Save.
+- When the server answers 429 with a Retry-After header, the sign-in screen says how long to wait.
+- User-facing text says manager, never controller. The API role value `controller`, the database enum and internal identifiers keep that word.

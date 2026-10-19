@@ -113,8 +113,8 @@ async fn put_texts(
 }
 
 async fn deck_json(conn: &mut PgConnection, run_id: Uuid) -> Result<Value, ApiError> {
-    let run: (Uuid, Uuid, DateTime<Utc>, i32, i32, Value) = sqlx::query_as(
-        "select id, period_id, generated_at, expected_count, included_count, texts
+    let run: (Uuid, Uuid, DateTime<Utc>, i32, i32, Value, i32) = sqlx::query_as(
+        "select id, period_id, generated_at, expected_count, included_count, texts, switched_off_count
          from deck_run where id = $1",
     )
     .bind(run_id)
@@ -132,6 +132,7 @@ async fn deck_json(conn: &mut PgConnection, run_id: Uuid) -> Result<Value, ApiEr
         "generated_at": run.2.to_rfc3339_opts(SecondsFormat::Millis, true),
         "expected_count": run.3,
         "included_count": run.4,
+        "switched_off_count": run.6,
         "texts": deck_text::complete(&run.5),
         "items": items.into_iter().map(|(r, s, snap)| json!({
             "report_id": r.to_string(), "sort": s, "snapshot": snap,
@@ -168,6 +169,8 @@ struct SeatRow {
     full_name: String,
     role_title: String,
     team: String,
+    /// False when the seat or its person is switched off.
+    live: bool,
 }
 
 async fn generate(
@@ -189,14 +192,16 @@ async fn generate(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Submitted reports in deck order: team, then seat.
+    // Every submitted report in deck order: team, then seat. Reports of switched-off seats or
+    // people are still included (and counted in switched_off_count, never in expected_count).
     let seats: Vec<SeatRow> = sqlx::query_as(
-        "select r.id as report_id, a.id as assignment_id, a.code, p.full_name, a.role_title, t.name as team
+        "select r.id as report_id, a.id as assignment_id, a.code, p.full_name, a.role_title, t.name as team,
+                (a.active and p.active) as live
          from report r
          join assignment a on a.id = r.assignment_id
          join person p on p.id = a.person_id
          join team t on t.id = a.team_id
-         where r.period_id = $1 and r.status = 'submitted' and a.active and p.active
+         where r.period_id = $1 and r.status = 'submitted'
          order by t.sort, t.id, a.sort, a.code",
     )
     .bind(period_id)
@@ -253,6 +258,17 @@ async fn generate(
                 .flatten()
                 .find(|k| k["kpi_def_id"].as_str() == Some(kpi.to_string().as_str()))
                 .and_then(|k| k["status"].as_str().map(str::to_string))
+        };
+        let comment_of = |kpi: Uuid| -> Option<String> {
+            report["kpis"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|k| k["kpi_def_id"].as_str() == Some(kpi.to_string().as_str()))
+                .and_then(|k| k["comment"].as_str())
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .map(str::to_string)
         };
         let notes_of = |kind: &str| -> Vec<String> {
             let mut v: Vec<(i64, String)> = report["notes"]
@@ -320,7 +336,7 @@ async fn generate(
                 .filter(|k| {
                     k.1 == seat.assignment_id && answered_kpis.contains(k.0.to_string().as_str())
                 })
-                .map(|k| (k.2.clone(), status_of(k.0)))
+                .map(|k| (k.2.clone(), status_of(k.0), comment_of(k.0)))
                 .collect(),
             well: notes_of("well"),
             wrong: notes_of("wrong"),
@@ -333,14 +349,16 @@ async fn generate(
     let (texts, _, _) = effective_texts(&mut tx, period_id, start).await?;
 
     let (run_id,): (Uuid,) = sqlx::query_as(
-        "insert into deck_run (period_id, generated_by, expected_count, included_count, texts)
-         values ($1, $2, $3, $4, $5) returning id",
+        "insert into deck_run (period_id, generated_by, expected_count, included_count, texts,
+                               switched_off_count)
+         values ($1, $2, $3, $4, $5, $6) returning id",
     )
     .bind(period_id)
     .bind(user.person_id)
     .bind(expected as i32)
     .bind(seats.len() as i32)
     .bind(Value::Object(texts))
+    .bind(seats.iter().filter(|s| !s.live).count() as i32)
     .fetch_one(&mut *tx)
     .await?;
     // All slides in one statement (a deck can have hundreds).

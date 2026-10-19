@@ -111,7 +111,7 @@ class MemoryRepository implements Repository {
     return AppUser(personId: id, role: p.appRole, label: p.fullName);
   }
 
-  static const _onlyController = 'Only the controller can do this.';
+  static const _onlyController = 'Only the manager can do this.';
 
   /// Closes a period, which the app has no button for (an operator does it
   /// with SQL). Tests use it to prove what a closed period refuses.
@@ -149,10 +149,12 @@ class MemoryRepository implements Repository {
   Stream<Catalog> watchCatalog({bool includeInactive = false}) =>
       _catalogLive.watch().map((c) => _viewOf(c, includeInactive));
 
-  /// Everyone but a controller, and a controller who did not ask, only sees
-  /// seats that are switched on and belong to people who are switched on, and
-  /// those people. A switched off person is not expected to report and cannot
-  /// sign in, so neither they nor their seats are offered.
+  /// A manager who did not ask for the inactive ones sees seats that are
+  /// switched on and belong to people who are switched on, and those people
+  /// (a switched off person is not expected to report and cannot sign in). An
+  /// employee sees only themselves: their own person (with their own email),
+  /// their own seats that are switched on, and the teams of those seats. Nobody
+  /// else's name, role or team is sent to an employee.
   Catalog _viewOf(Catalog c, bool includeInactive) {
     final me = _me();
     if (includeInactive && me.isController) return c;
@@ -160,6 +162,25 @@ class MemoryRepository implements Repository {
       for (final p in c.persons)
         if (p.active) p.id,
     };
+    if (!me.isController) {
+      final mine = me.personId;
+      final seats = [
+        for (final a in c.assignments)
+          if (a.active && a.personId == mine && on.contains(a.personId)) a,
+      ];
+      final teamIds = {for (final a in seats) a.teamId};
+      return Catalog(
+        teams: [
+          for (final t in c.teams)
+            if (teamIds.contains(t.id)) t,
+        ],
+        persons: [
+          for (final p in c.persons)
+            if (p.id == mine && p.active) p,
+        ],
+        assignments: seats,
+      );
+    }
     final seats = c.assignments
         .where((a) => a.active && on.contains(a.personId))
         .toList();
@@ -167,16 +188,7 @@ class MemoryRepository implements Repository {
       teams: c.teams,
       persons: [
         for (final p in c.persons)
-          if (p.active)
-            // Employees see their own email and nobody else's.
-            me.isController || p.id == me.personId
-                ? p
-                : Person(
-                    id: p.id,
-                    fullName: p.fullName,
-                    appRole: p.appRole,
-                    active: p.active,
-                  ),
+          if (p.active) p,
       ],
       assignments: seats,
     );
@@ -218,7 +230,7 @@ class MemoryRepository implements Repository {
 
   Period? periodById(String id) => _periods[id];
 
-  /// Live lists are for the controller, like the API's list and event calls.
+  /// Live lists are for the manager, like the API's list and event calls.
   RepositoryException? _streamRefusal(String periodId) {
     try {
       _requireController();
@@ -381,9 +393,13 @@ class MemoryRepository implements Repository {
     if (known == null) {
       throw const RepositoryException('That period does not exist.');
     }
-    // A seat is expected when it and its person are switched on, like the server.
-    final seats = _catalog.assignments.where(_catalog.isExpected).toList();
-    final order = {for (var i = 0; i < seats.length; i++) seats[i].id: i};
+    // A seat is expected when it and its person are switched on, like the
+    // server. Reports of switched off seats or people are still in the deck.
+    final expected = _catalog.assignments.where(_catalog.isExpected).length;
+    final order = {
+      for (var i = 0; i < _catalog.assignments.length; i++)
+        _catalog.assignments[i].id: i,
+    };
     // Works with any number of submitted reports, none included.
     final submitted =
         _reportsOf(known.id)
@@ -418,8 +434,14 @@ class MemoryRepository implements Repository {
       id: 'deck-${++_seq}',
       periodId: known.id,
       generatedAt: _clock(),
-      expectedCount: seats.length,
+      expectedCount: expected,
       includedCount: submitted.length,
+      switchedOffCount: submitted
+          .where(
+            (r) =>
+                !_catalog.isExpected(_catalog.assignmentById(r.assignmentId)!),
+          )
+          .length,
       items: items,
       texts: _effectiveTexts(known.id).texts,
     );
@@ -856,7 +878,7 @@ class DemoAuth implements AuthService {
   static const controller = AppUser(
     personId: null,
     role: AppRole.controller,
-    label: 'Controller',
+    label: 'Manager',
   );
 
   /// The demo people a viewer can act as. Follows the people of the

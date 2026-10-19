@@ -83,9 +83,9 @@ Future<void> revealGenerate(WidgetTester tester) async {
 }
 
 Future<void> choose(WidgetTester tester, String label) async {
-  await tester.ensureVisible(find.text('Choose your name'));
+  await tester.ensureVisible(find.text('Choose a seat'));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Choose your name'));
+  await tester.tap(find.text('Choose a seat'));
   await tester.pumpAndSettle();
   await tester.tap(find.text(label).last);
   await tester.pumpAndSettle();

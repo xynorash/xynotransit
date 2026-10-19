@@ -1,6 +1,7 @@
 import '../../core/format.dart';
 import '../../domain/deck.dart';
 import '../../domain/enums.dart';
+import 'kpi_slide.dart' show targetComment;
 import 'slide_words.dart';
 
 /// Plain-words description of a slide, in the words of its deck. Used as the
@@ -64,7 +65,11 @@ String slideNotes(SlideSpec spec) {
       final t = s.snapshot.targets;
       lines.add(t.isEmpty ? 'Targets: none.' : 'Targets:');
       for (var i = 0; i < t.length; i++) {
-        lines.add('${i + 1}. ${t[i].text}: ${_statusWord(t[i].status)}.');
+        final comment = targetComment(t[i]);
+        lines.add(
+          '${i + 1}. ${t[i].text}: ${_statusWord(t[i].status)}.'
+          '${comment == null ? '' : ' Comment: $comment'}',
+        );
       }
       if (s.snapshot.metrics.isNotEmpty) {
         lines.add(

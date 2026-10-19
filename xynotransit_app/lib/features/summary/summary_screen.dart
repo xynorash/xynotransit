@@ -8,6 +8,7 @@ import '../../core/widgets.dart';
 import '../../domain/period.dart';
 import '../../domain/summary.dart';
 import '../form/form_screen.dart';
+import '../table/report_counts.dart';
 import '../shell/top_bar.dart';
 import 'people_table.dart';
 import 'summary_charts.dart';
@@ -182,8 +183,11 @@ class _Loaded extends StatelessWidget {
         ),
       );
     }
-    final sent = s.submitted > 0;
-    final trendHasData = s.trend.any((p) => p.submitted > 0);
+    // Reports of switched-off people are real too: the graphs show them.
+    final sent = s.submitted + s.submittedInactive > 0;
+    final trendHasData = s.trend.any(
+      (p) => p.submitted + p.submittedInactive > 0,
+    );
     final reported = ReportedCard(summary: s);
     final targets = TargetsCard(summary: s);
     final volume = VolumeCard(summary: s);
@@ -215,7 +219,7 @@ class _Loaded extends StatelessWidget {
           children: [
             _Tiles(summary: s),
             const SizedBox(height: _gap),
-            if (s.people.any((p) => !p.submitted)) ...[
+            if (s.people.any((p) => p.active && !p.submitted)) ...[
               _MissingCard(people: s.people),
               const SizedBox(height: _gap),
             ],
@@ -264,10 +268,18 @@ class _MissingCard extends StatelessWidget {
     final t = context.tokens;
     final missing = [
       for (final p in people)
-        if (!p.submitted) p,
+        if (p.active && !p.submitted) p,
     ];
+    // A name with more than one seat shows which seat is missing.
+    final seats = <String, int>{};
+    for (final p in people) {
+      seats[p.name] = (seats[p.name] ?? 0) + 1;
+    }
     final names = [
-      for (final p in missing.take(_shown)) '${p.name} (${p.team})',
+      for (final p in missing.take(_shown))
+        (seats[p.name] ?? 1) > 1
+            ? '${p.name} · ${p.role} (${p.team})'
+            : '${p.name} (${p.team})',
     ];
     final more = missing.length - names.length;
     final text = names.join(', ') + (more > 0 ? ' and $more more' : '');
@@ -309,7 +321,7 @@ class _Tiles extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = summary;
-    final missing = s.people.where((p) => !p.submitted).length;
+    final missing = s.people.where((p) => p.active && !p.submitted).length;
     final volume = s.teams.fold<int>(
       0,
       (a, t) => a + t.volumeByMonth.fold<int>(0, (x, y) => x + y),
@@ -319,7 +331,9 @@ class _Tiles extends StatelessWidget {
         id: 'reports',
         label: 'Reports in',
         value: '${s.submitted} of ${s.expected}',
-        note: 'sent so far',
+        note: s.submittedInactive > 0
+            ? 'sent so far, ${switchedOffPhrase(s.submittedInactive)}'
+            : 'sent so far',
       ),
       _Tile(
         id: 'met',

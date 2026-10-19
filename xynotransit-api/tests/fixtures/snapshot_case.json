@@ -55,7 +55,7 @@
     ],
     "targets": [
       {"text": "On time", "status": "met"},
-      {"text": "No errors", "status": "partly"},
+      {"text": "No errors", "status": "partly", "comment": "two slips"},
       {"text": "Keep costs down", "status": null}
     ],
     "well": ["First good thing", "Second good thing"],

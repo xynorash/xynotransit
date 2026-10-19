@@ -35,22 +35,42 @@ class SnapshotMetric {
 }
 
 class SnapshotTarget {
-  const SnapshotTarget({required this.text, required this.status});
+  const SnapshotTarget({
+    required this.text,
+    required this.status,
+    this.comment,
+  });
   final String text;
+
+  /// What the employee typed under this target, trimmed; null when empty.
+  final String? comment;
 
   /// Null when the person never answered it.
   final KpiStatus? status;
 
-  Map<String, Object?> toJson() => {'text': text, 'status': status?.name};
+  Map<String, Object?> toJson() => {
+    'text': text,
+    'status': status?.name,
+    if (comment != null) 'comment': comment,
+  };
 
-  factory SnapshotTarget.fromJson(Map<String, Object?> j) => SnapshotTarget(
-    text: j['text']! as String,
-    status: KpiStatus.tryParse(j['status'] as String?),
-  );
+  factory SnapshotTarget.fromJson(Map<String, Object?> j) {
+    final c = (j['comment'] as String?)?.trim();
+    return SnapshotTarget(
+      text: j['text']! as String,
+      status: KpiStatus.tryParse(j['status'] as String?),
+      comment: (c == null || c.isEmpty) ? null : c,
+    );
+  }
 }
 
 /// Everything one pair of slides needs. This JSON is the stable contract
 /// between the database (deck_run_item.snapshot) and the slide widgets.
+String? _clean(String? s) {
+  final t = s?.trim();
+  return (t == null || t.isEmpty) ? null : t;
+}
+
 class ReportSnapshot {
   const ReportSnapshot({
     required this.assignmentCode,
@@ -122,7 +142,11 @@ class ReportSnapshot {
       ],
       targets: [
         for (final k in assignment.kpis)
-          SnapshotTarget(text: k.text, status: report.kpis[k.id]?.status),
+          SnapshotTarget(
+            text: k.text,
+            status: report.kpis[k.id]?.status,
+            comment: _clean(report.kpis[k.id]?.comment),
+          ),
       ],
       well: [for (final s in report.notesOf(NoteKind.well)) s.trim()],
       wrong: [for (final s in report.notesOf(NoteKind.wrong)) s.trim()],

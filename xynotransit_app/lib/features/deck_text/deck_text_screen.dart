@@ -216,7 +216,28 @@ class _EditorState extends ConsumerState<_Editor> {
     _controllers[f.key]!.text = f.defaultValue;
   }
 
-  void _resetAll() {
+  Future<void> _resetAll() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset all wording?'),
+        content: const Text(
+          'This resets every wording to the built-in text. You can still '
+          'cancel by not saving.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
     for (final f in deckTextFields) {
       _controllers[f.key]!.text = f.defaultValue;
     }
@@ -411,7 +432,10 @@ class _EditorState extends ConsumerState<_Editor> {
               label: _busy ? 'Saving…' : 'Save',
               onPressed: canSave ? () => unawaited(_save()) : null,
             ),
-            GhostButton(label: 'Reset all to defaults', onPressed: _resetAll),
+            GhostButton(
+              label: 'Reset all to defaults',
+              onPressed: () => unawaited(_resetAll()),
+            ),
           ],
         ),
         if (_message != null) ...[

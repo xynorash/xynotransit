@@ -243,7 +243,7 @@ void main() {
     });
 
     test(
-      'only the controller generates slides, and the deck freezes the snapshot',
+      'only the manager generates slides, and the deck freezes the snapshot',
       () async {
         user = const AppUser(
           personId: 'p-rova',

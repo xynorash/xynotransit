@@ -12,6 +12,7 @@ import '../../domain/enums.dart';
 import '../../domain/report.dart';
 import '../form/form_controller.dart';
 import 'csv_button.dart';
+import 'report_counts.dart';
 
 /// "Reports received": progress bar, live table and who is still missing.
 class ReceivedCard extends ConsumerStatefulWidget {
@@ -60,7 +61,9 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
     final reportsAsync = ref.watch(reportsProvider);
     if (_first && reportsAsync.hasValue) _onReports(reportsAsync.requireValue);
 
-    final catalog = ref.watch(catalogProvider).value;
+    // The table lists every sent report, also those of people switched off
+    // since, so the catalog here includes the inactive.
+    final catalog = ref.watch(catalogWithInactiveProvider).value;
     final period = ref.watch(periodProvider).value;
     final reports = (reportsAsync.value ?? const <Report>[])
         .where((r) => r.isSubmitted)
@@ -71,13 +74,12 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
 
     final byAssignment = {for (final r in reports) r.assignmentId: r};
     // A seat counts only when the seat and its person are both active, the
-    // same way the server and the tiles count.
+    // same way the server and the tiles count. Reports of switched-off seats
+    // stay in the table and the CSV, but are never part of "N of M".
+    final counts = ReportCounts.of(catalog, reports);
     final progress = PeriodProgress(
-      expected: catalog.expectedCount,
-      submitted: [
-        for (final a in catalog.assignments)
-          if (catalog.isExpected(a) && byAssignment[a.id] != null) a,
-      ].length,
+      expected: counts.expected,
+      submitted: counts.submitted,
     );
     final rows = [
       for (final a in catalog.assignments)
@@ -89,7 +91,10 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
         : [
             for (final (a, r) in rows)
               if (catalog.labelOf(a).toLowerCase().contains(q) ||
-                  catalog.teamOf(a).name.toLowerCase().contains(q))
+                  catalog.teamOf(a).name.toLowerCase().contains(q) ||
+                  (r.reporter?.name ?? '').toLowerCase().contains(q) ||
+                  (r.reporter?.country ?? '').toLowerCase().contains(q) ||
+                  (r.reporter?.role ?? '').toLowerCase().contains(q))
                 (a, r),
           ];
     final missing = [
@@ -134,6 +139,17 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
           ),
           const SizedBox(height: 12),
           _ProgressBar(fraction: progress.fraction),
+          if (counts.switchedOff > 0) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Not counted above: ${counts.switchedOff} '
+              '${counts.switchedOff == 1 ? 'report' : 'reports'} from '
+              '${counts.switchedOff == 1 ? 'a switched-off person' : 'switched-off people'}. '
+              'They stay in the table, the CSV and the slides.',
+              key: const ValueKey('switched-off-note'),
+              style: bodyStyle(context, size: 14, color: t.muted, height: 1.4),
+            ),
+          ],
           const SizedBox(height: 12),
           if (missing.isEmpty)
             Semantics(
@@ -444,27 +460,89 @@ class _DataRow extends ConsumerWidget {
       return compact ? padded : Expanded(flex: flex, child: padded);
     }
 
+    final inactive = !catalog.isExpected(assignment);
+    final typed = report.reporter;
+    // What the slides say, when the person wrote something else than the profile.
+    final differs =
+        typed != null &&
+        (typed.name.trim() != person.fullName ||
+            typed.country.trim() != team.name ||
+            typed.role.trim() != assignment.roleTitle);
+    final firstNote = [for (final k in NoteKind.values) ...report.notesOf(k)]
+        .firstOrNull;
     final cells = [
       cell(
         _colPerson,
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              person.fullName,
-              style: bodyStyle(context, weight: FontWeight.w700, height: 1.3),
+            Wrap(
+              spacing: 8,
+              runSpacing: 2,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  seatName(catalog, assignment),
+                  style: bodyStyle(
+                    context,
+                    weight: FontWeight.w700,
+                    height: 1.3,
+                  ),
+                ),
+                if (inactive)
+                  Container(
+                    key: ValueKey('inactive-tag-${assignment.id}'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: t.soft,
+                      border: Border.all(color: t.line),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      'Inactive',
+                      style: bodyStyle(
+                        context,
+                        size: 12,
+                        weight: FontWeight.w700,
+                        color: t.muted,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+              ],
             ),
             Text(
               '${team.name} · ${assignment.roleTitle}',
               style: bodyStyle(context, size: 13, color: t.muted, height: 1.3),
             ),
-            const SizedBox(height: 6),
-            SmallButton(
-              label: 'Edit',
-              semanticLabel:
-                  'Edit report of ${person.fullName}, ${assignment.roleTitle}',
-              onPressed: () => _edit(context, ref),
-            ),
+            if (differs)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'On the slides: ${typed.name.trim()} · '
+                  '${typed.country.trim()} · ${typed.role.trim()}',
+                  key: ValueKey('typed-${assignment.id}'),
+                  style: bodyStyle(
+                    context,
+                    size: 13,
+                    color: t.muted,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            // A switched-off seat is not on the form any more.
+            if (!inactive) ...[
+              const SizedBox(height: 6),
+              SmallButton(
+                label: 'Edit',
+                semanticLabel:
+                    'Edit report of ${person.fullName}, ${assignment.roleTitle}',
+                onPressed: () => _edit(context, ref),
+              ),
+            ],
           ],
         ),
       ),
@@ -532,9 +610,30 @@ class _DataRow extends ConsumerWidget {
       ),
       cell(
         _colNotes,
-        Text(
-          '${report.noteCount} ${report.noteCount == 1 ? 'point' : 'points'}',
-          style: bodyStyle(context, size: 15, height: 1.3),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${report.noteCount} ${report.noteCount == 1 ? 'point' : 'points'}',
+              style: bodyStyle(context, size: 15, height: 1.3),
+            ),
+            if (firstNote != null)
+              Tooltip(
+                message: firstNote,
+                child: Text(
+                  firstNote,
+                  key: ValueKey('first-note-${assignment.id}'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: bodyStyle(
+                    context,
+                    size: 13,
+                    color: t.muted,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     ];

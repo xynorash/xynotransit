@@ -1,5 +1,5 @@
 //! Managers shape the catalog here: teams, people, seats and what each seat counts.
-//! Every route is controller only.
+//! Every route is manager only.
 
 use std::collections::{HashMap, HashSet};
 
@@ -429,7 +429,23 @@ async fn create_sign_in_link(
     .fetch_one(&mut *tx)
     .await?;
     if recent >= signin::MAX_SIGN_IN_LINKS_PER_HOUR {
-        return Err(ApiError::TooManyRequests(msg::TOO_MANY.into()));
+        let wait: Option<i64> = sqlx::query_scalar(
+            "select ceil(extract(epoch from (issued_at + interval '1 hour' - now())))::bigint
+             from sign_in_link_audit
+             where issued_by = $1 and issued_at > now() - interval '1 hour'
+             order by issued_at
+             offset greatest((select count(*) from sign_in_link_audit
+                              where issued_by = $1 and issued_at > now() - interval '1 hour') - $2, 0)
+             limit 1",
+        )
+        .bind(user.person_id)
+        .bind(signin::MAX_SIGN_IN_LINKS_PER_HOUR)
+        .fetch_optional(&mut *tx)
+        .await?;
+        return Err(ApiError::TooManyRequests(
+            msg::TOO_MANY.into(),
+            wait.unwrap_or(3600).clamp(1, 3600) as u64,
+        ));
     }
     let link = signin::create_sign_in_link(
         &mut tx,

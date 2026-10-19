@@ -54,9 +54,24 @@ async fn magic_link(
     .await?
     .rows_affected();
     if counted == 0 {
+        // Seconds until the window frees a place: when the attempt that holds the last
+        // place (the oldest one beyond the limit) is an hour old.
+        let wait: Option<i64> = sqlx::query_scalar(
+            "select ceil(extract(epoch from (at + interval '1 hour' - now())))::bigint
+             from login_attempt where email = $1 and at > now() - interval '1 hour'
+             order by at
+             offset greatest((select count(*) from login_attempt
+                              where email = $1 and at > now() - interval '1 hour') - $2, 0)
+             limit 1",
+        )
+        .bind(&email)
+        .bind(MAX_LINKS_PER_HOUR)
+        .fetch_optional(&mut *tx)
+        .await?;
         tx.commit().await?;
         return Err(ApiError::TooManyRequests(
             crate::rules::msg::TOO_MANY_LINKS.into(),
+            wait.unwrap_or(3600).clamp(1, 3600) as u64,
         ));
     }
     // Housekeeping: attempts older than a day no longer matter.

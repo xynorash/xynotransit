@@ -28,9 +28,9 @@ void main() {
   );
 
   group('who may do what', () {
-    test('every admin call is for the controller only', () async {
+    test('every admin call is for the manager only', () async {
       user = contributor;
-      const only = 'Only the controller can do this.';
+      const only = 'Only the manager can do this.';
       await expectLater(repo.saveTeam(name: 'X'), fails(only));
       await expectLater(repo.deleteTeam('mru'), fails(only));
       await expectLater(
@@ -53,7 +53,7 @@ void main() {
     });
 
     test(
-      'a contributor only sees active seats, a controller can ask for all',
+      'a contributor only sees active seats, a manager can ask for all',
       () async {
         final seat = await repo.saveAssignment(
           id: 'rova',
@@ -77,6 +77,59 @@ void main() {
         );
       },
     );
+  });
+
+  group('what an employee sees of the catalog (D9)', () {
+    test(
+      'only their own person, their own seats and the teams of those',
+      () async {
+        final all = await repo.loadCatalog();
+        expect(all.persons.length, greaterThan(3));
+        user = contributor;
+        final mine = await repo.loadCatalog();
+        expect(mine.persons.map((p) => p.id), ['p-rova']);
+        final seats = all.assignmentsOfPerson('p-rova');
+        expect(mine.assignments.map((a) => a.id), [
+          for (final a in seats) a.id,
+        ]);
+        expect(mine.teams.map((t) => t.id), {for (final a in seats) a.teamId});
+        expect(mine.teams.length, lessThan(all.teams.length));
+        // The stream gives the same narrow view.
+        final first = await repo.watchCatalog().first;
+        expect(first.persons.map((p) => p.id), ['p-rova']);
+        // A manager still sees everyone.
+        user = DemoAuth.controller;
+        expect((await repo.loadCatalog()).persons.length, all.persons.length);
+      },
+    );
+
+    test('a person with two seats sees both and their teams', () async {
+      final two = await repo.saveAssignment(
+        personId: 'p-rova',
+        teamId: 'tana',
+        roleTitle: 'Second seat',
+      );
+      user = contributor;
+      final mine = await repo.loadCatalog();
+      expect(
+        mine.assignmentsOfPerson('p-rova').length,
+        greaterThanOrEqualTo(2),
+      );
+      expect(mine.assignmentById(two.id), isNotNull);
+      expect(mine.teamById('tana'), isNotNull);
+    });
+
+    test('nothing at all for a person who was switched off', () async {
+      await repo.savePerson(
+        id: 'p-rova',
+        fullName: 'Rova',
+        email: 'rova@example.com',
+        role: AppRole.contributor,
+        active: false,
+      );
+      user = contributor;
+      await expectLater(repo.loadCatalog(), throwsA(isA<Exception>()));
+    });
   });
 
   group('teams', () {
@@ -553,7 +606,13 @@ void main() {
         // (the API lists a switched off seat that has a report).
         final she = s.people.singleWhere((p) => p.assignmentId == 'shalini');
         expect(she.submitted, isTrue);
-        expect(s.submitted, 14, reason: 'old reports still count');
+        expect(she.active, isFalse);
+        // submitted counts expected seats only; hers is counted apart.
+        expect(s.submitted, 13);
+        expect(s.submittedInactive, 1);
+        expect(s.submitted, lessThanOrEqualTo(s.expected));
+        expect(s.teams.every((t) => t.submitted <= t.expected), isTrue);
+        expect(s.people, hasLength(14), reason: 'old reports stay listed');
       },
     );
 

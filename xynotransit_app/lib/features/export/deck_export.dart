@@ -1,7 +1,15 @@
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/pdf.dart';
+// The catalog entries /Lang and /ViewerPreferences have no public setter.
+// ignore: implementation_imports
+import 'package:pdf/src/pdf/format/bool.dart';
+// ignore: implementation_imports
+import 'package:pdf/src/pdf/format/dict.dart';
+// ignore: implementation_imports
+import 'package:pdf/src/pdf/format/string.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 import '../../domain/period.dart';
@@ -74,29 +82,73 @@ String _plainLetters(String s) {
 }
 
 /// One landscape page of 1920 x 1080 points per slide, picture full bleed.
+///
+/// A picture alone cannot be searched, selected or read aloud. When [notes]
+/// is given (one text per slide, the speaker notes) each page also carries
+/// that text as an invisible layer (text rendering mode 3, so nothing is
+/// drawn over the picture). The document has a [language] and its [title],
+/// and the viewer is asked to show the title in the window bar.
 Future<Uint8List> buildPdf(
   List<Uint8List> pngs, {
   required String title,
+  List<String>? notes,
+  String language = 'en',
 }) async {
+  assert(notes == null || notes.length == pngs.length);
   final doc = pw.Document(
     title: title,
     author: 'Xynotransit',
     creator: 'Logistics Report Builder',
+    subject: title,
   );
+  final catalog = doc.document.catalog;
+  catalog.params['/Lang'] = PdfString.fromString(language);
+  catalog.params['/ViewerPreferences'] = PdfDict.values({
+    '/DisplayDocTitle': const PdfBool(true),
+  });
+  // The deck's own font, embedded once for the whole document, so every
+  // letter of the notes can be found again.
+  final font = (notes?.any((n) => n.trim().isNotEmpty) ?? false)
+      ? pw.Font.ttf(await rootBundle.load(_pdfFontAsset))
+      : null;
   const format = PdfPageFormat(1920, 1080);
-  for (final png in pngs) {
-    final image = pw.MemoryImage(png);
+  for (var i = 0; i < pngs.length; i++) {
+    final image = pw.MemoryImage(pngs[i]);
+    final text = notes?[i].trim() ?? '';
     doc.addPage(
       pw.Page(
         pageFormat: format,
         margin: pw.EdgeInsets.zero,
-        build: (_) =>
+        build: (_) => pw.Stack(
+          children: [
             pw.Image(image, fit: pw.BoxFit.fill, width: 1920, height: 1080),
+            if (font != null && text.isNotEmpty)
+              pw.Positioned(
+                left: 0,
+                top: 0,
+                child: pw.SizedBox(
+                  width: 1920,
+                  height: 1080,
+                  child: pw.Text(
+                    text,
+                    overflow: pw.TextOverflow.clip,
+                    style: pw.TextStyle(
+                      font: font,
+                      fontSize: 16,
+                      renderingMode: PdfTextRenderingMode.invisible,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
   return doc.save();
 }
+
+const _pdfFontAsset = 'assets/fonts/DMSans-Regular.ttf';
 
 /// "slide-01.png" and so on, zipped, for people who want the raw pictures.
 Uint8List buildPngZip(List<Uint8List> pngs, List<String> names) {

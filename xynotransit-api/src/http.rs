@@ -97,6 +97,14 @@ pub async fn json_errors(req: Request, next: Next) -> Response {
         if let Some(a) = allow {
             out.headers_mut().insert(header::ALLOW, a);
         }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            let wait = res
+                .headers()
+                .get(header::RETRY_AFTER)
+                .cloned()
+                .unwrap_or_else(|| header::HeaderValue::from_static("60"));
+            out.headers_mut().insert(header::RETRY_AFTER, wait);
+        }
         return out;
     }
     res

@@ -116,7 +116,7 @@ pub fn bootstrap_name(email: &str, name: Option<&str>) -> String {
     }
 }
 
-/// Make the configured person an active controller. A missing person is created.
+/// Make the configured person an active manager. A missing person is created.
 /// Returns how many rows changed (0 when nothing needed doing).
 pub async fn bootstrap_controller(
     pool: &sqlx::PgPool,

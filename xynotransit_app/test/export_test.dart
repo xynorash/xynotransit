@@ -163,6 +163,99 @@ void main() {
     expect(r.stdout, matches(RegExp(r'Page size:\s+1920 x 1080 pts')));
   });
 
+  group('PDF text layer', () {
+    const notes = [
+      'Cover. Xynotransit Regional Logistics Meeting, Feb to Apr 2026.',
+      'Hanitra Rakoto: KPI and volumes.\nTargets:\n1. Deliver on time: met.',
+      'Zoé Ñandú: highlights. Delays down by a third.',
+    ];
+
+    Future<String> pdftext(
+      Uint8List bytes,
+      List<String> args, {
+      List<String> after = const [],
+    }) async {
+      final dir = Directory.systemTemp.createTempSync('pdftext');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final f = File('${dir.path}/deck.pdf')..writeAsBytesSync(bytes);
+      final r = await Process.run(args.first, [
+        ...args.skip(1),
+        f.path,
+        ...after,
+      ]);
+      return r.stdout as String;
+    }
+
+    test('every page carries its speaker notes as searchable text', () async {
+      final bytes = await buildPdf(
+        [tinyPng, tinyPng, tinyPng],
+        title: 'T',
+        notes: notes,
+      );
+      for (var i = 0; i < notes.length; i++) {
+        final text = await pdftext(
+          bytes,
+          ['pdftotext', '-f', '${i + 1}', '-l', '${i + 1}'],
+          after: ['-'],
+        );
+        final flat = text.replaceAll(RegExp(r'\s+'), ' ');
+        for (final line in notes[i].split('\n')) {
+          expect(flat, contains(line.replaceAll(RegExp(r'\s+'), ' ')));
+        }
+        // And only its own page's words.
+        for (var j = 0; j < notes.length; j++) {
+          if (j != i) expect(flat, isNot(contains(notes[j].split('\n').first)));
+        }
+      }
+    });
+
+    test('the text is invisible: the page looks the same without it', () async {
+      Future<Uint8List> raster(List<String>? n) async {
+        final bytes = await buildPdf([tinyPng], title: 'T', notes: n);
+        final dir = Directory.systemTemp.createTempSync('pdfraster');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        final f = File('${dir.path}/deck.pdf')..writeAsBytesSync(bytes);
+        final r = await Process.run('pdftoppm', [
+          '-r',
+          '12',
+          '-png',
+          f.path,
+          '${dir.path}/p',
+        ]);
+        expect(r.exitCode, 0, reason: '${r.stderr}');
+        return File(
+          dir.listSync().firstWhere((e) => e.path.endsWith('.png')).path,
+        ).readAsBytesSync();
+      }
+
+      expect(await raster([notes.first]), await raster(null));
+    });
+
+    test('the document has a language, a title and an embedded font', () async {
+      final bytes = await buildPdf(
+        [tinyPng, tinyPng, tinyPng],
+        title: 'Meeting, Feb to Apr 2026',
+        notes: notes,
+      );
+      final raw = latin1.decode(bytes);
+      expect(raw, contains('/Lang(en)'));
+      expect(raw, contains('/DisplayDocTitle true'));
+      final info = await pdftext(bytes, ['pdfinfo']);
+      expect(info, contains('Title:           Meeting, Feb to Apr 2026'));
+      final fonts = await pdftext(bytes, ['pdffonts']);
+      expect(fonts, contains('DMSans'));
+      expect(fonts, matches(RegExp(r'DMSans\S*\s+\S+.*yes\s+no\s+yes')));
+      // One shared font, not one per page, and a reasonable size.
+      expect(RegExp('DMSans').allMatches(fonts).length, 1);
+      expect(bytes.length, lessThan(200 * 1024));
+    });
+
+    test('a deck without notes still works (pictures only)', () async {
+      final bytes = await buildPdf([tinyPng], title: 'T');
+      expect(latin1.decode(bytes.sublist(0, 5)), '%PDF-');
+    });
+  });
+
   test('file name uses the meeting date', () {
     final p = Period(
       id: 'p',
@@ -426,7 +519,7 @@ void main() {
           teamCounts: [('Kenya', 2), ('Tana', 7)],
         ),
       );
-      expect(cover, contains('Teams: Kenya · 2; Tana · 7.'));
+      expect(cover, contains('Teams: Kenya · 2 reports; Tana · 7 reports.'));
       final divider = slideNotes(
         const DividerSpec(
           team: 'Kenya',
@@ -496,7 +589,13 @@ void main() {
         ..createSync(recursive: true);
       final title = deckTitleOf(specs);
       final base = deckFileBase(testPeriod, title: meetingTitleOf(specs));
-      final pdf = (await tester.runAsync(() => buildPdf(small, title: title)))!;
+      final pdf = (await tester.runAsync(
+        () => buildPdf(
+          small,
+          title: title,
+          notes: [for (final s in specs) slideNotes(s)],
+        ),
+      ))!;
       final pptx = buildPptx(pptxSlidesFor(specs, big), title: title);
       final zip = buildPngZip(small, pngNames(small.length));
       File('${dir.path}/$base.pdf').writeAsBytesSync(pdf);

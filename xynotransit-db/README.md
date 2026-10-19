@@ -22,7 +22,7 @@ cp .env.example .env     # first time; set BOOTSTRAP_CONTROLLER_EMAIL
 ./scripts/up.sh          # docker compose up -d --build
 ```
 
-Open http://127.0.0.1:8080 and sign in with the manager email (`BOOTSTRAP_CONTROLLER_EMAIL`, role controller). Read the link in Mailpit at http://127.0.0.1:8025. A manager lands on the dashboard (`/manager`); anyone else a manager has added lands on their own report form (`/report`) and cannot see slides, the reports table or exports. The API enforces this: the list of reports, the deck and live events are controller only.
+Open http://127.0.0.1:8080 and sign in with the manager email (`BOOTSTRAP_CONTROLLER_EMAIL`, role value `controller`). Read the link in Mailpit at http://127.0.0.1:8025. A manager lands on the dashboard (`/manager`); anyone else a manager has added lands on their own report form (`/report`) and cannot see slides, the reports table or exports. The API enforces this: the list of reports, the deck and live events are controller only.
 
 Scripts (also `make up|down|reset|logs`):
 
@@ -46,7 +46,7 @@ Scripts (also `make up|down|reset|logs`):
 | `JWT_SECRET` | dev value | At least 32 characters. Change it outside dev. |
 | `PUBLIC_URL` | `http://127.0.0.1:8080` | Origin used in magic links. |
 | `MAIL_FROM` | `Xynotransit <no-reply@xynotransit.local>` | Sender. |
-| `BOOTSTRAP_CONTROLLER_EMAIL` | empty | This person is created (or promoted and activated) as controller at API start. |
+| `BOOTSTRAP_CONTROLLER_EMAIL` | empty | This person is created (or promoted and activated) as manager (role value `controller`) at API start. |
 | `BOOTSTRAP_CONTROLLER_NAME` | empty | Name used when that person is created. Default: the part of the email before the `@`, capitalised. |
 | `INTERNAL_EMAIL_DOMAINS` | `xynotransit.internal` | Comma separated. Addresses at these domains never receive mail; people sign in with a one-time link from a manager. Read by the API; the compose files do not pass it on yet, so the default applies until the line `INTERNAL_EMAIL_DOMAINS: ${INTERNAL_EMAIL_DOMAINS:-}` is added to the `api` environment. |
 | `LOG_MAGIC_LINKS` | `true` | Log links. Dev only. |
@@ -72,6 +72,7 @@ The API variables `SMTP_HOST` (`mailpit`), `SMTP_PORT` (`1025`), plain SMTP and 
 | `08-role-title-unique.sql` | One seat per person, team and role title, ignoring case and outer spaces (unique index on `lower(btrim(role_title))`). Skipped with a warning if old rows already repeat a title. | yes |
 
 | `10-internal-signin.sql` | `sign_in_link_audit` (who got a one-time sign-in link, who issued it, when, until when; never the token). `login_token` is unchanged. | yes |
+| `11-deck-switched-off.sql` | `deck_run.switched_off_count`: how many reports of a deck came from a switched-off seat or person (0 for old decks). | yes |
 
 A fresh database has an empty catalog. The first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app. The old seed (`10-seed.sql`, `20-seed-demo.sql`) lives in `examples/` and is not loaded automatically; see `examples/README.md` to load it by hand.
 

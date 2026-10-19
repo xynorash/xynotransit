@@ -61,7 +61,7 @@ void main() {
   setUpAll(loadAppFonts);
 
   const emptyText =
-      'No slides yet. When the controller generates them, every slide of the '
+      'No slides yet. When the manager generates them, every slide of the '
       'deck appears here in order, exactly as it will be presented.';
 
   testWidgets('empty state explains what will appear', (tester) async {
@@ -164,5 +164,33 @@ void main() {
     await tester.tap(find.bySemanticsLabel('Next slide'));
     await tester.pumpAndSettle();
     expect(c.read(slideNavProvider).current.value, 1);
+  });
+
+  testWidgets('coming back to Reports shows slide 1 in the jump menu', (
+    tester,
+  ) async {
+    final c = await pumpAt(tester, const Size(1500, 900));
+    await generate(tester);
+    final nav = c.read(slideNavProvider);
+    nav.jumpTo(4, animate: false);
+    await tester.pumpAndSettle();
+    expect(find.textContaining(RegExp(r'^5 · ')), findsWidgets);
+
+    c.read(routerProvider).go('/manager');
+    await tester.pumpAndSettle();
+    c.read(routerProvider).go('/manager/reports');
+    await tester.pumpAndSettle();
+
+    // The new view starts at the top, and the menu must say so.
+    expect(nav.controller.offset, 0);
+    expect(nav.current.value, 0);
+    expect(find.textContaining(RegExp(r'^5 · ')), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byType(DropdownButtonFormField<int>),
+        matching: find.text('1 · Cover'),
+      ),
+      findsOneWidget,
+    );
   });
 }

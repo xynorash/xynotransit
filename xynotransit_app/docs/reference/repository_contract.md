@@ -38,8 +38,9 @@ reorder, retire, 10 and 11 targets, foreign ids), catalog as employee and as
 manager, send, replace and edit a report (every refusal, string for string),
 periods and meeting dates, who may do what (every operation), a deactivated
 person, a closed period, live reports, decks with 0, 1 and N reports, deck words
-(inherit and freeze), and the summary against the pure computation
-(`computeSummary`) over the same data.
+(inherit and freeze), the summary against the pure computation
+(`computeSummary`) over the same data (also after a person is switched off), and
+too many sign-in requests (the 429 carries `Retry-After`).
 
 A scenario that passes on one side and fails on the other is a real difference.
 Fix the wrong side. The in-memory side is `lib/data/memory_repository.dart` and
@@ -58,9 +59,14 @@ never produces must be listed in `serverOnly` in that test, so a new key in
 
 - **Who is expected:** a seat is expected in a period when the seat and its
   person are both switched on (`Catalog.isExpected`, `Catalog.expectedCount`).
-  The deck holds only those. The summary counts every report that was sent,
-  so `submitted` can be larger than `expected`, and a switched off seat or
-  person stays in the people list when it has a report.
+  In the summary, `submitted`, `met`, `partly` and `missed` (headline, teams,
+  trend) count only the reports of expected seats, so `submitted` is never more
+  than `expected`. Reports of switched off seats or people are counted apart in
+  `submitted_inactive` (headline, teams, trend, and `switched_off_count` in a
+  deck): never expected, never missing, but real. Their counts and volume stay
+  in the volume and the counts, and the seat stays in the people list with
+  `active: false` while it has a report. The deck holds every submitted report,
+  also those: `included_count` counts them, `expected_count` does not.
 - **What a slide shows:** the counts and targets the report was answered
   against, retired ones included, in series and sort order. A count added
   after the report was sent (no numbers) is not on the slide. If a retired
@@ -69,11 +75,17 @@ never produces must be listed in `serverOnly` in that test, so a new key in
 - **Summary counts:** grouped by lower case label, only counts that have
   numbers in a report of the shown period; the shown name is the live one before
   the retired one, then the lower series.
-- **Default catalog views** (employees, and a manager who does not ask for the
-  inactive ones) leave out switched off seats, switched off people, and the
-  seats of switched off people.
-- Employees see their own email and nobody else's. A deactivated person's
-  session ends at once (401 "Please sign in.").
+- **Default catalog view** (a manager who does not ask for the inactive ones)
+  leaves out switched off seats, switched off people, and the seats of switched
+  off people.
+- **Employee catalog view:** an employee gets only their own person (with
+  their own email), their own switched on seats and the teams of those seats.
+  No other name, role or team is sent, and asking for the inactive ones changes
+  nothing. A deactivated person's session ends at once (401 "Please sign in.").
+- The words for a manager only call are "Only the manager can do this." (the
+  role value in the JSON stays `controller`).
+- A 429 carries `Retry-After` in seconds. The client turns "Try again later."
+  into "Try again in 5 minutes." (`ApiException.retryAfterSeconds`).
 - A name with odd spaces (a non breaking space from a paste) is not refused:
   the app turns them into plain spaces before it sends, so the server and the
   demo see the same text. Control and invisible characters are refused with
@@ -82,11 +94,6 @@ never produces must be listed in `serverOnly` in that test, so a new key in
 
 ## Known differences
 
-- Against the live API today the scenario "a deactivated person" fails on one
-  line: the API's default `/catalog` still lists the active seat of a person who
-  was switched off, and no longer lists the person. The demo leaves both out.
-  Either choice is coherent as long as a seat always comes with its person;
-  `Catalog.personOf` shows "Unknown person" meanwhile instead of failing.
 - The "last manager" guard is not run against the shared dev stack (it would
   need to switch off the real managers). The Rust integration tests cover it
   (`tests/dynamic.rs`).
@@ -110,7 +117,7 @@ never produces must be listed in `serverOnly` in that test, so a new key in
 | no answer in 20 s | `RequestTimeout` (a `NetworkException`) | once |
 | 408, 502, 503, 504 (nginx page or the API not ready) | `NetworkException` | as above |
 | 401 with the current token | `UnauthorizedException`, the session is cleared once | never |
-| other 4xx and 5xx | `ApiException` with the server words | never |
+| other 4xx and 5xx | `ApiException` with the server words (429: plus the wait from `Retry-After`) | never |
 | 2xx that is not the expected JSON | `RepositoryException` "cannot read" | never |
 
 Idempotent writes (sent with `idempotent: true`): sending a report, saving deck

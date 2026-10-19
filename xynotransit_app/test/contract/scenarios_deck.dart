@@ -122,7 +122,8 @@ Future<void> deck(Arena a) async {
   final fresh = await boss.generateDeck(p, await boss.loadCatalog());
   expect(fresh.items[1].snapshot.metrics.first.values, [99, 100, 101]);
 
-  // A seat that is switched off drops out of the deck and of "expected".
+  // A seat that is switched off is no longer expected, but its report stays in
+  // the deck, in the same place, and is counted apart.
   await boss.saveAssignment(
     id: bob.assignment.id,
     personId: bob.person.id,
@@ -132,12 +133,14 @@ Future<void> deck(Arena a) async {
   );
   cat = await boss.loadCatalog();
   final less = await boss.generateDeck(p, cat);
-  expect(less.includedCount, 2);
+  expect(less.includedCount, 3);
+  expect(less.switchedOffCount, 1);
   expect(less.expectedCount, cat.expectedCount);
-  expect(less.items.map((i) => i.snapshot.assignmentCode), [
-    carol.assignment.code,
-    alice.assignment.code,
-  ]);
+  expect(less.expectedCount, three.expectedCount - 1);
+  expect(
+    less.items.map((i) => i.snapshot.assignmentCode),
+    three.items.map((i) => i.snapshot.assignmentCode),
+  );
 
   // A slide shows the counts the report was answered against: a count taken
   // off the seat since stays on it, a count added since (no numbers) is not on it.
@@ -465,6 +468,39 @@ Future<void> summary(Arena a) async {
     retired: {
       amy.assignment.id: [amyNow.metrics[1]],
     },
+  );
+
+  // A switched-off person: their reports stay in the volume and the counts and
+  // in the people list, but submitted never goes above expected.
+  await boss.savePerson(
+    id: cal.person.id,
+    fullName: cal.person.fullName,
+    email: cal.email,
+    role: AppRole.contributor,
+    active: false,
+  );
+  await compare(
+    6,
+    retired: {
+      amy.assignment.id: [amyNow.metrics[1]],
+    },
+  );
+  await compare(
+    1,
+    retired: {
+      amy.assignment.id: [amyNow.metrics[1]],
+    },
+  );
+  final off = await boss.loadSummary(ps[2].id);
+  expect(off.submitted, lessThanOrEqualTo(off.expected));
+  expect(off.submittedInactive, greaterThanOrEqualTo(1));
+  final calRow = off.people.firstWhere(
+    (x) => x.assignmentId == cal.assignment.id,
+  );
+  expect([calRow.active, calRow.submitted], [false, true]);
+  expect(
+    off.teams.firstWhere((t) => t.name == 'CT${a.tag} Sum B').submittedInactive,
+    1,
   );
 
   // Trend words.

@@ -7,6 +7,7 @@ class TeamSummary {
     required this.name,
     required this.expected,
     required this.submitted,
+    this.submittedInactive = 0,
     required this.met,
     required this.partly,
     required this.missed,
@@ -19,8 +20,11 @@ class TeamSummary {
   /// Active assignments of the team.
   final int expected;
 
-  /// Submitted reports of the team.
+  /// Submitted reports of the team's expected seats (never more than [expected]).
   final int submitted;
+
+  /// Reports of switched off seats or people of the team: kept, never expected.
+  final int submittedInactive;
   final int met;
   final int partly;
   final int missed;
@@ -38,6 +42,7 @@ class TeamSummary {
     'name': name,
     'expected': expected,
     'submitted': submitted,
+    'submitted_inactive': submittedInactive,
     'met': met,
     'partly': partly,
     'missed': missed,
@@ -49,6 +54,7 @@ class TeamSummary {
     name: j['name']! as String,
     expected: (j['expected']! as num).toInt(),
     submitted: (j['submitted']! as num).toInt(),
+    submittedInactive: ((j['submitted_inactive'] ?? 0) as num).toInt(),
     met: (j['met']! as num).toInt(),
     partly: (j['partly']! as num).toInt(),
     missed: (j['missed']! as num).toInt(),
@@ -110,6 +116,7 @@ class TrendPoint {
     required this.startMonth,
     required this.expected,
     required this.submitted,
+    this.submittedInactive = 0,
     required this.met,
     required this.partly,
     required this.missed,
@@ -120,7 +127,12 @@ class TrendPoint {
   final String label;
   final DateTime startMonth;
   final int expected;
+
+  /// Reports of expected seats only (never more than [expected]).
   final int submitted;
+
+  /// Reports of switched off seats or people.
+  final int submittedInactive;
   final int met;
   final int partly;
   final int missed;
@@ -136,6 +148,7 @@ class TrendPoint {
     'start_month': Period.dateOnly(startMonth),
     'expected': expected,
     'submitted': submitted,
+    'submitted_inactive': submittedInactive,
     'met': met,
     'partly': partly,
     'missed': missed,
@@ -148,6 +161,7 @@ class TrendPoint {
     startMonth: DateTime.parse(j['start_month']! as String),
     expected: (j['expected']! as num).toInt(),
     submitted: (j['submitted']! as num).toInt(),
+    submittedInactive: ((j['submitted_inactive'] ?? 0) as num).toInt(),
     met: (j['met']! as num).toInt(),
     partly: (j['partly']! as num).toInt(),
     missed: (j['missed']! as num).toInt(),
@@ -162,6 +176,7 @@ class PersonSummary {
     required this.name,
     required this.role,
     required this.team,
+    this.active = true,
     required this.submitted,
     required this.met,
     required this.partly,
@@ -173,6 +188,10 @@ class PersonSummary {
   final String name;
   final String role;
   final String team;
+
+  /// False for a switched off seat or person that has a report: shown tagged
+  /// Inactive, never counted as missing.
+  final bool active;
   final bool submitted;
   final int met;
   final int partly;
@@ -184,6 +203,7 @@ class PersonSummary {
     'name': name,
     'role': role,
     'team': team,
+    'active': active,
     'submitted': submitted,
     'met': met,
     'partly': partly,
@@ -196,6 +216,7 @@ class PersonSummary {
     name: j['name']! as String,
     role: j['role']! as String,
     team: j['team']! as String,
+    active: (j['active'] as bool?) ?? true,
     submitted: j['submitted']! as bool,
     met: (j['met']! as num).toInt(),
     partly: (j['partly']! as num).toInt(),
@@ -212,6 +233,7 @@ class Summary {
     required this.months,
     required this.expected,
     required this.submitted,
+    this.submittedInactive = 0,
     required this.teams,
     required this.metrics,
     required this.trend,
@@ -221,8 +243,15 @@ class Summary {
   final String periodId;
   final String periodLabel;
   final List<MonthRef> months;
+
+  /// Active seats of active people.
   final int expected;
+
+  /// Reports of those seats only, so never more than [expected].
   final int submitted;
+
+  /// Reports of switched off seats or people: kept and listed, never expected.
+  final int submittedInactive;
   final List<TeamSummary> teams;
 
   /// Grouped by label, biggest total first.
@@ -244,6 +273,7 @@ class Summary {
     'months': [for (final m in months) m.toJson()],
     'expected': expected,
     'submitted': submitted,
+    'submitted_inactive': submittedInactive,
     'teams': [for (final t in teams) t.toJson()],
     'metrics': [for (final m in metrics) m.toJson()],
     'trend': [for (final t in trend) t.toJson()],
@@ -261,6 +291,7 @@ class Summary {
       months: rows('months').map(MonthRef.fromJson).toList(),
       expected: (j['expected']! as num).toInt(),
       submitted: (j['submitted']! as num).toInt(),
+      submittedInactive: ((j['submitted_inactive'] ?? 0) as num).toInt(),
       teams: rows('teams').map(TeamSummary.fromJson).toList(),
       metrics: rows('metrics').map(MetricSummary.fromJson).toList(),
       trend: rows('trend').map(TrendPoint.fromJson).toList(),

@@ -73,8 +73,8 @@ pub struct SnapshotInput {
     pub team: String,
     pub start_month: NaiveDate,
     pub metrics: Vec<MetricIn>,
-    /// (target text, "met" | "partly" | "missed" when answered)
-    pub targets: Vec<(String, Option<String>)>,
+    /// (target text, "met" | "partly" | "missed" when answered, the trimmed comment if any)
+    pub targets: Vec<(String, Option<String>, Option<String>)>,
     pub well: Vec<String>,
     pub wrong: Vec<String>,
     pub next: Vec<String>,
@@ -124,7 +124,10 @@ pub fn build(i: &SnapshotInput) -> Value {
         "metrics": i.metrics.iter().map(|m| json!({
             "key": m.key, "label": m.label, "series": m.series, "values": m.values,
         })).collect::<Vec<_>>(),
-        "targets": i.targets.iter().map(|(t, s)| json!({"text": t, "status": s})).collect::<Vec<_>>(),
+        "targets": i.targets.iter().map(|(t, s, c)| match c {
+            Some(c) => json!({"text": t, "status": s, "comment": c}),
+            None => json!({"text": t, "status": s}),
+        }).collect::<Vec<_>>(),
         "well": i.well,
         "wrong": i.wrong,
         "next": i.next,
@@ -173,8 +176,8 @@ mod tests {
                 values: [3, 0, 7],
             }],
             targets: vec![
-                ("On time".into(), Some("met".into())),
-                ("No errors".into(), None),
+                ("On time".into(), Some("met".into()), None),
+                ("No errors".into(), None, None),
             ],
             well: vec!["a".into()],
             wrong: vec![],
@@ -209,6 +212,20 @@ mod tests {
         assert_eq!(v["well"], json!(["a"]));
         assert_eq!(v["wrong"], json!([]));
         assert_eq!(v["next"], json!(["b", "c"]));
+    }
+
+    #[test]
+    fn snapshot_carries_the_target_comment_only_when_there_is_one() {
+        let mut i = input(d(2026, 2));
+        i.targets[0].2 = Some("Port strike".into());
+        let v = build(&i);
+        assert_eq!(
+            v["targets"],
+            json!([
+                {"text":"On time","status":"met","comment":"Port strike"},
+                {"text":"No errors","status":null}
+            ])
+        );
     }
 
     #[test]
@@ -332,13 +349,18 @@ mod tests {
                 .iter()
                 .map(|k| {
                     let id = k["id"].as_str().unwrap();
-                    let status = report["kpis"]
+                    let row = report["kpis"]
                         .as_array()
                         .unwrap()
                         .iter()
-                        .find(|r| r["kpi_def_id"] == id)
-                        .map(|r| r["status"].as_str().unwrap().to_string());
-                    (k["text"].as_str().unwrap().to_string(), status)
+                        .find(|r| r["kpi_def_id"] == id);
+                    let status = row.map(|r| r["status"].as_str().unwrap().to_string());
+                    let comment = row
+                        .and_then(|r| r["comment"].as_str())
+                        .map(str::trim)
+                        .filter(|c| !c.is_empty())
+                        .map(str::to_string);
+                    (k["text"].as_str().unwrap().to_string(), status, comment)
                 })
                 .collect(),
             well: notes_of("well"),

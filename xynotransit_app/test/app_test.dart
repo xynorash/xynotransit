@@ -74,7 +74,7 @@ SlideNav pumpedNav(WidgetTester tester) =>
         .read(slideNavProvider);
 
 Future<void> choosePerson(WidgetTester tester, String label) async {
-  await tester.tap(find.text('Choose your name'));
+  await tester.tap(find.text('Choose a seat'));
   await tester.pumpAndSettle();
   await tester.tap(find.text(label).last);
   await tester.pumpAndSettle();
@@ -275,12 +275,12 @@ void main() {
         label: 'Tahina',
       ),
     );
-    await tester.tap(find.text('Choose your name'));
+    await tester.tap(find.text('Choose a seat'));
     await tester.pumpAndSettle();
-    // Two seats: a chooser by role title, no names of other people.
+    // Two seats: a chooser by name and seat title, no other people.
     expect(find.text('Reporting for'), findsOneWidget);
-    expect(find.text('Declarant export').last, findsOneWidget);
-    expect(find.text('BSC creation').last, findsOneWidget);
+    expect(find.text('Tahina · Declarant export').last, findsOneWidget);
+    expect(find.text('Tahina · BSC creation').last, findsOneWidget);
     expect(find.text('Rova · Import'), findsNothing);
     await tester.tapAt(const Offset(5, 5));
     await tester.pumpAndSettle();
@@ -332,7 +332,7 @@ void main() {
     expect(first.controller!.text, isNotEmpty);
   });
 
-  testWidgets('controller: confirm before generating a partial deck', (
+  testWidgets('manager: confirm before generating a partial deck', (
     tester,
   ) async {
     final h = await pumpApp(tester, location: '/manager/reports');
@@ -389,7 +389,7 @@ void main() {
   });
 
   testWidgets(
-    'controller: full deck generates without confirmation and navigates',
+    'manager: full deck generates without confirmation and navigates',
     (tester) async {
       await pumpApp(tester, demo: true, location: '/manager/reports');
       await tester.tap(find.text('Generate slides'));

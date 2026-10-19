@@ -13,6 +13,50 @@ import 'palette.dart';
 import 'slide_words.dart';
 import 'volumes_chart.dart';
 
+/// The comment an employee typed under a target, as one trimmed line, or null.
+String? targetComment(SnapshotTarget t) {
+  final c = t.comment;
+  if (c == null) return null;
+  final one = c.trim().replaceAll(RegExp(r'\s+'), ' ');
+  return one.isEmpty ? null : one;
+}
+
+/// Only a target that was not fully met shows the words behind it.
+bool showsComment(SnapshotTarget t) =>
+    (t.status == KpiStatus.partly || t.status == KpiStatus.missed) &&
+    targetComment(t) != null;
+
+final _commentStyle = st(20, color: SlidePalette.mutedOnLight, height: 1.2);
+
+/// Height of the one line of comment under a target, and its gap.
+const kpiCommentGap = 6.0;
+final kpiCommentHeight = 20 * 1.2;
+
+/// [comment] cut, at a word if it can be, with an ellipsis of its own so that
+/// it fits one line of [width]. The whole comment stays in the speaker notes.
+String commentLine(String comment, double width) {
+  bool fits(String t) =>
+      measureText(t, _commentStyle, double.infinity, maxLines: 1).width <=
+      width;
+  if (fits(comment)) return comment;
+  var lo = 0, hi = comment.length;
+  while (lo < hi) {
+    final mid = (lo + hi + 1) ~/ 2;
+    if (fits('${comment.substring(0, mid).trimRight()}\u2026')) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  var cut = comment.substring(0, lo);
+  final space = cut.lastIndexOf(' ');
+  // Back to the last whole word, unless that throws away most of the line.
+  if (space > lo * 0.6 && lo < comment.length && comment[lo] != ' ') {
+    cut = cut.substring(0, space);
+  }
+  return '${cut.trimRight()}\u2026';
+}
+
 /// Slide 1 of 2: targets on the left, monthly volumes on the right.
 class SlideKpi extends StatelessWidget {
   const SlideKpi(this.snapshot, {super.key, this.texts = DeckTexts.empty});
@@ -304,6 +348,43 @@ class _KpiCard extends StatelessWidget {
     final color = SlidePalette.statusColor(target.status);
     final word = SlidePalette.statusWord(target.status);
     final text = Text(target.text, style: kpiTextStyle(fit.fontSize));
+    return LayoutBuilder(
+      builder: (context, box) => _card(box.maxHeight, color, word, text),
+    );
+  }
+
+  /// The comment line, when there is room for it under the text.
+  Widget? _comment(double cardHeight) {
+    if (!showsComment(target)) return null;
+    final width = fit.label
+        ? fit.width - 80 - 2
+        : fit.width - 56 - kpiChipWidth - 16 - 2;
+    final textHeight = measureText(
+      target.text,
+      kpiTextStyle(fit.fontSize),
+      width,
+    ).height;
+    final extra = kpiCommentGap + kpiCommentHeight;
+    final need =
+        2 +
+        (fit.label
+            ? 2 * kpiLabelPad + kpiLabelHeight + 6 + textHeight + extra
+            : math.max(2 * kpiChipPad + textHeight + extra, kpiChipMinHeight));
+    if (need > cardHeight) return null;
+    return Padding(
+      padding: const EdgeInsets.only(top: kpiCommentGap),
+      child: Text(
+        commentLine(targetComment(target)!, width),
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.clip,
+        style: _commentStyle,
+      ),
+    );
+  }
+
+  Widget _card(double cardHeight, Color color, String word, Widget text) {
+    final comment = _comment(cardHeight);
     return Container(
       decoration: BoxDecoration(
         color: SlidePalette.card,
@@ -316,8 +397,10 @@ class _KpiCard extends StatelessWidget {
                 vertical: kpiLabelPad,
                 horizontal: 40,
               ),
+              // Top aligned: every "KPI 2 · PARTLY" label sits the same
+              // distance from the top of its card, one line or three.
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisAlignment: MainAxisAlignment.start,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
@@ -339,6 +422,7 @@ class _KpiCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   text,
+                  ?comment,
                 ],
               ),
             )
@@ -386,7 +470,15 @@ class _KpiCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 16),
-                  Expanded(child: text),
+                  Expanded(
+                    child: comment == null
+                        ? text
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [text, comment],
+                          ),
+                  ),
                 ],
               ),
             ),

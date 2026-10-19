@@ -87,7 +87,7 @@ async fn absurd_period_dates_are_refused() {
         assert_eq!(s, StatusCode::BAD_REQUEST, "{d}: {v}");
     }
     assert_eq!(app.count("period").await, 0);
-    // Controller meeting dates get the same sanity check.
+    // Manager meeting dates get the same sanity check.
     let cora = app.login("cora@example.org").await;
     let p = app.ensure_period(&cora, "2026-02-01").await;
     let (s, v) = app
@@ -185,7 +185,7 @@ async fn forged_and_stale_tokens_do_not_sign_anyone_in() {
 #[tokio::test]
 async fn the_role_claim_is_not_trusted_and_deactivated_people_are_out() {
     let app = TestApp::new().await;
-    // A correctly signed token that claims controller for a contributor.
+    // A correctly signed token that claims manager for a contributor.
     let t = forged(Algorithm::HS256, SECRET, ANA, "controller");
     let (s, v) = app.call("GET", "/api/me", Some(&t), None).await;
     assert_eq!(s, StatusCode::OK);

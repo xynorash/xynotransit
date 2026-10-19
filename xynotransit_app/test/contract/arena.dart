@@ -54,6 +54,11 @@ abstract class Arena {
   /// backend cannot do it here (no SQL access), and the scenario then skips.
   Future<bool> closePeriod(Period p);
 
+  /// Asks for sign-in links for [email] until the backend says "too many".
+  /// Returns what the app would show and the `Retry-After` it got, or null when
+  /// this backend has no such limit (the in-memory demo).
+  Future<({String message, int? retryAfter})?> provokeSignInLimit(String email);
+
   /// Whether the "last manager" guard can be provoked without harming
   /// other managers of a shared stack.
   bool get canTestLastManager;

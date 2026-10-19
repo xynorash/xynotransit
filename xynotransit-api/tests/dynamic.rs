@@ -65,7 +65,7 @@ fn labels(seat: &Value) -> Vec<String> {
 // ---------- who may do it ----------
 
 #[tokio::test]
-async fn every_new_write_and_the_summary_are_controller_only() {
+async fn every_new_write_and_the_summary_are_manager_only() {
     let app = TestApp::new().await;
     let ana = app.login("ana@example.org").await;
     let calls: Vec<(&str, String, Value)> = vec![
@@ -111,7 +111,7 @@ async fn every_new_write_and_the_summary_are_controller_only() {
         };
         let (s, v) = app.call(m, &uri, Some(&ana), b.clone()).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{m} {uri}");
-        assert_eq!(v["error"], "Only the controller can do this.");
+        assert_eq!(v["error"], "Only the manager can do this.");
         let (s, _) = app.call(m, &uri, None, b).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED, "{m} {uri}");
     }
@@ -810,7 +810,7 @@ async fn seats_are_created_moved_and_deactivated() {
 }
 
 #[tokio::test]
-async fn include_inactive_is_for_controllers_only() {
+async fn include_inactive_is_for_managers_only() {
     let app = TestApp::new().await;
     let t = boss(&app).await;
     let plain = catalog(&app, &t, "").await;
@@ -842,15 +842,12 @@ async fn include_inactive_is_for_controllers_only() {
     assert!(all.get("suggestions").is_none());
 
     let ana = app.login("ana@example.org").await;
+    // A contributor gets only themselves, whatever they ask for.
     let v = catalog(&app, &ana, "?include_inactive=true").await;
-    assert_eq!(v["persons"].as_array().unwrap().len(), 3);
-    assert_eq!(v["assignments"].as_array().unwrap().len(), 3);
-    assert!(v["persons"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|p| p["id"] != ANA)
-        .all(|p| p["email"].is_null()));
+    assert_eq!(v["persons"].as_array().unwrap().len(), 1);
+    assert_eq!(v["persons"][0]["id"], ANA);
+    assert_eq!(v["assignments"].as_array().unwrap().len(), 1);
+    assert_eq!(v["teams"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -1395,8 +1392,8 @@ async fn summary_numbers_trend_and_label_grouping() {
     assert_eq!(
         v["teams"],
         json!([
-            {"team_id": "1", "name": "Tana", "expected": 2, "submitted": 2, "met": 1, "partly": 1, "missed": 1, "volume_by_month": [11, 18, 21]},
-            {"team_id": "2", "name": "Antsirabe", "expected": 1, "submitted": 1, "met": 1, "partly": 0, "missed": 0, "volume_by_month": [0, 0, 0]},
+            {"team_id": "1", "name": "Tana", "expected": 2, "submitted": 2, "submitted_inactive": 0, "met": 1, "partly": 1, "missed": 1, "volume_by_month": [11, 18, 21]},
+            {"team_id": "2", "name": "Antsirabe", "expected": 1, "submitted": 1, "submitted_inactive": 0, "met": 1, "partly": 0, "missed": 0, "volume_by_month": [0, 0, 0]},
         ])
     );
     // Files: Ben's "files" came first in deck order, so its label is displayed.
@@ -1413,25 +1410,25 @@ async fn summary_numbers_trend_and_label_grouping() {
     assert_eq!(
         trend[0],
         json!({"period_id": aug, "label": "Aug to Oct 2025", "start_month": "2025-08-01",
-        "expected": 3, "submitted": 1, "met": 1, "partly": 0, "missed": 0, "volume_total": 15})
+        "expected": 3, "submitted": 1, "submitted_inactive": 0, "met": 1, "partly": 0, "missed": 0, "volume_total": 15})
     );
     assert_eq!(
         trend[1],
         json!({"period_id": nov, "label": "Nov 2025 to Jan 2026", "start_month": "2025-11-01",
-        "expected": 3, "submitted": 1, "met": 2, "partly": 0, "missed": 0, "volume_total": 9})
+        "expected": 3, "submitted": 1, "submitted_inactive": 0, "met": 2, "partly": 0, "missed": 0, "volume_total": 9})
     );
     assert_eq!(
         trend[2],
         json!({"period_id": feb, "label": "Feb to Apr 2026", "start_month": "2026-02-01",
-        "expected": 3, "submitted": 3, "met": 2, "partly": 1, "missed": 1, "volume_total": 50})
+        "expected": 3, "submitted": 3, "submitted_inactive": 0, "met": 2, "partly": 1, "missed": 1, "volume_total": 50})
     );
     // People in deck order, with the numbers of their own report.
     assert_eq!(
         v["people"],
         json!([
-            {"assignment_id": A_BEN, "name": "Ben Rabe", "role": "Export", "team": "Tana", "submitted": true, "met": 0, "partly": 0, "missed": 1, "volume_total": 6},
-            {"assignment_id": A_ANA, "name": "Ana Rakoto", "role": "Import", "team": "Tana", "submitted": true, "met": 1, "partly": 1, "missed": 0, "volume_total": 44},
-            {"assignment_id": A_CORA, "name": "Cora Boss", "role": "Operations", "team": "Antsirabe", "submitted": true, "met": 1, "partly": 0, "missed": 0, "volume_total": 0},
+            {"assignment_id": A_BEN, "name": "Ben Rabe", "role": "Export", "team": "Tana", "active": true, "submitted": true, "met": 0, "partly": 0, "missed": 1, "volume_total": 6},
+            {"assignment_id": A_ANA, "name": "Ana Rakoto", "role": "Import", "team": "Tana", "active": true, "submitted": true, "met": 1, "partly": 1, "missed": 0, "volume_total": 44},
+            {"assignment_id": A_CORA, "name": "Cora Boss", "role": "Operations", "team": "Antsirabe", "active": true, "submitted": true, "met": 1, "partly": 0, "missed": 0, "volume_total": 0},
         ])
     );
 
@@ -1498,7 +1495,8 @@ async fn summary_numbers_trend_and_label_grouping() {
         .all(|p| p["submitted"] == false));
     assert_eq!(ve["trend"].as_array().unwrap().len(), 3);
 
-    // A deactivated seat stops being expected, its sent report stays in the numbers.
+    // A deactivated seat stops being expected, its sent report stays in the volume and the list
+    // but is not counted as submitted (so submitted never exceeds expected).
     let (s, _) = app
         .call(
             "PATCH",
@@ -1517,7 +1515,8 @@ async fn summary_numbers_trend_and_label_grouping() {
         )
         .await;
     assert_eq!(vb["expected"], 2);
-    assert_eq!(vb["submitted"], 3);
+    assert_eq!(vb["submitted"], 2);
+    assert_eq!(vb["submitted_inactive"], 1);
     assert_eq!(vb["trend"][2]["volume_total"], 50);
     assert_eq!(vb["people"].as_array().unwrap().len(), 3);
     let (_, vb) = app

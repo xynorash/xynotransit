@@ -7,7 +7,7 @@ import 'package:xynotransit_app/domain/text_rules.dart';
 
 import 'arena.dart';
 
-const onlyController = 'Only the controller can do this.';
+const onlyController = 'Only the manager can do this.';
 
 /// A name of exactly [n] characters that starts with [prefix].
 String padded(String prefix, int n, [String fill = 'x']) =>
@@ -690,15 +690,31 @@ Future<void> catalogViews(Arena a) async {
     eve.email,
     reason: 'an employee sees their own email',
   );
-  expect(
-    mine.personById(fay.person.id)!.email,
-    isNull,
-    reason: 'and nobody else\'s',
-  );
+  // An employee sees only themselves: their person, their seats and the
+  // teams of those seats. Nobody else's name, role or team.
+  expect(mine.persons.map((p) => p.id), [
+    eve.person.id,
+  ], reason: 'an employee sees only their own person');
+  expect(mine.personById(fay.person.id), isNull);
+  expect(mine.personById(gus.person.id), isNull);
+  expect(mine.assignments.map((x) => x.id), [
+    eve.assignment.id,
+  ], reason: 'and only their own seats');
+  expect(mine.assignmentById(fay.assignment.id), isNull);
   expect(
     mine.assignmentById(gus.assignment.id),
     isNull,
     reason: 'inactive seats are hidden',
+  );
+  expect(mine.teams.map((t) => t.id), [
+    team.id,
+  ], reason: 'and only the teams of those seats');
+  final other = await a.makeTeam('Views Other');
+  final hal = await a.makeSeat('hal', other);
+  expect(
+    (await emp.loadCatalog()).teamById(other.id),
+    isNull,
+    reason: 'a team without a seat of mine is not listed (${hal.person.id})',
   );
   final asked = await emp.loadCatalog(includeInactive: true);
   expect(
@@ -706,6 +722,7 @@ Future<void> catalogViews(Arena a) async {
     isNull,
     reason: 'an employee cannot ask for the inactive ones',
   );
+  expect(asked.persons.map((p) => p.id), [eve.person.id]);
 
   final all = await boss.loadCatalog(includeInactive: true);
   expect(all.personById(fay.person.id)!.email, fay.email);

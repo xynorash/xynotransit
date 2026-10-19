@@ -32,8 +32,15 @@ class ReportedCard extends StatelessWidget {
     final text = StringBuffer(
       'Who has reported: ${s.submitted} of ${s.expected} reports sent. ',
     );
+    if (s.submittedInactive > 0) {
+      text.write('${_switchedOff(s.submittedInactive)}. ');
+    }
     for (final team in s.teams) {
-      text.write('${team.name}: ${team.submitted} of ${team.expected}. ');
+      text.write('${team.name}: ${team.submitted} of ${team.expected}');
+      if (team.submittedInactive > 0) {
+        text.write(', ${team.submittedInactive} from switched-off people');
+      }
+      text.write('. ');
     }
     return ChartCard(
       title: 'Who has reported',
@@ -59,10 +66,27 @@ class ReportedCard extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (s.submittedInactive > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      _switchedOff(s.submittedInactive),
+                      key: const ValueKey('reported-switched-off'),
+                      style: bodyStyle(
+                        context,
+                        size: 14,
+                        color: t.muted,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
                 for (final team in s.teams)
                   BarRow(
                     label: team.name,
-                    value: '${team.submitted} of ${team.expected}',
+                    value: team.submittedInactive > 0
+                        ? '${team.submitted} of ${team.expected} · '
+                              '+${team.submittedInactive} inactive'
+                        : '${team.submitted} of ${team.expected}',
                     bar: StackedBar(
                       parts: [
                         BarPart(team.submitted, t.ok),
@@ -92,6 +116,11 @@ class ReportedCard extends StatelessWidget {
     );
   }
 }
+
+/// "1 more report is from a switched-off person and is not counted here".
+String _switchedOff(int k) => k == 1
+    ? '1 more report is from a switched-off person and is not counted here'
+    : '$k more reports are from switched-off people and are not counted here';
 
 class _Ring extends StatelessWidget {
   const _Ring({

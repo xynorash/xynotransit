@@ -157,7 +157,7 @@ async fn who_may_ask_and_for_whom() {
     let ana = app.token_for(ANA, false);
     let (s, v) = link_for(&app, &ana, BEN, json!({})).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
-    assert_eq!(v["error"], "Only the controller can do this.");
+    assert_eq!(v["error"], "Only the manager can do this.");
     let (s, _) = link_for(&app, &ana, ANA, json!({})).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "not even for themselves");
     let (s, _) = app
@@ -223,6 +223,19 @@ async fn the_31st_link_in_an_hour_is_refused_per_manager() {
         "Too many sign-in links created. Try again later."
     );
     assert_eq!(app.count("sign_in_link_audit").await, 30);
+    // D12: the refusal says in whole seconds when a place frees.
+    let (s, h, _) = app
+        .send(
+            "POST",
+            &format!("/api/persons/{BEN}/sign-in-link"),
+            Some(&boss),
+            Some("application/json"),
+            b"{}".to_vec(),
+        )
+        .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    let wait: i64 = h["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!((3590..=3600).contains(&wait), "{wait}");
     // Another manager has their own count.
     app.sql("update person set app_role = 'controller' where id = '00000000-0000-0000-0000-0000000000a2'")
         .await;

@@ -84,7 +84,7 @@ void main() {
       expect(r.url.path, '/api/periods/per1');
       bodies.add(jsonDecode(r.body));
       return deny
-          ? json({'error': 'Only the controller can do this.'}, 403)
+          ? json({'error': 'Only the manager can do this.'}, 403)
           : json({
               'id': 'per1',
               'start_month': '2026-02-01',
@@ -105,7 +105,7 @@ void main() {
         isA<RepositoryException>().having(
           (e) => e.message,
           'm',
-          'Only the controller can do this.',
+          'Only the manager can do this.',
         ),
       ),
     );
@@ -185,41 +185,38 @@ void main() {
     );
   });
 
-  test(
-    'generateDeck posts and parses; non controller gets 403 words',
-    () async {
-      var deny = false;
-      final repo = await repoFor((r) async {
-        expect(r.method, 'POST');
-        expect(r.url.path, '/api/periods/per1/deck');
-        if (deny) {
-          return json({'error': 'Only the controller can do this.'}, 403);
-        }
-        return json({
-          'id': 'd1',
-          'period_id': 'per1',
-          'generated_at': '2026-06-01T08:00:00Z',
-          'expected_count': 14,
-          'included_count': 0,
-          'items': <Object?>[],
-        }, 201);
-      });
-      final period = Period(id: 'per1', startMonth: DateTime(2026, 2));
-      final catalog = buildSeedCatalog();
-      expect((await repo.generateDeck(period, catalog)).id, 'd1');
-      deny = true;
-      await expectLater(
-        repo.generateDeck(period, catalog),
-        throwsA(
-          isA<RepositoryException>().having(
-            (e) => e.message,
-            'm',
-            'Only the controller can do this.',
-          ),
+  test('generateDeck posts and parses; non manager gets 403 words', () async {
+    var deny = false;
+    final repo = await repoFor((r) async {
+      expect(r.method, 'POST');
+      expect(r.url.path, '/api/periods/per1/deck');
+      if (deny) {
+        return json({'error': 'Only the manager can do this.'}, 403);
+      }
+      return json({
+        'id': 'd1',
+        'period_id': 'per1',
+        'generated_at': '2026-06-01T08:00:00Z',
+        'expected_count': 14,
+        'included_count': 0,
+        'items': <Object?>[],
+      }, 201);
+    });
+    final period = Period(id: 'per1', startMonth: DateTime(2026, 2));
+    final catalog = buildSeedCatalog();
+    expect((await repo.generateDeck(period, catalog)).id, 'd1');
+    deny = true;
+    await expectLater(
+      repo.generateDeck(period, catalog),
+      throwsA(
+        isA<RepositoryException>().having(
+          (e) => e.message,
+          'm',
+          'Only the manager can do this.',
         ),
-      );
-    },
-  );
+      ),
+    );
+  });
 
   test(
     'watchReports loads, then polls when there is no live connection',

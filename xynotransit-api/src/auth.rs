@@ -102,7 +102,7 @@ impl AuthUser {
         if self.is_controller() {
             Ok(())
         } else {
-            Err(ApiError::forbidden("Only the controller can do this."))
+            Err(ApiError::forbidden("Only the manager can do this."))
         }
     }
 }

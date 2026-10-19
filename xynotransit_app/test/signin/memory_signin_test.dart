@@ -172,7 +172,7 @@ void main() {
       user = AppUser(personId: p.id, role: AppRole.contributor, label: 'Rosa');
       await expectLater(
         repo.createSignInLink(p.id),
-        fails('Only the controller can do this.'),
+        fails('Only the manager can do this.'),
       );
     });
 

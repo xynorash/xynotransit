@@ -76,6 +76,14 @@ class SlideResults extends StatelessWidget {
           final noteSize = pickNoteSize([
             for (final n in colTitles) n.isEmpty ? [texts['emptyNote']] : n,
           ], box.maxHeight);
+          // The fullest column fills its card; with room to spare every
+          // column starts at the same height, so the group sits in the middle
+          // of the cards and the first lines stay level across them.
+          final tallest = [
+            for (final n in colTitles)
+              noteColumnHeight(n.isEmpty ? [texts['emptyNote']] : n, noteSize),
+          ].reduce(math.max);
+          final inset = math.max(0.0, (box.maxHeight - tallest) / 2);
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -86,6 +94,7 @@ class SlideResults extends StatelessWidget {
                     title: titles[i],
                     titleSize: size,
                     noteSize: noteSize,
+                    topInset: inset,
                     emptyNote: texts['emptyNote'],
                     icon: columns[i].$2,
                     fill: columns[i].$3,
@@ -104,7 +113,22 @@ class SlideResults extends StatelessWidget {
 /// Width of the text of a note: a third of the text area, minus the gaps and
 /// the 40 px padding on both sides.
 const _noteWidth = (slideTextWidth - 64) / 3 - 80;
-const _noteSizes = [32.0, 30.0, 28.0, 26.0, 24.0, 22.0, 20.0];
+
+/// Few points get big type so the cards are not mostly empty; the fullest
+/// column decides how big it can be.
+const _noteSizes = [
+  44.0,
+  40.0,
+  36.0,
+  34.0,
+  32.0,
+  30.0,
+  28.0,
+  26.0,
+  24.0,
+  22.0,
+  20.0,
+];
 const _headerHeight = 56 + 52.8;
 const _bodyPad = 8 + 24.0;
 
@@ -121,7 +145,7 @@ double noteColumnHeight(List<String> notes, double size) {
   return h;
 }
 
-/// The biggest size (32 px down to 20 px) in which every column fits [height].
+/// The biggest size (44 px down to 20 px) in which every column fits [height].
 double pickNoteSize(List<List<String>> columns, double height) {
   for (final z in _noteSizes) {
     if (columns.every((c) => noteColumnHeight(c, z) <= height)) return z;
@@ -134,6 +158,7 @@ class _NoteColumn extends StatelessWidget {
     required this.title,
     required this.titleSize,
     required this.noteSize,
+    required this.topInset,
     required this.emptyNote,
     required this.icon,
     required this.fill,
@@ -143,6 +168,9 @@ class _NoteColumn extends StatelessWidget {
   final String title;
   final double titleSize;
   final double noteSize;
+
+  /// Air above the first point, the same in all three columns.
+  final double topInset;
   final String emptyNote;
   final NoteIcon icon;
   final Color fill;
@@ -180,35 +208,37 @@ class _NoteColumn extends StatelessWidget {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(40, 8, 40, 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (var i = 0; i < rows.length; i++)
-                    Container(
-                      padding: EdgeInsets.symmetric(
-                        vertical: _notePad(noteSize),
-                      ),
-                      decoration: BoxDecoration(
-                        border: i == 0
-                            ? null
-                            : const Border(
-                                top: BorderSide(color: SlidePalette.noteRule),
-                              ),
-                      ),
-                      child: Text(
-                        rows[i],
-                        style: st(
-                          noteSize,
-                          height: 1.3,
-                          color: notes.isEmpty
-                              ? SlidePalette.emptyNote
-                              : SlidePalette.ink,
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(40, 8 + topInset, 40, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var i = 0; i < rows.length; i++)
+                      Container(
+                        padding: EdgeInsets.symmetric(
+                          vertical: _notePad(noteSize),
+                        ),
+                        decoration: BoxDecoration(
+                          border: i == 0
+                              ? null
+                              : const Border(
+                                  top: BorderSide(color: SlidePalette.noteRule),
+                                ),
+                        ),
+                        child: Text(
+                          rows[i],
+                          style: st(
+                            noteSize,
+                            height: 1.3,
+                            color: notes.isEmpty
+                                ? SlidePalette.emptyNote
+                                : SlidePalette.ink,
+                          ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
