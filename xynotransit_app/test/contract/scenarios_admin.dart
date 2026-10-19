@@ -165,8 +165,9 @@ Future<void> people(Arena a) async {
   await bad('x' * 81, a.email('z'), 'A name can have at most 80 characters.');
   await bad('a​b', a.email('z'), 'Use plain text on one line.');
   await bad('', 'not an email', 'Enter a name.', 'the name is judged first');
+  // An empty email is not an error any more: it makes an internal address
+  // (see scenarios_signin.dart).
   for (final e in [
-    '',
     'ana',
     '@x.org',
     'ana@',

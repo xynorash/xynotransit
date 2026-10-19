@@ -100,6 +100,11 @@ async fn magic_link(
     if st.config.log_magic_links {
         tracing::info!(%email, %link, "magic link (LOG_MAGIC_LINKS is on)");
     }
+    // An internal address never receives mail: no send, so no SMTP error either. The answer,
+    // the rate limit and the work above are the same as for any other address.
+    if st.config.is_internal_email(&email) {
+        return Ok((StatusCode::ACCEPTED, Json(json!({}))));
+    }
     // Real SMTP can take seconds; do it in the background so response time does
     // not tell a caller whether the address exists. The test mailbox is instant.
     let mailer = st.mailer.clone();

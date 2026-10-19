@@ -70,3 +70,9 @@ String hourMinute(DateTime d) => '${_two(d.hour)}:${_two(d.minute)}';
 /// Cuts to [max] characters (code points) and adds an ellipsis.
 String truncate(String s, int max) =>
     charCount(s) <= max ? s : '${cutChars(s, max)}…';
+
+/// "Tuesday 09 June 2026, 14:35" in the viewer's own time zone.
+String longDateTime(DateTime d) {
+  final l = d.toLocal();
+  return '${longDate(l)}, ${_two(l.hour)}:${_two(l.minute)}';
+}

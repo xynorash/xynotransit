@@ -312,6 +312,7 @@ async fn migrations_run_twice_and_keep_old_rows_that_break_a_check() {
         "06-integrity.sql",
         "07-ledger.sql",
         "08-role-title-unique.sql",
+        "10-internal-signin.sql",
     ] {
         run(f).await.unwrap_or_else(|e| panic!("{f} twice: {e}"));
     }

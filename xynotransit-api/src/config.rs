@@ -28,11 +28,57 @@ pub struct Config {
     pub bootstrap_controller_email: Option<String>,
     pub bootstrap_controller_name: Option<String>,
     pub log_magic_links: bool,
+    /// Addresses at these domains never receive mail (lowercase, no `@`). The first one is used
+    /// for generated internal addresses.
+    pub internal_email_domains: Vec<String>,
     /// How long requests that are running get to finish after SIGTERM.
     pub shutdown_grace: std::time::Duration,
 }
 
+/// Domain used for internal addresses when INTERNAL_EMAIL_DOMAINS is not set.
+pub const DEFAULT_INTERNAL_DOMAIN: &str = "xynotransit.internal";
+
+/// Origin of the links, without a trailing slash.
+pub fn public_url_from(get: impl Fn(&str) -> Option<String>) -> String {
+    get("PUBLIC_URL")
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8080".into())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Comma separated domains, trimmed and lowercased, a leading `@` allowed. Empty means default.
+pub fn parse_internal_domains(raw: Option<&str>) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in raw.unwrap_or("").split(',') {
+        let d = part
+            .trim()
+            .trim_start_matches('@')
+            .trim_matches('.')
+            .to_lowercase();
+        if d.is_empty() {
+            continue;
+        }
+        if d.contains('@') || d.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err("INTERNAL_EMAIL_DOMAINS must be domains such as xynotransit.internal, separated by commas".into());
+        }
+        if !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    if out.is_empty() {
+        out.push(DEFAULT_INTERNAL_DOMAIN.into());
+    }
+    Ok(out)
+}
+
 impl Config {
+    /// True when mail to this address must never be tried.
+    pub fn is_internal_email(&self, email: &str) -> bool {
+        is_internal_email(&self.internal_email_domains, email)
+    }
+
     pub fn from_env() -> Result<Self, String> {
         Self::from_lookup(|k| std::env::var(k).ok())
     }
@@ -74,10 +120,9 @@ impl Config {
         let bind = bind
             .parse::<SocketAddr>()
             .map_err(|_| "BIND must look like 0.0.0.0:8081")?;
-        let public_url = non_empty("PUBLIC_URL")
-            .unwrap_or_else(|| "http://127.0.0.1:8080".into())
-            .trim_end_matches('/')
-            .to_string();
+        let public_url = public_url_from(&get);
+        let internal_email_domains =
+            parse_internal_domains(non_empty("INTERNAL_EMAIL_DOMAINS").as_deref())?;
 
         Ok(Config {
             database_url,
@@ -93,6 +138,7 @@ impl Config {
             bootstrap_controller_email: non_empty("BOOTSTRAP_CONTROLLER_EMAIL")
                 .map(|e| e.to_lowercase()),
             bootstrap_controller_name: non_empty("BOOTSTRAP_CONTROLLER_NAME"),
+            internal_email_domains,
             log_magic_links: non_empty("LOG_MAGIC_LINKS")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
@@ -107,6 +153,17 @@ impl Config {
                 },
             ),
         })
+    }
+}
+
+/// Does the address end in one of the internal domains (case does not matter)?
+pub fn is_internal_email(domains: &[String], email: &str) -> bool {
+    match email.trim().rsplit_once('@') {
+        Some((_, d)) => {
+            let d = d.to_lowercase();
+            domains.contains(&d)
+        }
+        None => false,
     }
 }
 
@@ -218,5 +275,39 @@ mod tests {
         assert!(with("0").is_err());
         assert!(with("soon").is_err());
         assert!(with("301").is_err());
+    }
+
+    #[test]
+    fn internal_domains() {
+        let base = [
+            ("DATABASE_URL", "postgres://x"),
+            ("JWT_SECRET", "0123456789012345678901234567890123"),
+        ];
+        let with = |v: &'static str| {
+            let mut p = base.to_vec();
+            p.push(("INTERNAL_EMAIL_DOMAINS", v));
+            Config::from_lookup(lookup(&p))
+        };
+        let c = Config::from_lookup(lookup(&base)).unwrap();
+        assert_eq!(c.internal_email_domains, vec!["xynotransit.internal"]);
+        assert!(c.is_internal_email("Rosa@XYNOTRANSIT.internal"));
+        assert!(!c.is_internal_email("rosa@xynotransit.internal.evil.org"));
+        assert!(!c.is_internal_email("rosa@evilxynotransit.internal"));
+        assert!(!c.is_internal_email("no-at-sign"));
+        assert!(!c.is_internal_email("rosa@example.org"));
+        let c = with(" A.internal, @B.local ,,a.internal").unwrap();
+        assert_eq!(c.internal_email_domains, vec!["a.internal", "b.local"]);
+        assert!(c.is_internal_email("x@b.local"));
+        assert_eq!(
+            with("  ").unwrap().internal_email_domains,
+            vec!["xynotransit.internal"]
+        );
+        // A leading dot or a trailing dot is dropped, so the domain still matches and a generated
+        // address is never name@.domain.
+        let c = with(".C.internal.,@.d.local").unwrap();
+        assert_eq!(c.internal_email_domains, vec!["c.internal", "d.local"]);
+        assert!(c.is_internal_email("x@c.internal"));
+        assert!(with("a b.local").is_err());
+        assert!(with("x@y.local").is_err());
     }
 }

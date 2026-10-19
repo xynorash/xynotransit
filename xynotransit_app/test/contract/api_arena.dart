@@ -150,6 +150,33 @@ class ApiRun {
     return s;
   }
 
+  /// Trades the token of a sign-in link (made by a manager) for a session.
+  Future<ApiSession> signInWithLink(String url) async {
+    final token = Uri.parse(url).queryParameters['token'];
+    if (token == null) {
+      throw const RepositoryException('The link has no token.');
+    }
+    SharedPreferences.setMockInitialValues({});
+    final tokens = TokenStore(await SharedPreferences.getInstance());
+    final api = ApiClient(
+      baseUrl: '$contractApi/api',
+      tokens: tokens,
+      timeout: const Duration(seconds: 20),
+    );
+    _clients.add(api);
+    await ApiAuthService(api).exchangeToken(token);
+    return ApiSession(
+      api,
+      tokens,
+      ApiRepository(
+        api,
+        useDefaultSse: false,
+        pollInterval: const Duration(milliseconds: 300),
+        debounce: const Duration(milliseconds: 20),
+      ),
+    );
+  }
+
   /// The token in the newest link mailed to [email], or null when none comes.
   Future<String?> _tokenFromMail(String email, DateTime since) async {
     final deadline = DateTime.now().add(const Duration(seconds: 4));
@@ -206,11 +233,11 @@ set local xt.allow_deck_delete = 'on';
 delete from deck_run_item where deck_run_id in (select id from deck_run where period_id in (select id from period where start_month >= '$from' and start_month < '$to'));
 delete from deck_run where period_id in (select id from period where start_month >= '$from' and start_month < '$to');
 delete from report where period_id in (select id from period where start_month >= '$from' and start_month < '$to')
-  or assignment_id in (select a.id from assignment a join person p on p.id = a.person_id where p.email like 'ct$tag%@contract.example');
+  or assignment_id in (select a.id from assignment a join person p on p.id = a.person_id where p.email like 'ct$tag%@contract.example' or p.email like 'ct$tag%@xynotransit.internal');
 delete from period where (start_month >= '$from' and start_month < '$to')
   or (start_month in ('2000-01-01', '2100-12-01') and not exists (select 1 from report r where r.period_id = period.id));
-delete from assignment where person_id in (select id from person where email like 'ct$tag%@contract.example');
-delete from person where email like 'ct$tag%@contract.example';
+delete from assignment where person_id in (select id from person where email like 'ct$tag%@contract.example' or email like 'ct$tag%@xynotransit.internal');
+delete from person where email like 'ct$tag%@contract.example' or email like 'ct$tag%@xynotransit.internal';
 delete from team where name like 'CT$tag%';
 delete from login_attempt where email like 'ct$tag%@contract.example';
 commit;
@@ -269,6 +296,10 @@ class ApiArena implements Arena {
   @override
   Future<Repository> signInAs(String email, {bool fresh = false}) async =>
       (await run.signIn(email, fresh: fresh)).repo;
+
+  @override
+  Future<Repository> signInWithLink(String url) async =>
+      (await run.signInWithLink(url)).repo;
 
   @override
   DateTime start(int n) => DateTime(run.base.year, run.base.month + _n * 4 + n);

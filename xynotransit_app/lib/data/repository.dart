@@ -37,6 +37,18 @@ class AppUser {
   bool get isController => role == AppRole.controller;
 }
 
+/// A one time sign-in link a manager made for a person.
+class SignInLink {
+  const SignInLink({
+    required this.url,
+    required this.expiresAt,
+    required this.personId,
+  });
+  final String url;
+  final DateTime expiresAt;
+  final String personId;
+}
+
 abstract class Repository {
   /// Teams, people and seats. Managers can ask for the inactive ones too.
   Future<Catalog> loadCatalog({bool includeInactive = false});
@@ -74,7 +86,11 @@ abstract class Repository {
   /// Only a team without seats can go.
   Future<void> deleteTeam(String id);
 
-  /// Creates or updates a person. The email is how they sign in.
+  /// Creates or updates a person. The email is how they sign in. A new person
+  /// with an empty [email] gets an internal address made from the name
+  /// (rosa.rakoto@xynotransit.internal) that never receives mail; an empty
+  /// [email] on an existing person keeps the address they have. The person
+  /// that comes back has the address.
   Future<Person> savePerson({
     String? id,
     required String fullName,
@@ -82,6 +98,12 @@ abstract class Repository {
     required AppRole role,
     bool active = true,
   });
+
+  /// Manager only. Makes a single use sign-in link for the person, valid for
+  /// [hours] (1 to 168). Earlier links stay valid until used or expired.
+  /// Throws [RepositoryException] with plain words when it is refused (not a
+  /// manager, person switched off, too many links).
+  Future<SignInLink> createSignInLink(String personId, {int hours = 24});
 
   /// Creates or updates a seat: who does what in which team.
   Future<Assignment> saveAssignment({

@@ -24,6 +24,7 @@ import 'scenarios_admin.dart' as admin;
 import 'scenarios_concurrent.dart' as concurrent;
 import 'scenarios_deck.dart' as deck;
 import 'scenarios_reports.dart' as reports;
+import 'scenarios_signin.dart' as signin;
 
 typedef Scenario = Future<void> Function(Arena a);
 
@@ -49,6 +50,11 @@ final scenarios = <(String, Scenario, {bool lastManager})>[
   ('deck with 0, 1 and N reports', deck.deck, lastManager: false),
   ('deck words: inherit and freeze', deck.deckTexts, lastManager: false),
   ('summary equals the pure compute', deck.summary, lastManager: false),
+  (
+    'person without email, internal address, one-time sign-in link',
+    signin.internalSignIn,
+    lastManager: false,
+  ),
   ('things at the same time', concurrent.sameTime, lastManager: false),
 ];
 

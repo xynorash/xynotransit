@@ -71,6 +71,9 @@ class _Acting implements Repository {
     ),
   );
   @override
+  Future<SignInLink> createSignInLink(String personId, {int hours = 24}) =>
+      _as(() => _r.createSignInLink(personId, hours: hours));
+  @override
   Future<Assignment> saveAssignment({
     String? id,
     required String personId,
@@ -158,11 +161,20 @@ class MemoryArena implements Arena {
     final p = _repo.currentPersons
         .where((p) => p.email?.toLowerCase() == email.toLowerCase())
         .firstOrNull;
-    if (p == null) throw SignInRefused(email);
+    // An internal address never receives mail, so no link is ever sent.
+    if (p == null || email.toLowerCase().endsWith('@xynotransit.internal')) {
+      throw SignInRefused(email);
+    }
     return _Acting(
       _repo,
       AppUser(personId: p.id, role: p.appRole, label: p.fullName),
     );
+  }
+
+  @override
+  Future<Repository> signInWithLink(String url) async {
+    final u = _repo.redeemSignInLink(url);
+    return _Acting(_repo, u);
   }
 
   @override

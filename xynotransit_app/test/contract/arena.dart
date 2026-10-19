@@ -38,6 +38,11 @@ abstract class Arena {
   /// an hour).
   Future<Repository> signInAs(String email, {bool fresh = false});
 
+  /// A repository acting as the person a one-time sign-in link (made by a
+  /// manager) belongs to. Throws a [RepositoryException] when the link is
+  /// refused (used already, expired, person switched off).
+  Future<Repository> signInWithLink(String url);
+
   /// The first month of the n-th period of this scenario (n = 0, 1, 2, ...).
   /// Consecutive n are consecutive months, far from real data.
   DateTime start(int n);

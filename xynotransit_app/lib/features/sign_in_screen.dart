@@ -60,74 +60,86 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
     final t = context.tokens;
     return Scaffold(
       body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: XCard(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Logistics Report Builder',
-                    style: bodyStyle(
-                      context,
-                      size: 24,
-                      weight: FontWeight.w700,
-                      height: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Enter your work email. We send you a link that signs you in.',
-                    style: bodyStyle(context, color: t.muted),
-                  ),
-                  const SizedBox(height: 16),
-                  if (_sent)
-                    Semantics(
-                      liveRegion: true,
-                      child: SoftBanner(
-                        child: Text(
-                          'Link sent to ${_email.text.trim()}. Open it on this device.',
-                          style: bodyStyle(context, size: 15, height: 1.4),
-                        ),
-                      ),
-                    )
-                  else ...[
-                    Labeled(
-                      label: 'Work email',
-                      child: TextField(
-                        controller: _email,
-                        keyboardType: TextInputType.emailAddress,
-                        autofillHints: const [AutofillHints.email],
-                        decoration: xInput(context),
-                        style: bodyStyle(context),
-                        onSubmitted: (_) => unawaited(_submit()),
+        child: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: XCard(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Logistics Report Builder',
+                      style: bodyStyle(
+                        context,
+                        size: 24,
+                        weight: FontWeight.w700,
+                        height: 1.2,
                       ),
                     ),
-                    if (_error != null) ...[
-                      const SizedBox(height: 10),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Enter your work email. We send you a link that signs you in.',
+                      style: bodyStyle(context, color: t.muted),
+                    ),
+                    const SizedBox(height: 16),
+                    if (_sent)
                       Semantics(
                         liveRegion: true,
-                        child: Text(
-                          _error!,
-                          style: bodyStyle(
-                            context,
-                            size: 15,
-                            color: t.bad,
-                            height: 1.4,
+                        child: SoftBanner(
+                          child: Text(
+                            'Link sent to ${_email.text.trim()}. Open it on this device.',
+                            style: bodyStyle(context, size: 15, height: 1.4),
                           ),
                         ),
+                      )
+                    else ...[
+                      Labeled(
+                        label: 'Work email',
+                        child: TextField(
+                          controller: _email,
+                          keyboardType: TextInputType.emailAddress,
+                          autofillHints: const [AutofillHints.email],
+                          decoration: xInput(context),
+                          style: bodyStyle(context),
+                          onSubmitted: (_) => unawaited(_submit()),
+                        ),
+                      ),
+                      if (_error != null) ...[
+                        const SizedBox(height: 10),
+                        Semantics(
+                          liveRegion: true,
+                          child: Text(
+                            _error!,
+                            style: bodyStyle(
+                              context,
+                              size: 15,
+                              color: t.bad,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      PrimaryButton(
+                        label: _busy ? 'Sending…' : 'Send me a link',
+                        onPressed: _busy ? null : () => unawaited(_submit()),
                       ),
                     ],
                     const SizedBox(height: 16),
-                    PrimaryButton(
-                      label: _busy ? 'Sending…' : 'Send me a link',
-                      onPressed: _busy ? null : () => unawaited(_submit()),
+                    Text(
+                      'No email address? Ask your manager for a sign-in link.',
+                      style: bodyStyle(
+                        context,
+                        size: 15,
+                        color: t.muted,
+                        height: 1.4,
+                      ),
                     ),
                   ],
-                ],
+                ),
               ),
             ),
           ),
