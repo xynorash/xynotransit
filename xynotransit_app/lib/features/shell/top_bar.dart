@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -51,7 +53,7 @@ class TopBar extends ConsumerWidget implements PreferredSizeWidget {
               selected: s == screen,
               onPressed: () => context.go(path),
             ),
-        if (auth is DemoAuth)
+        if (auth is DemoAuth && !auth.needsSignIn)
           PopupMenuButton<AppUser>(
             tooltip: 'Demo: act as someone else',
             onSelected: auth.actAs,
@@ -80,9 +82,8 @@ class TopBar extends ConsumerWidget implements PreferredSizeWidget {
                 ),
               ),
             ),
-          )
-        else if (user != null)
-          TextLinkButton(label: 'Sign out', onPressed: auth.signOut),
+          ),
+        if (user != null) _AccountMenu(user: user, signOut: auth.needsSignIn),
         IconButton(
           tooltip: brightness == Brightness.dark
               ? 'Switch to light mode'
@@ -134,14 +135,19 @@ class TopBar extends ConsumerWidget implements PreferredSizeWidget {
                     ),
                   ),
                 ),
-            if (auth is DemoAuth)
+            if (user != null)
+              PopupMenuItem(
+                onTap: () => context.go('/account/password'),
+                child: Text(_passwordLabel(user)),
+              ),
+            if (user != null && auth.needsSignIn)
+              PopupMenuItem(onTap: auth.signOut, child: const Text('Sign out')),
+            if (auth is DemoAuth && !auth.needsSignIn)
               for (final u in auth.choices)
                 PopupMenuItem(
                   onTap: () => auth.actAs(u),
                   child: Text('Demo: act as ${u.label}'),
-                )
-            else if (user != null)
-              PopupMenuItem(onTap: auth.signOut, child: const Text('Sign out')),
+                ),
             PopupMenuItem(
               onTap: () =>
                   ref.read(themeModeProvider.notifier).toggle(brightness),
@@ -152,6 +158,50 @@ class TopBar extends ConsumerWidget implements PreferredSizeWidget {
           ],
         ),
         const SizedBox(width: 4),
+      ],
+    );
+  }
+}
+
+String _passwordLabel(AppUser u) =>
+    u.hasPassword ? 'Change password' : 'Choose a password';
+
+/// Who is signed in, with "Change password" and "Sign out".
+class _AccountMenu extends ConsumerWidget {
+  const _AccountMenu({required this.user, required this.signOut});
+
+  final AppUser user;
+
+  /// The public demo has nobody to sign out.
+  final bool signOut;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return PopupMenuButton<String>(
+      tooltip: 'Account',
+      icon: const Icon(Icons.account_circle_outlined),
+      onSelected: (v) {
+        if (v == 'password') context.go('/account/password');
+        if (v == 'signout') unawaited(ref.read(authServiceProvider).signOut());
+      },
+      itemBuilder: (_) => [
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Text(
+            user.username == null
+                ? user.label
+                : '${user.label} (${user.username})',
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'password',
+          child: Text(_passwordLabel(user)),
+        ),
+        if (signOut)
+          const PopupMenuItem<String>(
+            value: 'signout',
+            child: Text('Sign out'),
+          ),
       ],
     );
   }

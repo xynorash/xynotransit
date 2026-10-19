@@ -24,6 +24,14 @@ class _RateLimited implements AuthService {
   @override
   Future<void> signOut() async {}
   @override
+  Future<void> signInWithPassword(String username, String password) async =>
+      throw errorFromResponse(429, body, retryAfter: retryAfter);
+  @override
+  Future<void> changePassword({
+    String? currentPassword,
+    required String newPassword,
+  }) async {}
+  @override
   Future<void> signInWithEmail(String email) async =>
       throw errorFromResponse(429, body, retryAfter: retryAfter);
 }
@@ -41,7 +49,10 @@ Future<void> trySignIn(WidgetTester tester, AuthService auth) async {
       ),
     ),
   );
-  await tester.enterText(find.byType(TextField), 'shalini@xynotransit.example');
+  await tester.enterText(
+    find.byKey(const Key('signin-email')),
+    'shalini@xynotransit.example',
+  );
   await tester.tap(find.text('Send me a link'));
   await tester.pumpAndSettle();
 }

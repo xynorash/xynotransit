@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/theme/theme.dart';
 import '../core/theme/tokens.dart';
+import '../features/account/password_screen.dart';
 import '../features/gallery_screen.dart';
 import '../features/employee/employee_screen.dart';
 import '../features/deck_text/deck_text_screen.dart';
@@ -31,6 +32,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manager/deck', builder: (_, _) => const DeckTextScreen()),
       GoRoute(path: '/manager/people', builder: (_, _) => const PeoplePage()),
       GoRoute(path: '/gallery', builder: (_, _) => const GalleryScreen()),
+      GoRoute(
+        path: '/account/password',
+        builder: (_, _) => const PasswordScreen(),
+      ),
       GoRoute(path: '/signin', builder: (_, _) => const SignInScreen()),
       GoRoute(
         path: '/auth/verify',
@@ -44,8 +49,13 @@ final routerProvider = Provider<GoRouter>((ref) {
       final user = auth.currentUser;
       if (auth.needsSignIn) {
         // The emailed link must open while signed out.
-        if (here == '/auth/verify') return null;
+        if (here == '/auth/verify' && user == null) return null;
         if (user == null) return here == '/signin' ? null : '/signin';
+      }
+      // A temporary password from a manager: nothing else opens until the
+      // person has chosen their own.
+      if (user != null && user.mustChangePassword) {
+        return here == '/account/password' ? null : '/account/password';
       }
       final home = user?.isController ?? false ? '/manager' : '/report';
       if (here == '/' || here == '/signin') return home;

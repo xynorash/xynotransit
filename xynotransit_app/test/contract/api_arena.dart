@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xynotransit_app/data/api/api_auth.dart';
 import 'package:xynotransit_app/data/api/api_client.dart';
+import 'package:xynotransit_app/data/api/api_models.dart' show parseUser;
 import 'package:xynotransit_app/data/api/api_repository.dart';
 import 'package:xynotransit_app/data/repository.dart';
 import 'package:xynotransit_app/domain/catalog.dart';
@@ -65,6 +66,26 @@ class ApiSession {
   final ApiClient api;
   final TokenStore tokens;
   final ApiRepository repo;
+}
+
+class ApiPersonSession implements PersonSession {
+  ApiPersonSession(this._api, this._auth, this.repo);
+  final ApiClient _api;
+  final ApiAuthService _auth;
+  @override
+  final ApiRepository repo;
+
+  @override
+  Future<AppUser> me() async => parseUser(await _api.get('/me'));
+
+  @override
+  Future<void> changePassword({
+    String? currentPassword,
+    required String newPassword,
+  }) => _auth.changePassword(
+    currentPassword: currentPassword,
+    newPassword: newPassword,
+  );
 }
 
 /// One run against the live stack: one tag for everything it creates.
@@ -177,6 +198,54 @@ class ApiRun {
     );
   }
 
+  /// Signs in with a username and a password, as the sign-in screen does.
+  Future<ApiPersonSession> signInWithPassword(
+    String username,
+    String password,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final tokens = TokenStore(await SharedPreferences.getInstance());
+    final api = ApiClient(
+      baseUrl: '$contractApi/api',
+      tokens: tokens,
+      timeout: const Duration(seconds: 20),
+    );
+    _clients.add(api);
+    final auth = ApiAuthService(api);
+    await auth.signInWithPassword(username, password);
+    return _session(api, auth);
+  }
+
+  Future<ApiPersonSession> signInWithLinkSession(String url) async {
+    final token = Uri.parse(url).queryParameters['token'];
+    if (token == null) {
+      throw const RepositoryException('The link has no token.');
+    }
+    SharedPreferences.setMockInitialValues({});
+    final tokens = TokenStore(await SharedPreferences.getInstance());
+    final api = ApiClient(
+      baseUrl: '$contractApi/api',
+      tokens: tokens,
+      timeout: const Duration(seconds: 20),
+    );
+    _clients.add(api);
+    final auth = ApiAuthService(api);
+    await auth.exchangeToken(token);
+    return _session(api, auth);
+  }
+
+  ApiPersonSession _session(ApiClient api, ApiAuthService auth) =>
+      ApiPersonSession(
+        api,
+        auth,
+        ApiRepository(
+          api,
+          useDefaultSse: false,
+          pollInterval: const Duration(milliseconds: 300),
+          debounce: const Duration(milliseconds: 20),
+        ),
+      );
+
   /// The token in the newest link mailed to [email], or null when none comes.
   Future<String?> _tokenFromMail(String email, DateTime since) async {
     final deadline = DateTime.now().add(const Duration(seconds: 4));
@@ -240,6 +309,8 @@ delete from assignment where person_id in (select id from person where email lik
 delete from person where email like 'ct$tag%@contract.example' or email like 'ct$tag%@xynotransit.internal';
 delete from team where name like 'CT$tag%';
 delete from login_attempt where email like 'ct$tag%@contract.example';
+delete from login_failure where username_key like 'ct$tag%';
+delete from password_audit where person_id not in (select id from person);
 commit;
 ''');
     } else {
@@ -300,6 +371,14 @@ class ApiArena implements Arena {
   @override
   Future<Repository> signInWithLink(String url) async =>
       (await run.signInWithLink(url)).repo;
+
+  @override
+  Future<PersonSession> signInWithPassword(String username, String password) =>
+      run.signInWithPassword(username, password);
+
+  @override
+  Future<PersonSession> signInWithLinkSession(String url) =>
+      run.signInWithLinkSession(url);
 
   @override
   DateTime start(int n) => DateTime(run.base.year, run.base.month + _n * 4 + n);

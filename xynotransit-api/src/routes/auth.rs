@@ -5,15 +5,21 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::{
-    auth::{hash_token, issue_jwt, random_token, Role},
+    auth::{hash_token, issue_jwt, random_token, Role, SessionUser, SIGN_IN_AGAIN_MSG},
     error::{ApiError, ApiJson},
+    loginlimit::{self, msg as limit_msg, ClientKey},
+    password::{self, msg as pw_msg, Subject},
+    passwords,
     state::AppState,
+    username,
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/magic-link", post(magic_link))
         .route("/auth/verify", post(verify))
+        .route("/auth/login", post(login))
+        .route("/auth/password", post(change_password))
 }
 
 pub use crate::rules::MAX_LINKS_PER_HOUR;
@@ -163,12 +169,203 @@ async fn verify(
     let user = crate::auth::load_user(&st.pool, person_id)
         .await?
         .ok_or_else(expired)?;
-    let (access_token, exp) = issue_jwt(&st.config.jwt_secret, person_id, user.role)?;
+    let (access_token, exp) = issue_jwt(&st.config.jwt_secret, person_id, user.role, user.epoch)?;
     Ok(Json(json!({
         "access_token": access_token,
         "expires_at": exp.to_rfc3339_opts(SecondsFormat::Secs, true),
         "user": user_json(&user),
+        "has_password": user.has_password,
+        "must_change_password": user.must_change_password,
     })))
+}
+
+#[derive(Deserialize)]
+struct LoginBody {
+    username: String,
+    password: String,
+}
+
+/// Sign in with a username and a password. Every way to fail (no such name, wrong password,
+/// switched off, no password set) gives the same 401 after the same work.
+async fn login(
+    State(st): State<AppState>,
+    ClientKey(ip): ClientKey,
+    ApiJson(body): ApiJson<LoginBody>,
+) -> Result<Json<Value>, ApiError> {
+    let wrong = || ApiError::unauthorized(limit_msg::WRONG);
+    let key = username::lookup_key(&body.username);
+    let attempt = loginlimit::begin_attempt(&st.pool, &key, &ip).await?;
+
+    let found: Option<(Uuid, Option<String>, bool)> = match sqlx::query_as(
+        "select id, password_hash, active from person where lower(username) = $1",
+    )
+    .bind(&key)
+    .fetch_optional(&st.pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            loginlimit::forgive(&st.pool, attempt).await;
+            return Err(e.into());
+        }
+    };
+    let (person_id, stored) = match found {
+        Some((id, hash, true)) => (Some(id), hash),
+        _ => (None, None),
+    };
+    // No hash to check against: the dummy hash costs the same time and never says yes.
+    let verdict = if password::too_long(&body.password) {
+        // Cannot be anyone's password; do not spend memory on it.
+        None
+    } else {
+        match st.hasher.verify(&body.password, stored.as_deref()).await {
+            Ok(v) => Some(v),
+            Err(e) => {
+                loginlimit::forgive(&st.pool, attempt).await;
+                return Err(e.into());
+            }
+        }
+    };
+    let (Some(person_id), Some(verdict)) = (person_id, verdict) else {
+        return Err(wrong());
+    };
+    if !verdict.ok {
+        return Err(wrong());
+    }
+    loginlimit::succeed(&st.pool, &key).await;
+
+    let user = crate::auth::load_user(&st.pool, person_id)
+        .await?
+        .ok_or_else(wrong)?;
+    if verdict.needs_rehash {
+        rehash(&st, person_id, stored.as_deref(), &body.password).await;
+    }
+    let (access_token, exp) = issue_jwt(&st.config.jwt_secret, person_id, user.role, user.epoch)?;
+    Ok(Json(json!({
+        "access_token": access_token,
+        "expires_at": exp.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "user": user_json(&user),
+        "must_change_password": user.must_change_password,
+        "has_password": true,
+    })))
+}
+
+/// The stored hash used older parameters: store a new one. Best effort; the old one still works.
+async fn rehash(st: &AppState, person_id: Uuid, old: Option<&str>, password: &str) {
+    let Ok(new) = st.hasher.hash(password).await else {
+        return;
+    };
+    let r =
+        sqlx::query("update person set password_hash = $2 where id = $1 and password_hash = $3")
+            .bind(person_id)
+            .bind(new)
+            .bind(old)
+            .execute(&st.pool)
+            .await;
+    if let Err(e) = r {
+        tracing::warn!(error = %e, "could not store a rehashed password");
+    }
+}
+
+#[derive(Deserialize)]
+struct ChangeBody {
+    #[serde(default)]
+    current_password: Option<String>,
+    new_password: String,
+}
+
+/// Choose or change the password of the person who is signed in. A person who has one must give
+/// it (a wrong one counts like a failed sign-in); a person who has none (first password after a
+/// link) does not. All older sessions end and the answer carries a fresh one.
+async fn change_password(
+    SessionUser(user): SessionUser,
+    State(st): State<AppState>,
+    ClientKey(ip): ClientKey,
+    ApiJson(body): ApiJson<ChangeBody>,
+) -> Result<Json<Value>, ApiError> {
+    if body.new_password.is_empty() {
+        return Err(ApiError::bad(pw_msg::NEW_REQUIRED));
+    }
+    let (stored, email, full_name): (Option<String>, Option<String>, String) =
+        sqlx::query_as("select password_hash, email, full_name from person where id = $1")
+            .bind(user.person_id)
+            .fetch_one(&st.pool)
+            .await?;
+
+    if let Some(hash) = &stored {
+        let current = body
+            .current_password
+            .as_deref()
+            .filter(|c| !c.is_empty())
+            .ok_or_else(|| ApiError::bad(pw_msg::CURRENT_REQUIRED))?;
+        let key = username::lookup_key(&user.username);
+        let attempt = loginlimit::begin_attempt(&st.pool, &key, &ip).await?;
+        let ok = if password::too_long(current) {
+            false
+        } else {
+            match st.hasher.verify(current, Some(hash)).await {
+                Ok(v) => v.ok,
+                Err(e) => {
+                    loginlimit::forgive(&st.pool, attempt).await;
+                    return Err(e.into());
+                }
+            }
+        };
+        if !ok {
+            return Err(ApiError::forbidden(pw_msg::CURRENT_WRONG));
+        }
+        loginlimit::succeed(&st.pool, &key).await;
+        if password::normalize(current) == password::normalize(&body.new_password) {
+            return Err(ApiError::bad(pw_msg::SAME));
+        }
+    }
+
+    password::check(
+        &body.new_password,
+        Subject {
+            username: &user.username,
+            email: email.as_deref().unwrap_or(""),
+            full_name: &full_name,
+        },
+    )
+    .map_err(ApiError::bad)?;
+    let new_hash = st.hasher.hash(&body.new_password).await?;
+
+    let mut tx = st.pool.begin().await?;
+    let now: Option<(Option<String>,)> =
+        sqlx::query_as("select password_hash from person where id = $1 and active for update")
+            .bind(user.person_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    // Someone changed it while we were hashing: this session is over.
+    if now.map(|r| r.0) != Some(stored) {
+        return Err(ApiError::unauthorized(SIGN_IN_AGAIN_MSG));
+    }
+    let epoch = passwords::store_password(
+        &mut tx,
+        user.person_id,
+        Some(&new_hash),
+        false,
+        "change",
+        None,
+    )
+    .await?
+    .ok_or(ApiError::Internal)?;
+    tx.commit().await?;
+    let (access_token, exp) = issue_jwt(&st.config.jwt_secret, user.person_id, user.role, epoch)?;
+    Ok(Json(json!({
+        "access_token": access_token,
+        "expires_at": exp.to_rfc3339_opts(SecondsFormat::Secs, true),
+    })))
+}
+
+/// `GET /api/me`: the user plus what the app needs to offer password screens.
+pub fn me_json(u: &crate::auth::AuthUser) -> Value {
+    let mut v = user_json(u);
+    v["username"] = json!(u.username);
+    v["has_password"] = json!(u.has_password);
+    v["must_change_password"] = json!(u.must_change_password);
+    v
 }
 
 pub fn user_json(u: &crate::auth::AuthUser) -> Value {

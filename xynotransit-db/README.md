@@ -73,6 +73,7 @@ The API variables `SMTP_HOST` (`mailpit`), `SMTP_PORT` (`1025`), plain SMTP and 
 
 | `10-internal-signin.sql` | `sign_in_link_audit` (who got a one-time sign-in link, who issued it, when, until when; never the token). `login_token` is unchanged. | yes |
 | `11-deck-switched-off.sql` | `deck_run.switched_off_count`: how many reports of a deck came from a switched-off seat or person (0 for old decks). | yes |
+| `12-passwords.sql` | Usernames and passwords. `person.username` (unique ignoring case, lowercase, 3 to 40 of `a-z 0-9 . _ -`, never null; backfilled from the part of the email before the `@`, numbered on conflict, by the functions `xt_username_base` / `xt_make_username`, and filled by a trigger for inserts that have none), `password_hash` (Argon2id PHC string), `must_change_password`, `session_epoch`, `password_changed_at`; `login_failure` (rows behind the sign-in rate limits, no passwords) and `password_audit` (who set, reset or removed a password; never a password or hash); `xt_purge_expired()` also drops old `login_failure` rows. Existing passwords-free people keep working with links. Apply it (`scripts/migrate.sh`) BEFORE starting an API built with passwords: that API reads these columns. | yes |
 
 A fresh database has an empty catalog. The first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app. The old seed (`10-seed.sql`, `20-seed-demo.sql`) lives in `examples/` and is not loaded automatically; see `examples/README.md` to load it by hand.
 

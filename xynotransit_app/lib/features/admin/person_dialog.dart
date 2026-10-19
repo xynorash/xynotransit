@@ -37,6 +37,7 @@ class PersonEditor extends ConsumerStatefulWidget {
 class _PersonEditorState extends ConsumerState<PersonEditor> {
   final _name = TextEditingController();
   final _email = TextEditingController();
+  final _username = TextEditingController();
   final _roleTitle = TextEditingController();
   String? _id;
   AppRole _role = AppRole.contributor;
@@ -47,6 +48,7 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
   String? _message;
   bool _isError = false;
   String? _generated;
+  String? _savedUsername;
   String? _seatMessage;
   bool _seatIsError = false;
 
@@ -60,6 +62,7 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
   void dispose() {
     _name.dispose();
     _email.dispose();
+    _username.dispose();
     _roleTitle.dispose();
     super.dispose();
   }
@@ -67,6 +70,8 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
   void _fill(Person p) {
     _name.text = p.fullName;
     _email.text = p.email ?? '';
+    _username.text = p.username ?? '';
+    _savedUsername = p.username;
     _role = p.appRole;
     _active = p.active;
     _loaded = true;
@@ -101,10 +106,18 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
             email: email,
             role: _role,
             active: _active,
+            // Only what was typed: empty on a new person means "make one".
+            username:
+                _username.text.trim().isEmpty ||
+                    _username.text.trim().toLowerCase() == _savedUsername
+                ? null
+                : _username.text.trim(),
           );
       if (!mounted) return;
       setState(() {
         _id = p.id;
+        _savedUsername = p.username ?? _savedUsername;
+        if (p.username != null) _username.text = p.username!;
         _busy = false;
         _loaded = true;
         _message = 'Saved.';
@@ -250,6 +263,28 @@ class _PersonEditorState extends ConsumerState<PersonEditor> {
                           '(no real email needed)',
               ),
             ),
+          ),
+          const SizedBox(height: 12),
+          Labeled(
+            label: editing ? 'Username' : 'Username (optional)',
+            child: TextField(
+              key: const Key('person-username'),
+              controller: _username,
+              autocorrect: false,
+              enableSuggestions: false,
+              style: bodyStyle(context),
+              decoration: xInput(
+                context,
+                hint: editing
+                    ? 'rosa.rakoto'
+                    : 'Leave empty to use the start of the email',
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Lower case letters, digits, dots, dashes and underscores.',
+            style: bodyStyle(context, size: 13, color: t.muted),
           ),
           const SizedBox(height: 12),
           Labeled(

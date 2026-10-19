@@ -263,6 +263,27 @@ fn endpoints() -> Vec<Endpoint> {
             Some(json!({"token": "abc"})),
             &[],
         ),
+        e(
+            "POST",
+            "/api/auth/login",
+            Some(json!({"username": "ana", "password": "a long enough one"})),
+            &[],
+        ),
+        e(
+            "POST",
+            "/api/auth/password",
+            Some(
+                json!({"current_password": "old old old old", "new_password": "a brand new passphrase"}),
+            ),
+            &[],
+        ),
+        e(
+            "POST",
+            "/api/persons/{x}/password-reset",
+            Some(json!({})),
+            &[],
+        ),
+        e("DELETE", "/api/persons/{x}/password", None, &[]),
         e("GET", "/api/me", None, &[]),
         e("GET", "/api/catalog", None, &["include_inactive"]),
         e("POST", "/api/teams", Some(json!({"name": "New team"})), &[]),
@@ -277,7 +298,7 @@ fn endpoints() -> Vec<Endpoint> {
             "POST",
             "/api/persons",
             Some(
-                json!({"full_name": "New Person", "email": "new@example.org", "app_role": "contributor"}),
+                json!({"full_name": "New Person", "email": "new@example.org", "app_role": "contributor", "username": "new.person"}),
             ),
             &[],
         ),
@@ -285,7 +306,7 @@ fn endpoints() -> Vec<Endpoint> {
             "PATCH",
             "/api/persons/{x}",
             Some(
-                json!({"full_name": "Changed", "email": "changed@example.org", "app_role": "contributor", "active": true}),
+                json!({"full_name": "Changed", "email": "changed@example.org", "app_role": "contributor", "active": true, "username": "changed.one"}),
             ),
             &[],
         ),

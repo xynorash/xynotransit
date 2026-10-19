@@ -52,10 +52,13 @@ if ! db_exists "$PGDATABASE"; then fail "live database $PGDATABASE not found"; e
   [[ ${PIPESTATUS[0]} == 0 ]] && ok "migrate.sh on the copy" || fail "migrate.sh on the copy"
   "$(dirname "$0")/migrate.sh" "$B" 2>&1 | tail -1 | sed 's/^/      /'
   row_counts "$B" > $T/c2
-  # The ledger is the one table a migration may add or fill; every other table must keep its rows.
-  if diff <(grep -v '^schema_migration ' $T/c2) <(grep -v '^schema_migration ' $T/c1) >/dev/null; then
+  # The ledger may gain rows, and a migration may add new tables (new tables are not compared:
+  # they did not exist before). Every table that already existed must keep its rows.
+  awk 'NR==FNR {t[$1]=1; next} ($1 in t) && $1 != "schema_migration"' $T/c1 $T/c2 > $T/c2b
+  grep -v '^schema_migration ' $T/c1 > $T/c1b
+  if diff $T/c2b $T/c1b >/dev/null; then
     ok "row counts unchanged: $(awk '{s+=$2} END {print s}' $T/c1) rows in $(wc -l < $T/c1) tables"
-  else fail "row counts changed"; diff <(grep -v '^schema_migration ' $T/c2) <(grep -v '^schema_migration ' $T/c1) | head; fi
+  else fail "row counts changed"; diff $T/c2b $T/c1b | head; fi
   bad=$(psql_val "$B" -c "select count(*) from pg_constraint where not convalidated")
   [[ $bad == 0 ]] && ok "all constraints valid on the copy" || echo "warn: $bad constraint(s) left NOT VALID on the copy (old rows break them)"
   if [[ ${SKIP_API_TESTS:-0} != 1 ]]; then

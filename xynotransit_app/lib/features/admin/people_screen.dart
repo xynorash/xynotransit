@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,6 +11,7 @@ import '../../domain/catalog.dart';
 import '../shell/top_bar.dart';
 import 'admin_providers.dart';
 import 'definitions_dialog.dart';
+import 'password_dialogs.dart';
 import 'person_dialog.dart';
 import 'sign_in_link_dialog.dart';
 
@@ -606,14 +609,14 @@ class _TeamsCardState extends ConsumerState<_TeamsCard> {
   }
 }
 
-class _PersonLine extends StatelessWidget {
+class _PersonLine extends ConsumerWidget {
   const _PersonLine({required this.person, this.seat, required this.subtitle});
   final Person person;
   final Assignment? seat;
   final String subtitle;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
     final inactive = !person.active || (seat != null && !seat!.active);
     return Opacity(
@@ -661,6 +664,48 @@ class _PersonLine extends StatelessWidget {
                 style: monoStyle(context, size: 12),
                 overflow: TextOverflow.ellipsis,
               ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 16,
+              runSpacing: 2,
+              children: [
+                if (person.username != null)
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: 'Username ',
+                          style: bodyStyle(context, size: 13, color: t.muted),
+                        ),
+                        TextSpan(
+                          text: person.username,
+                          style: monoStyle(context, size: 12),
+                        ),
+                      ],
+                    ),
+                    key: Key('username-${person.id}'),
+                  ),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: 'Password ',
+                        style: bodyStyle(context, size: 13, color: t.muted),
+                      ),
+                      TextSpan(
+                        text: person.hasPassword ? 'Set' : 'Not set',
+                        style: bodyStyle(
+                          context,
+                          size: 13,
+                          weight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                  key: Key('password-state-${person.id}'),
+                ),
+              ],
+            ),
             const SizedBox(height: 6),
             Wrap(
               spacing: 8,
@@ -689,6 +734,23 @@ class _PersonLine extends StatelessWidget {
                       ? () => showSignInLinkDialog(context, person)
                       : null,
                 ),
+                SmallButton(
+                  label: 'Reset password',
+                  semanticLabel: person.active
+                      ? 'Reset password for ${person.fullName}'
+                      : 'Reset password for ${person.fullName}, not '
+                            'available. $resetPasswordOffReason',
+                  onPressed: person.active
+                      ? () => showResetPasswordDialog(context, person)
+                      : null,
+                ),
+                if (person.hasPassword)
+                  SmallButton(
+                    label: 'Remove password',
+                    semanticLabel: 'Remove the password of ${person.fullName}',
+                    onPressed: () =>
+                        unawaited(confirmRemovePassword(context, ref, person)),
+                  ),
               ],
             ),
             if (!person.active)

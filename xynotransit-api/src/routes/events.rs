@@ -39,10 +39,14 @@ async fn stream(
         .redeem_ticket(ticket)
         .ok_or_else(|| ApiError::unauthorized("Please sign in."))?;
     // The person must still be active.
-    load_user(&st.pool, person)
+    let user = load_user(&st.pool, person)
         .await?
-        .ok_or_else(|| ApiError::unauthorized("Please sign in."))?
-        .require_controller()?;
+        .ok_or_else(|| ApiError::unauthorized("Please sign in."))?;
+    // A ticket made before the person had to choose a new password opens nothing.
+    if user.must_change_password {
+        return Err(ApiError::unauthorized("Please sign in."));
+    }
+    user.require_controller()?;
     let period_id = parse_id(q.get("period_id").map(String::as_str).unwrap_or(""))?;
 
     let mut rx = st.events.subscribe();

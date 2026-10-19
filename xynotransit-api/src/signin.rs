@@ -27,7 +27,7 @@ pub mod msg {
 }
 
 /// A letter with its accent taken off, or `None` when the character has no plain form.
-fn fold_char(c: char) -> Option<&'static str> {
+pub(crate) fn fold_char(c: char) -> Option<&'static str> {
     let s = match c {
         'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' | 'ǎ' => "a",
         'æ' | 'ǣ' => "ae",

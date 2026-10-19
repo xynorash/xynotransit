@@ -82,5 +82,46 @@
     "trend_range": "The trend must be a number from 1 to 24.",
     "choose_period": "Choose a period.",
     "too_many_links": "Too many links requested. Try again later."
+  },
+  "passwords": {
+    "_about": "Usernames and passwords (added later; the sections above are unchanged). Password length counts Unicode scalar values, spaces are kept exactly as typed, nothing is trimmed. The policy checks run in the order of policy_order and the first that fails gives its message. A password may not equal (ignoring case) the username, the email, the part of the email before the @ or the full name. Run = every character is the next or every one the previous, ignoring case, digits wrap around (1234567890). common_list is embedded in the API (src/common_passwords.txt, lowercase compare, every entry 10 characters or longer); the Dart demo may use a shorter list.",
+    "limits": {
+      "username_min": 3,
+      "username_max": 40,
+      "password_min": 10,
+      "password_max": 128,
+      "login_failures_per_username": 5,
+      "login_failures_per_address": 30,
+      "login_window_minutes": 15,
+      "resets_per_manager_per_hour": 30,
+      "temporary_password_chars": 16,
+      "session_days": 7
+    },
+    "username_pattern": "^[a-z0-9._-]{3,40}$",
+    "temporary_password_alphabet": "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789",
+    "policy_order": ["control", "short", "long", "personal", "repeated", "run", "common"],
+    "messages": {
+      "username_invalid": "Usernames use letters, digits, dots, dashes and underscores, 3 to 40 characters.",
+      "username_taken": "That username is already used.",
+      "login_wrong": "Username or password is wrong.",
+      "login_too_many": "Too many sign-in attempts. Try again later.",
+      "busy": "Busy, try again in a moment.",
+      "password_control": "Use letters, numbers, spaces and symbols only.",
+      "password_short": "Use at least 10 characters.",
+      "password_long": "Use at most 128 characters.",
+      "password_personal": "Do not use your username, email address or name as a password.",
+      "password_repeated": "Do not repeat one character.",
+      "password_run": "Do not use a simple run such as 1234567890 or abcdefghij.",
+      "password_common": "That password is too common. Pick something only you would think of.",
+      "password_new_required": "Enter a new password.",
+      "password_current_required": "Enter your current password.",
+      "password_current_wrong": "Your current password is not right.",
+      "password_same": "Choose a password different from the current one.",
+      "choose_new_password": "Choose a new password first.",
+      "sign_in_again": "Please sign in again.",
+      "too_many_resets": "Too many temporary passwords created. Try again later.",
+      "switched_off": "This person is switched off.",
+      "manager_only": "Only the manager can do this."
+    }
   }
 }

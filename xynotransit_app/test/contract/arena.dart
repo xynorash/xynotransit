@@ -22,6 +22,23 @@ class SignInRefused implements Exception {
   String toString() => 'sign in refused for $email';
 }
 
+/// One signed-in person as the app holds them after a sign-in with a
+/// password or a link: the repository they act through, who the server says
+/// they are, and the password change that swaps the session.
+abstract class PersonSession {
+  Repository get repo;
+
+  /// What `GET /api/me` says: username, has_password, must_change_password.
+  Future<AppUser> me();
+
+  /// Needs [currentPassword] when the person has a password. Swaps in the
+  /// fresh session; every older one ends.
+  Future<void> changePassword({
+    String? currentPassword,
+    required String newPassword,
+  });
+}
+
 abstract class Arena {
   /// Short unique text for names and emails of this scenario.
   String get tag;
@@ -42,6 +59,15 @@ abstract class Arena {
   /// manager) belongs to. Throws a [RepositoryException] when the link is
   /// refused (used already, expired, person switched off).
   Future<Repository> signInWithLink(String url);
+
+  /// Signs in with a username and a password, like the sign-in screen.
+  /// Throws [RepositoryException] (an [ApiException] with `retryAfterSeconds`
+  /// when locked) with the words of the server.
+  Future<PersonSession> signInWithPassword(String username, String password);
+
+  /// Signs in with the link a manager made (the first password after it has
+  /// no current one).
+  Future<PersonSession> signInWithLinkSession(String url);
 
   /// The first month of the n-th period of this scenario (n = 0, 1, 2, ...).
   /// Consecutive n are consecutive months, far from real data.

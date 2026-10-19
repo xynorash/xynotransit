@@ -29,10 +29,41 @@ class AppUser {
     required this.personId,
     required this.role,
     required this.label,
+    this.username,
+    this.hasPassword = false,
+    this.mustChangePassword = false,
+    this.sessionEpoch = 0,
   });
   final String? personId;
   final AppRole role;
   final String label;
+
+  /// The name they sign in with, when known.
+  final String? username;
+  final bool hasPassword;
+
+  /// A manager gave them a temporary password: nothing works until they
+  /// choose their own.
+  final bool mustChangePassword;
+
+  /// In-memory sessions only: the password epoch this session was made in.
+  /// A password change ends every session with an older epoch.
+  final int sessionEpoch;
+
+  AppUser copyWith({
+    String? username,
+    bool? hasPassword,
+    bool? mustChangePassword,
+    int? sessionEpoch,
+  }) => AppUser(
+    personId: personId,
+    role: role,
+    label: label,
+    username: username ?? this.username,
+    hasPassword: hasPassword ?? this.hasPassword,
+    mustChangePassword: mustChangePassword ?? this.mustChangePassword,
+    sessionEpoch: sessionEpoch ?? this.sessionEpoch,
+  );
 
   bool get isController => role == AppRole.controller;
 }
@@ -47,6 +78,13 @@ class SignInLink {
   final String url;
   final DateTime expiresAt;
   final String personId;
+}
+
+/// A temporary password a manager made for a person. Shown once.
+class TempPassword {
+  const TempPassword({required this.username, required this.password});
+  final String username;
+  final String password;
 }
 
 abstract class Repository {
@@ -97,7 +135,19 @@ abstract class Repository {
     required String email,
     required AppRole role,
     bool active = true,
+    String? username,
   });
+
+  /// Manager only. Makes a random temporary password for the person. It is
+  /// returned once and never stored in clear. The person must choose their own
+  /// at the next sign-in; their old sessions end. Making another replaces it.
+  /// Throws [RepositoryException] with plain words when it is refused (not a
+  /// manager, person switched off, too many resets).
+  Future<TempPassword> resetPassword(String personId);
+
+  /// Manager only. Takes the password away: the person signs in with links
+  /// only again, and their sessions end.
+  Future<void> removePassword(String personId);
 
   /// Manager only. Makes a single use sign-in link for the person, valid for
   /// [hours] (1 to 168). Earlier links stay valid until used or expired.
@@ -144,6 +194,19 @@ abstract class AuthService {
   bool get needsSignIn;
 
   Future<void> signInWithEmail(String email);
+
+  /// Signs in with a username and a password. Throws [RepositoryException]
+  /// with the server's words: wrong username or password, or too many tries
+  /// (an [ApiException] with `retryAfterSeconds` set).
+  Future<void> signInWithPassword(String username, String password);
+
+  /// Changes the password of the signed-in person and swaps in the fresh
+  /// session. [currentPassword] is needed when the person has a password.
+  Future<void> changePassword({
+    String? currentPassword,
+    required String newPassword,
+  });
+
   Future<void> signOut();
 }
 

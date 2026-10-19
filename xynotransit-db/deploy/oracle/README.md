@@ -29,3 +29,19 @@ It prints only the link. Open it in a browser within 24 hours; it works once. Th
 4. From then on the manager makes links for other people in the app (People, "Sign-in link"). Share them privately: anyone who has a link can sign in as that person until it is used or expires.
 
 Apply `initdb/10-internal-signin.sql` to a database that already lives (`scripts/migrate.sh`) before starting the new API.
+
+## Passwords
+
+Passwords are added next to the sign-in links; links stay the way to get started and to recover.
+
+1. Before starting the new API image, bring the database up to date: `scripts/migrate.sh` (it applies `initdb/12-passwords.sql`; existing people get a username from their email, for example `rosa.rakoto`). Take a backup first (`scripts/backup.sh`).
+2. Hashing uses Argon2id with the OWASP minimum (19 MiB per hash, at most 2 at a time), which fits the 1 GB machine. Do not set `PASSWORD_HASH_MEMORY_KIB` or `PASSWORD_HASH_ITERATIONS` in production; they exist for the test suite.
+3. Set or reset a password from the app (People, "Reset password": the manager sees a temporary password once) or from the server:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec -it api \
+  xynotransit-api set-password manager
+```
+
+   It asks for the new password twice without echo and prints `Password set for manager.`.
+4. Sign-in tries are limited (5 wrong tries per username and 30 per address in 15 minutes). The API takes the client address from `X-Forwarded-For` only when the connection comes from a private address (nginx, Caddy); keep both proxies setting that header and keep the API port off the internet.

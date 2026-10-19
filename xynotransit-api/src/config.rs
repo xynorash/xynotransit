@@ -33,10 +33,41 @@ pub struct Config {
     pub internal_email_domains: Vec<String>,
     /// How long requests that are running get to finish after SIGTERM.
     pub shutdown_grace: std::time::Duration,
+    /// Argon2id parameters for new password hashes. The default is the OWASP minimum; only tests
+    /// lower it (PASSWORD_HASH_MEMORY_KIB, PASSWORD_HASH_ITERATIONS).
+    pub password_hash: crate::hashing::HashSettings,
 }
 
 /// Domain used for internal addresses when INTERNAL_EMAIL_DOMAINS is not set.
 pub const DEFAULT_INTERNAL_DOMAIN: &str = "xynotransit.internal";
+
+/// Argon2id parameters from PASSWORD_HASH_MEMORY_KIB and PASSWORD_HASH_ITERATIONS (tests only;
+/// unset means the OWASP minimum).
+pub fn password_hash_from(
+    get: &impl Fn(&str) -> Option<String>,
+) -> Result<crate::hashing::HashSettings, String> {
+    let non_empty = |k: &str| {
+        get(k)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let mut s = crate::hashing::HashSettings::default();
+    if let Some(v) = non_empty("PASSWORD_HASH_MEMORY_KIB") {
+        s.memory_kib = v
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (8..=1_048_576).contains(n))
+            .ok_or("PASSWORD_HASH_MEMORY_KIB must be a number from 8 to 1048576")?;
+    }
+    if let Some(v) = non_empty("PASSWORD_HASH_ITERATIONS") {
+        s.iterations = v
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=20).contains(n))
+            .ok_or("PASSWORD_HASH_ITERATIONS must be a number from 1 to 20")?;
+    }
+    Ok(s)
+}
 
 /// Origin of the links, without a trailing slash.
 pub fn public_url_from(get: impl Fn(&str) -> Option<String>) -> String {
@@ -124,7 +155,10 @@ impl Config {
         let internal_email_domains =
             parse_internal_domains(non_empty("INTERNAL_EMAIL_DOMAINS").as_deref())?;
 
+        let password_hash = password_hash_from(&get)?;
+
         Ok(Config {
+            password_hash,
             database_url,
             jwt_secret,
             public_url,
@@ -275,6 +309,31 @@ mod tests {
         assert!(with("0").is_err());
         assert!(with("soon").is_err());
         assert!(with("301").is_err());
+    }
+
+    #[test]
+    fn password_hash_settings() {
+        let base = [
+            ("DATABASE_URL", "postgres://x"),
+            ("JWT_SECRET", "0123456789012345678901234567890123"),
+        ];
+        let with = |extra: &[(&'static str, &'static str)]| {
+            let mut p = base.to_vec();
+            p.extend_from_slice(extra);
+            Config::from_lookup(lookup(&p))
+        };
+        let d = with(&[]).unwrap().password_hash;
+        assert_eq!((d.memory_kib, d.iterations, d.parallelism), (19456, 2, 1));
+        let c = with(&[
+            ("PASSWORD_HASH_MEMORY_KIB", "64"),
+            ("PASSWORD_HASH_ITERATIONS", "1"),
+        ])
+        .unwrap();
+        assert_eq!(c.password_hash.memory_kib, 64);
+        assert_eq!(c.password_hash.iterations, 1);
+        assert!(with(&[("PASSWORD_HASH_MEMORY_KIB", "4")]).is_err());
+        assert!(with(&[("PASSWORD_HASH_MEMORY_KIB", "lots")]).is_err());
+        assert!(with(&[("PASSWORD_HASH_ITERATIONS", "0")]).is_err());
     }
 
     #[test]

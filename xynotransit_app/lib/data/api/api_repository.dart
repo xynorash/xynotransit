@@ -319,12 +319,14 @@ class ApiRepository implements Repository {
     required String email,
     required AppRole role,
     bool active = true,
+    String? username,
   }) => _written(() async {
     final body = personToJson(
       fullName: fullName,
       email: email,
       role: role,
       active: active,
+      username: username,
     );
     if (id != null) {
       return parsePerson(await _api.patch('/persons/$id', body: body));
@@ -336,6 +338,7 @@ class ApiRepository implements Repository {
           'full_name': body['full_name'],
           if (body['email'] != null) 'email': body['email'],
           'app_role': body['app_role'],
+          if (body['username'] != null) 'username': body['username'],
         },
       ),
     );
@@ -344,6 +347,21 @@ class ApiRepository implements Repository {
       await _api.patch('/persons/${created.id}', body: {'active': false}),
     );
   }());
+
+  @override
+  Future<TempPassword> resetPassword(String personId) => _written(() async {
+    return parseTempPassword(
+      await _api.post(
+        '/persons/${Uri.encodeComponent(personId)}/password-reset',
+        body: const <String, Object?>{},
+      ),
+    );
+  }());
+
+  @override
+  Future<void> removePassword(String personId) => _written(
+    _api.delete('/persons/${Uri.encodeComponent(personId)}/password'),
+  );
 
   @override
   Future<SignInLink> createSignInLink(

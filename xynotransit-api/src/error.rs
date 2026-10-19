@@ -22,6 +22,8 @@ pub enum ApiError {
     MethodNotAllowed,
     UnsupportedMedia,
     Unavailable,
+    /// Too many password hashes at once; try again in a moment.
+    Busy,
     Internal,
 }
 
@@ -69,6 +71,10 @@ impl IntoResponse for ApiError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "The service is not ready. Try again in a moment.".to_string(),
             ),
+            ApiError::Busy => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                crate::loginlimit::msg::BUSY.to_string(),
+            ),
             ApiError::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Something went wrong on our side. Try again in a moment.".to_string(),
@@ -88,6 +94,18 @@ impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
         tracing::error!(error = %e, "database error");
         ApiError::Internal
+    }
+}
+
+impl From<crate::hashing::HashError> for ApiError {
+    fn from(e: crate::hashing::HashError) -> Self {
+        match e {
+            crate::hashing::HashError::Busy => ApiError::Busy,
+            crate::hashing::HashError::Failed => {
+                tracing::error!("password hashing failed");
+                ApiError::Internal
+            }
+        }
     }
 }
 

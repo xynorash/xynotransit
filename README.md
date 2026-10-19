@@ -8,7 +8,7 @@ reports into a meeting deck (PDF, PowerPoint or PNG slides) whose text they can 
 | Folder | What it is |
 |---|---|
 | [`xynotransit_app/`](xynotransit_app) | Flutter web app: employee form, manager dashboard, People admin, deck text editor, slide preview and exports. |
-| [`xynotransit-api/`](xynotransit-api) | Rust (axum) backend: magic-link sign-in, roles, reports, summary, decks, live updates. |
+| [`xynotransit-api/`](xynotransit-api) | Rust (axum) backend: sign-in with username and password or by link, roles, reports, summary, decks, live updates. |
 | [`xynotransit-db/`](xynotransit-db) | Docker stack: Postgres (Arch Linux), the API, Mailpit for sign-in emails, nginx for the web app. |
 
 ## Try it
@@ -52,6 +52,17 @@ To work on the app with hot reload you also need Flutter 3.47 and Rust (stable);
 - Slides: one common chart scale unless counts differ by more than 8 times (then each count has its own scale, said on the slide); no zero labels when there are more than 3 bars per month; larger text on short results slides; target cards aligned at the top; cover chips read "Team · 2 reports"; the comment an employee typed shows under a partly or missed target when there is room.
 - The word "controller" is gone from everything users read: it says "manager". The stored role value `controller` is unchanged.
 - "Reset all to defaults" on Deck text asks first. A too-many-requests answer carries a `Retry-After` header and the sign-in screen says when to try again.
+
+## Signing in
+
+- **Username and password** is the main form. Usernames are lower case letters, digits, dot, dash and underscore (3 to 40); a new person gets the start of their email address. Passwords are 10 to 128 characters, spaces allowed, with no composition rules; the only refusals are the person's own name, username or email, one repeated character, a simple run and a list of common passwords.
+- **Links** stay as the way to start and to recover: an emailed link, a one-time link a manager makes for a person without an email, or `xynotransit-api sign-in-link <email>` on the server. After a link sign-in a person without a password is offered "Choose a password" (it can be skipped).
+- **First manager.** Either `sign-in-link` or `docker compose exec -it api xynotransit-api set-password <username-or-email>` (asks twice without echo).
+- **Managers** can reset a password (People, "Reset password"): a temporary 16 character password is shown once and never stored. The person must choose their own before anything else works (every other route answers 403 "Choose a new password first."). "Remove password" makes the person link-only again.
+- **Sessions end** when a password is changed, reset or removed, and when a person is switched off.
+- **Lockout.** 5 wrong tries per username and 30 per client address in 15 minutes give 429 with `Retry-After`. Wrong username, wrong password, switched-off person and no password all answer the same "Username or password is wrong." after the same work.
+- **Security notes.** Passwords are hashed with Argon2id (m=19456 KiB, t=2, p=1, at most 2 hashes at a time for a 1 GB machine). A password, hash, temporary password or token is never logged or audited. The client address comes from `X-Forwarded-For` only when the connecting peer is a private address (nginx, Caddy), taking the right-most untrusted hop. Details: [`xynotransit-api/README.md`](xynotransit-api/README.md#passwords). The public demo keeps its "Demo:" menu and implements the same rules in memory.
+- **Existing databases** need `xynotransit-db/scripts/migrate.sh` (migration `12-passwords.sql`) before the new API starts.
 
 ## Tests
 
@@ -103,8 +114,11 @@ covered by `scripts/test-backup.sh`.
 
 ## Limits
 
-- Sign-in is by emailed link only; there are no passwords. A mail server is required outside the
-  demo and the local stack (the local stack catches mail in Mailpit).
+- Sign-in is by username and password, or by a one-time link. Links (emailed, or made by a manager
+  for people without an email) are how a person gets started and how they recover. A mail server is
+  needed outside the demo and the local stack only if people use emailed links (the local stack
+  catches mail in Mailpit); the first manager can also be set up from the server with
+  `sign-in-link` or `set-password`.
 - One team of reports per quarter is read at a time; the dashboard is made for up to a few hundred
   people, not for thousands.
 - A seat has at most 8 counts and 10 targets; text lengths and number ranges are fixed

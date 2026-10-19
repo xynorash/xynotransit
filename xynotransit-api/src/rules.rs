@@ -556,4 +556,79 @@ mod tests {
         has(DATE_RANGE, PERIOD_MAX_YEAR as i64);
         has(TREND_RANGE, TREND_MAX);
     }
+
+    #[test]
+    fn rules_json_passwords_section_matches_code() {
+        use crate::{loginlimit, password, username};
+        let j: serde_json::Value = serde_json::from_str(RULES_JSON).unwrap();
+        let p = &j["passwords"];
+        let l = &p["limits"];
+        let expect: &[(&str, i64)] = &[
+            ("username_min", username::USERNAME_MIN as i64),
+            ("username_max", username::USERNAME_MAX as i64),
+            ("password_min", password::MIN_CHARS as i64),
+            ("password_max", password::MAX_CHARS as i64),
+            (
+                "login_failures_per_username",
+                loginlimit::MAX_FAILURES_PER_USER,
+            ),
+            (
+                "login_failures_per_address",
+                loginlimit::MAX_FAILURES_PER_IP,
+            ),
+            ("login_window_minutes", loginlimit::WINDOW_MINUTES),
+            (
+                "resets_per_manager_per_hour",
+                loginlimit::MAX_RESETS_PER_HOUR,
+            ),
+            ("temporary_password_chars", 16),
+            ("session_days", crate::auth::JWT_DAYS),
+        ];
+        for (k, v) in expect {
+            assert_eq!(l[*k].as_i64(), Some(*v), "limit {k}");
+        }
+        assert_eq!(l.as_object().unwrap().len(), expect.len());
+        assert_eq!(
+            p["username_pattern"].as_str().unwrap(),
+            format!(
+                "^[a-z0-9._-]{{{},{}}}$",
+                username::USERNAME_MIN,
+                username::USERNAME_MAX
+            )
+        );
+        assert_eq!(password::temporary().len(), 16);
+        let m = p["messages"].as_object().unwrap();
+        let msgs: &[(&str, &str)] = &[
+            ("username_invalid", username::msg::INVALID),
+            ("username_taken", username::msg::TAKEN),
+            ("login_wrong", loginlimit::msg::WRONG),
+            ("login_too_many", loginlimit::msg::TOO_MANY),
+            ("busy", loginlimit::msg::BUSY),
+            ("password_control", password::msg::CONTROL),
+            ("password_short", password::msg::SHORT),
+            ("password_long", password::msg::LONG),
+            ("password_personal", password::msg::PERSONAL),
+            ("password_repeated", password::msg::REPEATED),
+            ("password_run", password::msg::RUN),
+            ("password_common", password::msg::COMMON),
+            ("password_new_required", password::msg::NEW_REQUIRED),
+            ("password_current_required", password::msg::CURRENT_REQUIRED),
+            ("password_current_wrong", password::msg::CURRENT_WRONG),
+            ("password_same", password::msg::SAME),
+            ("choose_new_password", crate::auth::CHOOSE_NEW_PASSWORD_MSG),
+            ("sign_in_again", crate::auth::SIGN_IN_AGAIN_MSG),
+            ("too_many_resets", loginlimit::msg::TOO_MANY_RESETS),
+            ("switched_off", crate::signin::msg::SWITCHED_OFF),
+            ("manager_only", "Only the manager can do this."),
+        ];
+        for (k, v) in msgs {
+            assert_eq!(m[*k].as_str(), Some(*v), "message {k}");
+        }
+        assert_eq!(m.len(), msgs.len(), "extra message in json");
+        let has = |s: &str, n: i64| assert!(s.contains(&n.to_string()), "{s} should say {n}");
+        has(password::msg::SHORT, password::MIN_CHARS as i64);
+        has(password::msg::LONG, password::MAX_CHARS as i64);
+        has(username::msg::INVALID, username::USERNAME_MIN as i64);
+        has(username::msg::INVALID, username::USERNAME_MAX as i64);
+    }
 }

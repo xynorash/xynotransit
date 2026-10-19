@@ -11,7 +11,11 @@ use serde_json::{json, Value};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::{auth::AuthUser, error::ApiError, state::AppState};
+use crate::{
+    auth::{AuthUser, SessionUser},
+    error::ApiError,
+    state::AppState,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -19,8 +23,9 @@ pub fn router() -> Router<AppState> {
         .route("/catalog", get(catalog))
 }
 
-async fn me(user: AuthUser) -> Json<Value> {
-    Json(super::auth::user_json(&user))
+/// Also answers while the person still has to choose a new password.
+async fn me(SessionUser(user): SessionUser) -> Json<Value> {
+    Json(super::auth::me_json(&user))
 }
 
 #[derive(FromRow)]
@@ -38,6 +43,8 @@ pub struct PersonRow {
     pub email: Option<String>,
     pub app_role: String,
     pub active: bool,
+    pub username: String,
+    pub has_password: bool,
 }
 
 #[derive(FromRow)]
@@ -73,12 +80,16 @@ pub fn person_json(p: &PersonRow, show_email: bool) -> Value {
         "id": p.id.to_string(), "full_name": p.full_name,
         "email": if show_email { json!(p.email) } else { Value::Null },
         "app_role": p.app_role, "active": p.active,
+        "username": if show_email { json!(p.username) } else { Value::Null },
+        "has_password": show_email && p.has_password,
     })
 }
 
 pub async fn load_person(conn: &mut PgConnection, id: Uuid) -> Result<Option<PersonRow>, ApiError> {
     Ok(sqlx::query_as(
-        "select id, full_name, email, app_role::text as app_role, active from person where id = $1",
+        "select id, full_name, email, app_role::text as app_role, active, username,
+                password_hash is not null as has_password
+         from person where id = $1",
     )
     .bind(id)
     .fetch_optional(conn)
@@ -175,7 +186,8 @@ async fn catalog(
     .await?;
 
     let persons: Vec<PersonRow> = sqlx::query_as(
-        "select id, full_name, email, app_role::text as app_role, active
+        "select id, full_name, email, app_role::text as app_role, active, username,
+                password_hash is not null as has_password
          from person where active or $1 order by full_name, id",
     )
     .bind(all)

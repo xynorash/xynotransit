@@ -23,7 +23,8 @@ Routes:
 
 | Route | Who | Screen |
 | --- | --- | --- |
-| `/signin`, `/auth/verify?token=...` | anyone | Sign in; the emailed link opens `/auth/verify`. |
+| `/signin`, `/auth/verify?token=...` | anyone | Sign in with a username and password, or with a link; the emailed link opens `/auth/verify`. |
+| `/account/password` | everyone signed in | Choose a password, change it, or (after a manager's reset) choose a new one. |
 | `/report` | everyone signed in | The report form. |
 | `/manager` | manager | Overview: the summary dashboard. |
 | `/manager/reports` | manager | Reports: slides on one side, "Reports received" table on the other, Generate and Export. |
@@ -34,6 +35,7 @@ Routes:
 Redirects (`lib/app/app.dart`):
 
 - `/` and `/signin` go to `/manager` for a manager and to `/report` for everyone else. When signed out, the app shows `/signin`; `/auth/verify` always opens.
+- While the person has a temporary password (`must_change_password`), every route redirects to `/account/password`. Nothing else opens until they have chosen their own.
 - A non-manager who opens any `/manager...` path (also an unknown sub-path) is sent to `/report`.
 - In demo mode, switching the **Demo:** user re-evaluates the redirects.
 
@@ -204,6 +206,19 @@ People who have no real email can still sign in. This is for people who work wit
 
 The QR code is drawn in the app with the pure Dart `qr` package (error correction M, a quiet zone of 4 modules, black on white also in dark mode). `test/signin/qr_test.dart` draws it to a PNG and reads the modules back.
 
+## Usernames and passwords
+
+Passwords are added next to the links. Links stay the way to get started and to recover.
+
+- **Sign-in screen** (`lib/features/sign_in_screen.dart`). The main form is Username and Password (show/hide button, Enter signs in, autofill hints `username` and `password` inside one `AutofillGroup`, `TextInput.finishAutofillContext()` after a good sign-in so the browser offers to save). Every failure reads "Username or password is wrong."; a 429 adds when to try again from `Retry-After` ("Try again in 14 minutes."). Under it a calm "Sign in with a link instead" section holds the email form and the lines "No email address? Ask your manager for a sign-in link." and "Forgot your password? Ask your manager for a new one."
+- **Choose a password after a link.** If the person has no password, `/auth/verify` shows "Choose a password" (new and repeat, live hints, a strength meter, Skip for now). The meter only looks at length and at common passwords, never at "letters and symbols". Skipping is allowed.
+- **Account menu** (person icon in the top bar, or the phone menu): "Change password" (or "Choose a password"), "Sign out". The change screen asks for the current password, then new and repeat. After it the app swaps in the fresh token the server returns; every other session of that person ends. The public demo has the menu entry too (the demo user is a demo account with no real sign-in).
+- **Manager actions** (People): each person shows their Username and a Password line (Set or Not set). **Reset password** explains, asks to confirm, then shows a 16 character temporary password once (Copy, and "Tell them to sign in with this and choose their own password. It is shown only once."). Making another replaces it. **Remove password** makes the person link-only again. The username is edited in Edit person (optional on Add a person: the start of the email is used).
+- **Temporary password.** The person signs in with it and lands on a blocking "Choose a new password" screen (`/account/password`, router redirect, no navigation). The screen asks for the temporary password once more because the API needs it as the current one.
+- **Rules.** Usernames: lower case letters, digits, dot, dash, underscore, 3 to 40 characters, unique ignoring case. Passwords: 10 to 128 characters (counted as Unicode characters, spaces kept as typed, no trimming), no control characters, not the username, email, the part of the email before the @ or the full name, not one repeated character, not a simple run (1234567890, abcdefghij), not on the list of common passwords. The Dart port is `lib/domain/password_rules.dart`; the list is `lib/domain/common_passwords.dart`, a copy of `xynotransit-api/src/common_passwords.txt` (a test keeps them equal). `test/password/password_parity_test.dart` holds every number and message against `xynotransit-api/tests/fixtures/rules.json`.
+- **Live hints are approximate.** The app does not apply Unicode NFKC (Dart has none built in), so the live length and common-password hints use the text as typed; a decomposed accent can count differently from the server, which is authoritative.
+- **Demo.** The in-memory backend implements the same rules, messages, lockout (5 wrong tries per username in 15 minutes) and session ending (`MemoryRepository.loginWithPassword`, `changePasswordOf`, `resetPassword`, `removePassword`). Passwords are compared as plain text there; nothing is hashed or stored anywhere.
+
 ## Loading the optional example catalog
 
 `xynotransit-db/examples/` holds `10-seed.sql` (4 teams, 13 people, seats, counts, targets) and `20-seed-demo.sql` (14 demo reports). They are not loaded automatically. See `xynotransit-db/examples/README.md` for the commands. They create a person for `shalini@xynotransit.example`.
@@ -226,7 +241,7 @@ Postgres 18 (db container)    Mailpit (dev mail catcher, UI on 127.0.0.1:8025)
 ```
 
 - Only the API talks to Postgres. There is no row level security.
-- Sign-in is an emailed magic link, or a one-time sign-in link a manager makes for a person without a real email (see "Sign in without an email"). No passwords, no open sign-up.
+- Sign-in is an emailed magic link, or a one-time sign-in link a manager makes for a person without a real email (see "Sign in without an email"). Passwords (username and password) sit next to the links; there is no open sign-up.
 - Live updates use Server-Sent Events (SSE). If SSE fails, the app polls every 5 seconds.
 
 ## Quick start with the Docker stack
@@ -327,7 +342,9 @@ Every export includes the Suggestions page (34 slides for 14 reports). File name
 | Endpoint | Employee | Manager |
 | --- | --- | --- |
 | `POST /api/auth/magic-link`, `POST /api/auth/verify` | open | open |
+| `POST /api/auth/login`, `POST /api/auth/password` (signed in) | open, own password only | same |
 | `POST /api/persons/{id}/sign-in-link` | no | yes (30 an hour) |
+| `POST /api/persons/{id}/password-reset`, `DELETE /api/persons/{id}/password` | no | yes (resets: 30 an hour) |
 | `GET /api/me`, `GET /api/catalog` | yes (active rows only, other people's emails hidden) | yes (all emails; `?include_inactive=true` adds inactive rows) |
 | `POST/PATCH/DELETE` teams, `POST/PATCH` persons and assignments, `PUT /api/assignments/{id}/definitions` | no | yes |
 | `GET /api/summary` | no | yes |
@@ -346,6 +363,7 @@ Every export includes the Suggestions page (34 slides for 14 reports). File name
 - Only an active person can sign in. A deactivated person gets 401 on every request at once. Unknown addresses get the same answer as known ones, so addresses cannot be probed.
 - Magic link tokens are 32 random bytes. Only their SHA-256 is stored. A link is single use and valid 15 minutes.
 - Rate limit: at most 5 links per person per hour.
+- Passwords are hashed on the server (Argon2id); the app never stores one. Only the sign-in token is kept in `shared_preferences`. The password boxes disable suggestions and autocorrect. A password change, reset or removal ends every older session (the token carries a session epoch).
 - An employee (contributor) can read and send only their own report. Only a manager can generate decks, set the meeting date, or write into a closed period.
 - The UI split is enforced by the API too: the list of reports, the deck (read and generate), the slide texts (read and save) and live events (ticket and stream) are manager only and return 403 to employees.
 - In the catalog, person emails are `null` for an employee, except their own. A manager gets all emails.
@@ -361,7 +379,7 @@ flutter test
 flutter test --update-goldens     # only after an intended visual change
 ```
 
-`test/signin/` covers sign-in without an email: the address rules, the demo repository, the API client, the People screen and dialog, the QR code and the sign-in screen. `test/contract/` runs the same scenarios against the demo repository and, with `--dart-define=CONTRACT_API=http://127.0.0.1:8080`, against the live API.
+`test/password/` covers usernames and passwords: the policy and its parity with the API, the in-memory demo (lockout, must-change flow, session ending, reset shown once, removal, username conflicts), `ApiAuthService` and `ApiRepository` with a mock server (paths, payloads, `Retry-After`, token swap), and the screens (sign in, choose a password, forced change and router redirect, account menu, People) at 360x800, 800x1100 and 1500x900 with text scale 2. `test/contract/scenarios_passwords.dart` plays the password life on both backends. `test/signin/` covers sign-in without an email: the address rules, the demo repository, the API client, the People screen and dialog, the QR code and the sign-in screen. `test/contract/` runs the same scenarios against the demo repository and, with `--dart-define=CONTRACT_API=http://127.0.0.1:8080`, against the live API.
 
 API tests (need the db container running, see the API README):
 

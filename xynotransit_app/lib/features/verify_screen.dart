@@ -8,8 +8,9 @@ import '../app/providers.dart';
 import '../core/theme/tokens.dart';
 import '../core/widgets.dart';
 import '../data/repository.dart';
+import 'account/password_form.dart';
 
-enum _Phase { checking, signedIn, expired, offline }
+enum _Phase { checking, signedIn, choosePassword, expired, offline }
 
 /// Opened from the emailed link: /auth/verify?token=... Trades the one time
 /// token for a session, then goes home.
@@ -55,6 +56,12 @@ class _VerifyScreenState extends ConsumerState<VerifyScreen> {
         ..invalidate(periodProvider)
         ..invalidate(reportsProvider)
         ..invalidate(deckProvider);
+      final user = ref.read(authServiceProvider).currentUser;
+      if (user != null && !user.hasPassword && !user.mustChangePassword) {
+        // Offer a password once, right after the link. It can be skipped.
+        setState(() => _phase = _Phase.choosePassword);
+        return;
+      }
       setState(() => _phase = _Phase.signedIn);
       await Future<void>.delayed(const Duration(milliseconds: 600));
       if (mounted) context.go('/');
@@ -79,6 +86,11 @@ class _VerifyScreenState extends ConsumerState<VerifyScreen> {
     final (title, body) = switch (_phase) {
       _Phase.checking => ('Checking your link', 'One moment.'),
       _Phase.signedIn => ('You are signed in', 'Taking you to the reports.'),
+      _Phase.choosePassword => (
+        'Choose a password',
+        'You are signed in. A password lets you sign in with your username '
+            'next time, without waiting for a link.',
+      ),
       _Phase.expired => ('This link does not work', _message),
       _Phase.offline => ('No connection', _message),
     };
@@ -110,6 +122,24 @@ class _VerifyScreenState extends ConsumerState<VerifyScreen> {
                       style: bodyStyle(context, color: t.muted),
                     ),
                   ),
+                  if (_phase == _Phase.choosePassword) ...[
+                    if (ref.watch(userProvider).value?.username != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        'Your username is '
+                        '${ref.watch(userProvider).value!.username}.',
+                        key: const Key('verify-username'),
+                        style: bodyStyle(context, size: 15, height: 1.4),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    PasswordForm(
+                      mode: PasswordMode.first,
+                      onDone: () => context.go('/'),
+                      secondaryLabel: 'Skip for now',
+                      onSecondary: () => context.go('/'),
+                    ),
+                  ],
                   if (_phase == _Phase.checking) ...[
                     const SizedBox(height: 16),
                     const LinearProgressIndicator(),

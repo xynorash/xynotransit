@@ -583,6 +583,35 @@ void main() {
     });
   });
 
+  test(
+    'the people list is read again after a password reset or removal',
+    () async {
+      var reads = 0;
+      final repo = await repoFor((r) async {
+        if (r.url.path == '/api/catalog') {
+          reads++;
+          return json({
+            'teams': <Object?>[],
+            'persons': <Object?>[],
+            'assignments': <Object?>[],
+          });
+        }
+        if (r.method == 'DELETE') return json(<String, Object?>{}, 204);
+        return json({'username': 'a', 'temporary_password': 'b'}, 201);
+      });
+      final sub = repo.watchCatalog().listen((_) {});
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final first = reads;
+      await repo.resetPassword('p1');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(reads, first + 1);
+      await repo.removePassword('p1');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(reads, first + 2);
+      await sub.cancel();
+    },
+  );
+
   group('deck texts', () {
     test('loadDeckTexts parses settings and inherited_from', () async {
       final repo = await repoFor((r) async {

@@ -66,3 +66,8 @@ Choices made where the spec was silent.
 - Reset all to defaults on Deck text asks first (Reset or Cancel); nothing is saved until Save.
 - When the server answers 429 with a Retry-After header, the sign-in screen says how long to wait.
 - User-facing text says manager, never controller. The API role value `controller`, the database enum and internal identifiers keep that word.
+- Passwords sit next to the sign-in links; links stay the way to start and to recover. A person without a password signs in by link and is offered "Choose a password" once (it can be skipped).
+- After a manager's reset the temporary password is shown once and never stored. The person must choose their own before anything else works, and has to type the temporary password again as the current one because the API requires it.
+- The password strength meter looks only at length and at common passwords. There are no composition rules (no "needs a digit").
+- The public demo keeps its "Demo:" menu. Its accounts have no passwords at the start; the account menu lets a demo user choose one to see the screens. Nothing is hashed in the demo and nothing leaves the browser tab.
+- The Dart list of common passwords is a copy of the API's list, kept equal by a test.

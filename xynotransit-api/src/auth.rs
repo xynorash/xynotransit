@@ -35,6 +35,10 @@ struct Claims {
     role: Role,
     iat: i64,
     exp: i64,
+    /// The person's session_epoch when the token was made. A password change, reset or removal
+    /// adds 1 to the epoch, which ends every older token. Tokens from before this existed have 0.
+    #[serde(default)]
+    ep: i32,
 }
 
 /// 32 random bytes, url-safe.
@@ -54,6 +58,7 @@ pub fn issue_jwt(
     secret: &str,
     person_id: Uuid,
     role: Role,
+    epoch: i32,
 ) -> Result<(String, DateTime<Utc>), ApiError> {
     let now = Utc::now();
     let exp = now + Duration::days(JWT_DAYS);
@@ -62,6 +67,7 @@ pub fn issue_jwt(
         role,
         iat: now.timestamp(),
         exp: exp.timestamp(),
+        ep: epoch,
     };
     let token = encode(
         &Header::default(),
@@ -75,14 +81,14 @@ pub fn issue_jwt(
     Ok((token, exp))
 }
 
-fn person_from_jwt(secret: &str, token: &str) -> Option<Uuid> {
+fn person_from_jwt(secret: &str, token: &str) -> Option<(Uuid, i32)> {
     let data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &Validation::new(jsonwebtoken::Algorithm::HS256),
     )
     .ok()?;
-    Uuid::parse_str(&data.claims.sub).ok()
+    Some((Uuid::parse_str(&data.claims.sub).ok()?, data.claims.ep))
 }
 
 /// The signed-in, active person. Role comes from the database.
@@ -91,6 +97,11 @@ pub struct AuthUser {
     pub person_id: Uuid,
     pub role: Role,
     pub label: String,
+    pub username: String,
+    /// The current session epoch (the token must carry the same number).
+    pub epoch: i32,
+    pub has_password: bool,
+    pub must_change_password: bool,
 }
 
 impl AuthUser {
@@ -108,7 +119,33 @@ impl AuthUser {
 }
 
 const SIGN_IN_MSG: &str = "Please sign in.";
+pub const SIGN_IN_AGAIN_MSG: &str = "Please sign in again.";
+pub const CHOOSE_NEW_PASSWORD_MSG: &str = "Choose a new password first.";
 
+/// Who is calling, whatever they still have to do first. The token must be good, the person active
+/// and the token's epoch the person's current one.
+async fn authenticate(parts: &mut Parts, state: &AppState) -> Result<AuthUser, ApiError> {
+    let header = parts
+        .headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
+    let token = header
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
+    let (person_id, epoch) = person_from_jwt(&state.config.jwt_secret, token.trim())
+        .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
+    let user = load_user(&state.pool, person_id)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
+    if user.epoch != epoch {
+        return Err(ApiError::unauthorized(SIGN_IN_AGAIN_MSG));
+    }
+    Ok(user)
+}
+
+/// The signed-in person for every ordinary route. While the person still has to choose a new
+/// password (a manager set a temporary one) every such route answers 403.
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = ApiError;
 
@@ -116,34 +153,50 @@ impl FromRequestParts<AppState> for AuthUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let header = parts
-            .headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
-        let token = header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
-        let person_id = person_from_jwt(&state.config.jwt_secret, token.trim())
-            .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
-        load_user(&state.pool, person_id)
-            .await?
-            .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))
+        let user = authenticate(parts, state).await?;
+        if user.must_change_password {
+            return Err(ApiError::forbidden(CHOOSE_NEW_PASSWORD_MSG));
+        }
+        Ok(user)
     }
 }
 
-/// Active person by id, with the current role.
+/// The signed-in person even when they must choose a new password first. Only `GET /api/me` and
+/// `POST /api/auth/password` use this.
+pub struct SessionUser(pub AuthUser);
+
+impl FromRequestParts<AppState> for SessionUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        authenticate(parts, state).await.map(SessionUser)
+    }
+}
+
+/// Active person by id, with the current role and password state.
 pub async fn load_user(pool: &sqlx::PgPool, person_id: Uuid) -> Result<Option<AuthUser>, ApiError> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("select app_role::text, full_name from person where id = $1 and active")
-            .bind(person_id)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|(role, label)| AuthUser {
-        person_id,
-        role: Role::parse(&role),
-        label,
-    }))
+    let row: Option<(String, String, String, i32, bool, bool)> = sqlx::query_as(
+        "select app_role::text, full_name, username, session_epoch,
+                password_hash is not null, must_change_password
+         from person where id = $1 and active",
+    )
+    .bind(person_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(
+        |(role, label, username, epoch, has_password, must_change_password)| AuthUser {
+            person_id,
+            role: Role::parse(&role),
+            label,
+            username,
+            epoch,
+            has_password,
+            must_change_password,
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -165,8 +218,8 @@ mod tests {
     fn jwt_round_trip_and_wrong_secret() {
         let secret = "0123456789012345678901234567890123";
         let id = Uuid::new_v4();
-        let (t, _) = issue_jwt(secret, id, Role::Controller).unwrap();
-        assert_eq!(person_from_jwt(secret, &t), Some(id));
+        let (t, _) = issue_jwt(secret, id, Role::Controller, 3).unwrap();
+        assert_eq!(person_from_jwt(secret, &t), Some((id, 3)));
         assert_eq!(
             person_from_jwt("another secret another secret 123456", &t),
             None

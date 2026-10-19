@@ -14,6 +14,10 @@ async fn main() -> anyhow::Result<()> {
         let args: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(sign_in_link_command(&args).await);
     }
+    if std::env::args().nth(1).as_deref() == Some("set-password") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(set_password_command(&args).await);
+    }
     // LOG_FORMAT=json writes one JSON object per line (for a log collector); anything else is text.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "info,sqlx=warn".into());
@@ -28,6 +32,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config = Config::from_env().map_err(|e| anyhow::anyhow!(e))?;
+    if config.password_hash.is_below_owasp_minimum() {
+        tracing::warn!("password hashing runs below the OWASP minimum (meant for tests only)");
+    }
     let pool = connect(&config.database_url).await?;
 
     if let Some(email) = &config.bootstrap_controller_email {
@@ -156,6 +163,100 @@ async fn sign_in_link_command(args: &[String]) -> i32 {
     match sign_in_link_for_email(&pool, &public_url, &email, hours).await {
         Ok(link) => {
             println!("{}", link.url);
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            e.exit_code()
+        }
+    }
+}
+
+/// Read the new password: from a terminal it is asked twice without echo, otherwise one line of
+/// standard input (the line break is cut, nothing else).
+fn read_new_password() -> Result<String, passwords::CliError> {
+    use passwords::CliError;
+    use std::io::{BufRead, IsTerminal};
+    if std::io::stdin().is_terminal() {
+        let ask = |p: &str| {
+            rpassword::prompt_password(p)
+                .map_err(|_| CliError::Rejected("Could not read the password.".into()))
+        };
+        let first = ask("New password: ")?;
+        let second = ask("New password again: ")?;
+        if first != second {
+            return Err(CliError::Rejected(
+                "The two passwords are not the same.".into(),
+            ));
+        }
+        return Ok(first);
+    }
+    let mut line = String::new();
+    let n = std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|_| CliError::Rejected("Could not read the password.".into()))?;
+    if n == 0 {
+        return Err(CliError::Rejected(
+            "No password was given on standard input.".into(),
+        ));
+    }
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+    Ok(line)
+}
+
+use xynotransit_api::passwords;
+
+/// `xynotransit-api set-password <username-or-email>`: the new password comes from standard
+/// input. Prints only "Password set for <username>." on success. Exit 0 on success, 1 when it
+/// could not be set, 2 for wrong usage.
+async fn set_password_command(args: &[String]) -> i32 {
+    let who = match passwords::parse_cli_args(args) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return e.exit_code();
+        }
+    };
+    let get = |k: &str| std::env::var(k).ok();
+    let Some(url) = get("DATABASE_URL").filter(|u| !u.trim().is_empty()) else {
+        eprintln!("DATABASE_URL is not set.");
+        return 1;
+    };
+    let settings = match xynotransit_api::config::password_hash_from(&get) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+    let pool = match sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(url.trim())
+        .await
+    {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Could not reach the database. Check DATABASE_URL.");
+            return 1;
+        }
+    };
+    let run = async {
+        let person = passwords::find_person(&pool, &who).await?;
+        let password = read_new_password()?;
+        let hasher = xynotransit_api::hashing::Hasher::new(settings);
+        passwords::set_password_for(&pool, &hasher, &person, &password).await?;
+        Ok::<_, passwords::CliError>(person.username)
+    };
+    match run.await {
+        Ok(username) => {
+            println!("Password set for {username}.");
             0
         }
         Err(e) => {

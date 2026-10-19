@@ -63,6 +63,8 @@ void main() {
         'access_token': 'j',
         'expires_at': '2026-10-25T00:00:00Z',
         'user': {'person_id': 'p1', 'role': 'contributor', 'label': 'Mina'},
+        'has_password': true,
+        'must_change_password': false,
       });
     }, 'abc');
     await tester.pump();

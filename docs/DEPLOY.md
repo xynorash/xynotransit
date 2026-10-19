@@ -4,7 +4,7 @@ This guide puts the whole app on one small Linux server with HTTPS. You need:
 
 - a server you can reach over SSH (1 GB of memory is enough for a team of a few hundred people; 2 GB is comfortable),
 - a domain name (or a subdomain) whose DNS you can edit,
-- an email account or service that can send mail by SMTP, because people sign in with a link sent by email.
+- an email account or service that can send mail by SMTP, because people can sign in with a link sent by email (links are how a person gets started and how they recover; day to day they can use a username and password).
 
 Nothing is built on the server. The images come from `ghcr.io/xynorash/xynotransit/{api,db,web}`, which the CI of this repository publishes after every green build on `main`.
 
@@ -57,7 +57,7 @@ Edit `.env.prod` and set every line that has no value:
 
 The API checks the mail server's certificate. `SMTP_TLS=none` sends mail in plain text and exists only for a local catcher such as Mailpit.
 
-Mail is the part that most often goes wrong. Use a provider that gives you SMTP credentials (your own mailbox, or a transactional service with a free tier) and set up its SPF and DKIM records for the sending domain, or the sign-in links land in spam.
+Mail is the part that most often goes wrong, and it is only needed for emailed links; passwords work without it. Use a provider that gives you SMTP credentials (your own mailbox, or a transactional service with a free tier) and set up its SPF and DKIM records for the sending domain, or the sign-in links land in spam.
 
 ### People without a real email
 
@@ -153,7 +153,7 @@ A paid VPS with 1 to 2 GB of memory costs a few euros or dollars a month and doe
 ## 5. Checks after the first start
 
 - `curl -s https://reports.example.org/api/health` prints `{"ok":true,"db":"up"}`.
-- Signing in sends an email (check your spam folder the first time).
+- Signing in by link sends an email (check your spam folder the first time). Username and password sign-in needs no mail: after the migration, set the first manager's password with `docker compose --env-file .env.prod -f docker-compose.prod.yml exec -it api xynotransit-api set-password <username>` (see `xynotransit-db/deploy/oracle/README.md`, section Passwords). Keep nginx and Caddy setting `X-Forwarded-For` so the 30 per address limit sees real clients.
 - `docker compose --env-file .env.prod -f docker-compose.prod.yml ps` shows every container as `healthy`.
 - Port 5432 is not reachable from outside: `nc -zv YOUR_IP 5432` fails.
 - A reboot of the server brings everything back by itself (`restart: unless-stopped`).

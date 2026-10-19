@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{patch, post, put},
+    routing::{delete, patch, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Deserializer};
@@ -18,8 +18,10 @@ use super::catalog::{assignments_json, load_person, person_json, team_json};
 use crate::{
     auth::AuthUser,
     error::{parse_id, ApiError, ApiJson},
+    loginlimit, password, passwords,
     rules::{self, Entry},
     state::AppState,
+    username,
 };
 
 pub fn router() -> Router<AppState> {
@@ -29,6 +31,8 @@ pub fn router() -> Router<AppState> {
         .route("/persons", post(create_person))
         .route("/persons/{id}", patch(update_person))
         .route("/persons/{id}/sign-in-link", post(create_sign_in_link))
+        .route("/persons/{id}/password-reset", post(reset_password))
+        .route("/persons/{id}/password", delete(remove_password))
         .route("/assignments", post(create_assignment))
         .route("/assignments/{id}", patch(update_assignment))
         .route("/assignments/{id}/definitions", put(save_definitions))
@@ -236,6 +240,33 @@ struct PersonBody {
     #[serde(default)]
     email: Option<String>,
     app_role: String,
+    /// Optional: when missing or null the server makes one from the email.
+    #[serde(default)]
+    username: Option<String>,
+}
+
+async fn username_taken(
+    conn: &mut PgConnection,
+    name: &str,
+    except: Option<Uuid>,
+) -> Result<bool, ApiError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "select exists(select 1 from person where lower(username) = $1 and ($2::uuid is null or id <> $2))",
+    )
+    .bind(name)
+    .bind(except)
+    .fetch_one(conn)
+    .await?)
+}
+
+/// The insert or update broke a unique index: say which of the two names it was.
+fn taken_message(e: &sqlx::Error) -> &'static str {
+    match e {
+        sqlx::Error::Database(d) if d.constraint().is_some_and(|c| c.contains("username")) => {
+            username::msg::TAKEN
+        }
+        _ => EMAIL_TAKEN,
+    }
 }
 
 async fn email_taken(
@@ -262,6 +293,11 @@ async fn create_person(
     let given = body.email.as_deref().filter(|e| !e.trim().is_empty());
     let given = given.map(rules::clean_email).transpose()?;
     let role = rules::clean_app_role(&body.app_role)?;
+    let wanted_username = body
+        .username
+        .as_deref()
+        .map(|u| username::clean(u).map_err(ApiError::bad))
+        .transpose()?;
     let mut tx = st.pool.begin().await?;
     let email = match given {
         Some(e) => e,
@@ -282,17 +318,32 @@ async fn create_person(
     if email_taken(&mut tx, &email, None).await? {
         return Err(ApiError::Conflict(EMAIL_TAKEN.into()));
     }
+    // One chooser at a time, so two new people cannot get the same username.
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended('xt_username', 0))")
+        .execute(&mut *tx)
+        .await?;
+    let new_username = match wanted_username {
+        Some(u) => {
+            if username_taken(&mut tx, &u, None).await? {
+                return Err(ApiError::Conflict(username::msg::TAKEN.into()));
+            }
+            u
+        }
+        None => username::free_username(&mut tx, &email).await?,
+    };
     let id: Uuid = sqlx::query_scalar(
-        "insert into person (full_name, email, app_role) values ($1, $2, $3::app_role) returning id",
+        "insert into person (full_name, email, app_role, username)
+         values ($1, $2, $3::app_role, $4) returning id",
     )
     .bind(&name)
     .bind(&email)
     .bind(&role)
+    .bind(&new_username)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
         if unique_violation(&e) {
-            ApiError::Conflict(EMAIL_TAKEN.into())
+            ApiError::Conflict(taken_message(&e).into())
         } else {
             e.into()
         }
@@ -312,6 +363,8 @@ struct PersonPatch {
     app_role: Option<String>,
     #[serde(default)]
     active: Option<bool>,
+    #[serde(default)]
+    username: Option<String>,
 }
 
 async fn update_person(
@@ -333,6 +386,11 @@ async fn update_person(
         .as_deref()
         .map(rules::clean_app_role)
         .transpose()?;
+    let new_username = body
+        .username
+        .as_deref()
+        .map(|u| username::clean(u).map_err(ApiError::bad))
+        .transpose()?;
 
     let mut tx = st.pool.begin().await?;
     // One at a time, so two requests cannot each leave "the other" manager standing.
@@ -345,6 +403,11 @@ async fn update_person(
     if let Some(e) = &email {
         if email_taken(&mut tx, e, Some(id)).await? {
             return Err(ApiError::Conflict(EMAIL_TAKEN.into()));
+        }
+    }
+    if let Some(u) = &new_username {
+        if username_taken(&mut tx, u, Some(id)).await? {
+            return Err(ApiError::Conflict(username::msg::TAKEN.into()));
         }
     }
     let new_role = role.clone().unwrap_or_else(|| cur.app_role.clone());
@@ -364,18 +427,21 @@ async fn update_person(
     }
     sqlx::query(
         "update person set full_name = coalesce($2, full_name), email = coalesce($3, email),
-                app_role = $4::app_role, active = $5 where id = $1",
+                app_role = $4::app_role, active = $5, username = coalesce($6, username),
+                session_epoch = session_epoch + (case when active and not $5 then 1 else 0 end)
+         where id = $1",
     )
     .bind(id)
     .bind(name)
     .bind(email)
     .bind(&new_role)
     .bind(new_active)
+    .bind(new_username)
     .execute(&mut *tx)
     .await
     .map_err(|e| {
         if unique_violation(&e) {
-            ApiError::Conflict(EMAIL_TAKEN.into())
+            ApiError::Conflict(taken_message(&e).into())
         } else {
             e.into()
         }
@@ -464,6 +530,113 @@ async fn create_sign_in_link(
             "person_id": link.person_id,
         })),
     ))
+}
+
+// ---------- passwords ----------
+
+fn person_not_found() -> ApiError {
+    ApiError::not_found("That person does not exist.")
+}
+
+/// A manager gives a person a temporary password, shown once in this answer. The person must
+/// choose their own at the next sign-in. Every older session of theirs ends.
+async fn reset_password(
+    user: AuthUser,
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    ApiJson(_body): ApiJson<Value>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    use crate::signin::msg;
+    user.require_controller()?;
+    let id = parse_id(&id).map_err(|_| person_not_found())?;
+    let (active, username): (bool, String) =
+        sqlx::query_as("select active, username from person where id = $1")
+            .bind(id)
+            .fetch_optional(&st.pool)
+            .await?
+            .ok_or_else(person_not_found)?;
+    if !active {
+        return Err(ApiError::Conflict(msg::SWITCHED_OFF.into()));
+    }
+    let temporary = password::temporary();
+    let hash = st.hasher.hash(&temporary).await?;
+
+    let mut tx = st.pool.begin().await?;
+    // Serialise per issuing manager so parallel requests cannot all pass the count.
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(format!("xt_password_reset:{}", user.person_id))
+        .execute(&mut *tx)
+        .await?;
+    let limit = loginlimit::MAX_RESETS_PER_HOUR;
+    let recent: i64 = sqlx::query_scalar(
+        "select count(*) from password_audit
+         where issued_by = $1 and kind = 'reset' and at > now() - interval '1 hour'",
+    )
+    .bind(user.person_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if recent >= limit {
+        let wait: Option<i64> = sqlx::query_scalar(
+            "select ceil(extract(epoch from (at + interval '1 hour' - now())))::bigint
+             from password_audit
+             where issued_by = $1 and kind = 'reset' and at > now() - interval '1 hour'
+             order by at, id offset $2 limit 1",
+        )
+        .bind(user.person_id)
+        .bind(recent - limit)
+        .fetch_optional(&mut *tx)
+        .await?;
+        return Err(ApiError::TooManyRequests(
+            loginlimit::msg::TOO_MANY_RESETS.into(),
+            wait.unwrap_or(3600).clamp(1, 3600) as u64,
+        ));
+    }
+    // Still there and still on? (It could have been switched off while we were hashing.)
+    let still: Option<bool> =
+        sqlx::query_scalar("select active from person where id = $1 for update")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    match still {
+        None => return Err(person_not_found()),
+        Some(false) => return Err(ApiError::Conflict(msg::SWITCHED_OFF.into())),
+        Some(true) => {}
+    }
+    passwords::store_password(
+        &mut tx,
+        id,
+        Some(&hash),
+        true,
+        "reset",
+        Some(user.person_id),
+    )
+    .await?
+    .ok_or(ApiError::Internal)?;
+    tx.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "username": username,
+            "temporary_password": temporary,
+            "must_change_password": true,
+        })),
+    ))
+}
+
+/// Back to links only: the person has no password any more and every older session ends.
+async fn remove_password(
+    user: AuthUser,
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    user.require_controller()?;
+    let id = parse_id(&id).map_err(|_| person_not_found())?;
+    let mut tx = st.pool.begin().await?;
+    passwords::store_password(&mut tx, id, None, false, "remove", Some(user.person_id))
+        .await?
+        .ok_or_else(person_not_found)?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------- seats ----------

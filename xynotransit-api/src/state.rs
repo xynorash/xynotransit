@@ -9,7 +9,7 @@ use sqlx::PgPool;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use crate::{config::Config, mail::Mailer};
+use crate::{config::Config, hashing::Hasher, mail::Mailer};
 
 /// What the database tells us changed: reports of a period, or its deck.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,12 +28,16 @@ pub struct AppState {
     pub ticket_ttl: Duration,
     /// Turns true when the server is shutting down; event streams end when they see it.
     pub shutdown: watch::Sender<bool>,
+    /// Password hashing, behind a small semaphore.
+    pub hasher: Hasher,
 }
 
 impl AppState {
     pub fn new(pool: PgPool, config: Config, mailer: Mailer) -> Self {
         let (events, _) = broadcast::channel(256);
+        let hasher = Hasher::new(config.password_hash);
         AppState {
+            hasher,
             pool,
             config: Arc::new(config),
             mailer,

@@ -20,12 +20,20 @@ class Person {
     this.email,
     this.appRole = AppRole.contributor,
     this.active = true,
+    this.username,
+    this.hasPassword = false,
   });
   final String id;
   final String fullName;
   final String? email;
   final AppRole appRole;
   final bool active;
+
+  /// Lower case name they sign in with (null when the server did not say).
+  final String? username;
+
+  /// Whether they can sign in with a password. Never the password itself.
+  final bool hasPassword;
 }
 
 class MetricDef {

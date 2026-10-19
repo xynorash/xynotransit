@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../repository.dart';
 import 'api_client.dart';
 import 'api_models.dart';
@@ -10,6 +12,12 @@ import 'api_models.dart';
 class ApiAuthService implements AuthService, LinkSignIn {
   ApiAuthService(this._api) {
     _api.onUnauthorized = expire;
+    _api.onPasswordRequired = () {
+      final u = _user;
+      if (u != null && !u.mustChangePassword) {
+        _set(u.copyWith(mustChangePassword: true));
+      }
+    };
   }
 
   final ApiClient _api;
@@ -17,6 +25,10 @@ class ApiAuthService implements AuthService, LinkSignIn {
   AppUser? _user;
 
   TokenStore get _tokens => _api.tokens;
+
+  /// The client, for tests that make a plain call with the token.
+  @visibleForTesting
+  ApiClient get testClient => _api;
 
   @override
   AppUser? get currentUser => _user;
@@ -84,14 +96,70 @@ class ApiAuthService implements AuthService, LinkSignIn {
     final j = asJson(
       await _api.post('/auth/verify', body: {'token': token}, auth: false),
     );
+    await _startSession(j);
+    // The answer has no username; ask who we are (best effort).
+    try {
+      final me = parseUser(await _api.get('/me'));
+      if (me.personId == _user?.personId) await _keep(me);
+    } on Object {
+      // Offline now? The sign-in stands; the name shows up on the next start.
+    }
+  }
+
+  @override
+  Future<void> signInWithPassword(String username, String password) async {
+    final name = username.trim().toLowerCase();
+    final j = asJson(
+      await _api.post(
+        '/auth/login',
+        body: {'username': name, 'password': password},
+        auth: false,
+      ),
+    );
+    await _startSession(j, username: name);
+  }
+
+  @override
+  Future<void> changePassword({
+    String? currentPassword,
+    required String newPassword,
+  }) async {
+    final j = asJson(
+      await _api.post(
+        '/auth/password',
+        body: {
+          'current_password': ?currentPassword,
+          'new_password': newPassword,
+        },
+      ),
+    );
     final access = j['access_token'];
     if (access is! String || access.isEmpty) {
       throw const RepositoryException(
         'The server sent an answer the app cannot read.',
       );
     }
-    final user = parseUser(j['user']);
+    // The old token is dead now; swap in the fresh one before anything else.
     await _tokens.save(access);
+    final u = _user;
+    if (u != null) {
+      await _keep(u.copyWith(hasPassword: true, mustChangePassword: false));
+    }
+  }
+
+  Future<void> _startSession(Map<String, Object?> j, {String? username}) async {
+    final access = j['access_token'];
+    if (access is! String || access.isEmpty) {
+      throw const RepositoryException(
+        'The server sent an answer the app cannot read.',
+      );
+    }
+    final user = parseSessionUser(j, username: username);
+    await _tokens.save(access);
+    await _keep(user);
+  }
+
+  Future<void> _keep(AppUser user) async {
     await _tokens.saveUser(jsonEncode(userToJson(user)));
     _set(user);
   }

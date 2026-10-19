@@ -13,7 +13,9 @@ import '../domain/period.dart';
 import '../domain/report.dart';
 import '../domain/snapshot.dart';
 import '../domain/text_rules.dart';
-import 'api/api_client.dart' show UnauthorizedException;
+import '../domain/password_rules.dart';
+import 'api/api_client.dart'
+    show ApiException, UnauthorizedException, waitWords;
 import 'demo_data.dart';
 import 'repository.dart';
 import 'seed_data.dart';
@@ -47,7 +49,16 @@ class MemoryRepository implements Repository {
   }) : _catalog = catalog ?? buildSeedCatalog(),
        _currentUser = currentUser,
        _clock = clock ?? DateTime.now {
+    final original = _catalog;
+    _accounts[_managerKey] = _Account('manager');
+    for (final p in _catalog.persons) {
+      _accounts[p.id] = _Account(
+        UsernameRules.fromEmail(p.email ?? p.fullName, _usernameTaken),
+      );
+    }
+    _catalog = _withAccounts(_catalog.persons, _catalog);
     _catalogLive = _Live(_catalog);
+    _sources[original] = this;
     _sources[_catalog] = this;
     for (final a in _catalog.assignments) {
       _keys[a.id] = {for (final m in a.metrics) m.key};
@@ -101,14 +112,265 @@ class MemoryRepository implements Repository {
   /// reads the role from the database on every request: a demoted person is an
   /// employee at once, and a deactivated or unknown person is signed out.
   AppUser _me() {
+    final u = _meRaw();
+    if (_accountOf(u).mustChange) {
+      throw const ApiException(403, PasswordRules.mustChangeFirst);
+    }
+    return u;
+  }
+
+  /// Like [_me], but also for a person who must choose a new password first
+  /// (the only calls such a person may make).
+  AppUser _meRaw() {
     final u = _currentUser();
     final id = u.personId;
-    if (id == null) return u;
-    final p = _catalog.personById(id);
-    if (p == null || !p.active) {
-      throw const UnauthorizedException('Please sign in.');
+    if (id != null) {
+      final p = _catalog.personById(id);
+      if (p == null || !p.active) {
+        throw const UnauthorizedException('Please sign in.');
+      }
     }
-    return AppUser(personId: id, role: p.appRole, label: p.fullName);
+    final a = _accountOf(u);
+    if (a.epoch != u.sessionEpoch) {
+      throw const UnauthorizedException(PasswordRules.signInAgain);
+    }
+    if (id == null) return u.copyWith(username: a.username);
+    final p = _catalog.personById(id)!;
+    return AppUser(
+      personId: id,
+      role: p.appRole,
+      label: p.fullName,
+      username: a.username,
+      hasPassword: a.password != null,
+      mustChangePassword: a.mustChange,
+      sessionEpoch: a.epoch,
+    );
+  }
+
+  // ---- Passwords ----
+
+  static const _managerKey = '_manager';
+  final _accounts = <String, _Account>{};
+  final _failures = <String, List<DateTime>>{};
+  final _resetTimes = <String, List<DateTime>>{};
+
+  /// What happened to passwords, never the passwords: kind (change, reset,
+  /// remove), whose, and who made it happen. For tests.
+  final passwordAudit = <({String kind, String personId, String? issuedBy})>[];
+
+  _Account _accountOf(AppUser u) =>
+      _accounts.putIfAbsent(u.personId ?? _managerKey, () => _Account('user'));
+
+  bool _usernameTaken(String name) =>
+      _accounts.values.any((a) => a.username == name);
+
+  Catalog _withAccounts(List<Person> persons, Catalog base) => Catalog(
+    teams: base.teams,
+    persons: [
+      for (final p in persons)
+        Person(
+          id: p.id,
+          fullName: p.fullName,
+          email: p.email,
+          appRole: p.appRole,
+          active: p.active,
+          username: _accounts[p.id]?.username,
+          hasPassword: _accounts[p.id]?.password != null,
+        ),
+    ],
+    assignments: base.assignments,
+  );
+
+  void _republishPersons() {
+    _catalog = _withAccounts(_catalog.persons, _catalog);
+    _catalogLive.value = _catalog;
+  }
+
+  /// The signed-in state of [personId] as a fresh session, like the one the
+  /// server hands out after a sign-in. Null personId is the demo manager.
+  AppUser sessionFor(String? personId) {
+    final p = personId == null ? null : _catalog.personById(personId);
+    final a = _accounts[personId ?? _managerKey]!;
+    return AppUser(
+      personId: personId,
+      role: p?.appRole ?? AppRole.controller,
+      label: p?.fullName ?? 'Manager',
+      username: a.username,
+      hasPassword: a.password != null,
+      mustChangePassword: a.mustChange,
+      sessionEpoch: a.epoch,
+    );
+  }
+
+  ApiException _locked(List<DateTime> times, DateTime now) {
+    final wait = times.first.add(PasswordRules.window).difference(now);
+    final s = wait.inMilliseconds <= 0
+        ? 1
+        : (wait.inMilliseconds + 999) ~/ 1000;
+    return ApiException(
+      429,
+      'Too many sign-in attempts. Try again in ${waitWords(s)}.',
+      retryAfterSeconds: s,
+    );
+  }
+
+  List<DateTime> _recentFailures(String key, DateTime now) {
+    final l = _failures.putIfAbsent(key, () => []);
+    l.removeWhere((t) => now.difference(t) >= PasswordRules.window);
+    return l;
+  }
+
+  /// Signs in with a username and a password, with the same answers as the
+  /// API: one wrong-login message for every reason, and 5 failures per
+  /// username in 15 minutes lock that name (also an unknown one) for a while.
+  AppUser loginWithPassword(String username, String password) {
+    _requireOnline();
+    final key = trimText(username).toLowerCase();
+    final now = _clock();
+    final fails = _recentFailures(key, now);
+    if (fails.length >= PasswordRules.failuresPerUsername) {
+      throw _locked(fails, now);
+    }
+    final id = _accounts.entries
+        .where((e) => e.value.username == key && e.key != _managerKey)
+        .map((e) => e.key)
+        .firstOrNull;
+    final person = id == null ? null : _catalog.personById(id);
+    final account = id == null ? null : _accounts[id];
+    if (person == null ||
+        !person.active ||
+        account?.password == null ||
+        account!.password != password) {
+      fails.add(now);
+      throw const UnauthorizedException(PasswordRules.wrongLogin);
+    }
+    // The right password: this name starts again from zero (others do not).
+    fails.clear();
+    return sessionFor(id);
+  }
+
+  /// Changes the password of [who] and returns the fresh session. Everything
+  /// older ends.
+  AppUser changePasswordOf(
+    AppUser who, {
+    String? currentPassword,
+    required String newPassword,
+  }) {
+    _requireOnline();
+    // Check the session the caller holds.
+    final a = _accountOf(who);
+    if (who.personId != null) {
+      final p = _catalog.personById(who.personId!);
+      if (p == null || !p.active) {
+        throw const UnauthorizedException('Please sign in.');
+      }
+    }
+    if (a.epoch != who.sessionEpoch) {
+      throw const UnauthorizedException(PasswordRules.signInAgain);
+    }
+    if (newPassword.isEmpty) {
+      throw const RepositoryException(PasswordRules.newRequired);
+    }
+    final now = _clock();
+    if (a.password != null) {
+      if (currentPassword == null || currentPassword.isEmpty) {
+        throw const RepositoryException(PasswordRules.currentRequired);
+      }
+      final fails = _recentFailures(a.username, now);
+      if (fails.length >= PasswordRules.failuresPerUsername) {
+        throw _locked(fails, now);
+      }
+      if (currentPassword != a.password) {
+        fails.add(now);
+        throw const ApiException(403, PasswordRules.currentWrong);
+      }
+      fails.clear();
+      if (newPassword == a.password) {
+        throw const RepositoryException(PasswordRules.sameAsCurrent);
+      }
+    }
+    final p = who.personId == null ? null : _catalog.personById(who.personId!);
+    final problem = PasswordRules.check(
+      newPassword,
+      username: a.username,
+      email: p?.email,
+      fullName: p?.fullName ?? who.label,
+    );
+    if (problem != null) throw RepositoryException(problem);
+    a
+      ..password = newPassword
+      ..mustChange = false
+      ..epoch += 1;
+    passwordAudit.add((
+      kind: 'change',
+      personId: who.personId ?? _managerKey,
+      issuedBy: null,
+    ));
+    _republishPersons();
+    return sessionFor(who.personId);
+  }
+
+  @override
+  Future<TempPassword> resetPassword(String personId) async {
+    _requireController();
+    final me = _me();
+    final p = _catalog.personById(personId);
+    if (p == null) throw const RepositoryException(AdminRules.noPerson);
+    if (!p.active) {
+      throw const RepositoryException(AdminRules.personSwitchedOff);
+    }
+    final now = _clock();
+    final times = _resetTimes.putIfAbsent(me.personId ?? '', () => []);
+    times.removeWhere((t) => now.difference(t) >= const Duration(hours: 1));
+    if (times.length >= PasswordRules.resetsPerHour) {
+      final s = times.first.add(const Duration(hours: 1)).difference(now);
+      final secs = s.inMilliseconds <= 0 ? 1 : (s.inMilliseconds + 999) ~/ 1000;
+      throw ApiException(
+        429,
+        'Too many temporary passwords created. '
+        'Try again in ${waitWords(secs)}.',
+        retryAfterSeconds: secs,
+      );
+    }
+    times.add(now);
+    final random = Random.secure();
+    final temp = List.generate(
+      PasswordRules.resetLength,
+      (_) =>
+          PasswordRules.resetAlphabet[random.nextInt(
+            PasswordRules.resetAlphabet.length,
+          )],
+    ).join();
+    final a = _accounts[personId]!
+      ..password = temp
+      ..mustChange = true
+      ..epoch += 1;
+    passwordAudit.add((
+      kind: 'reset',
+      personId: personId,
+      issuedBy: me.personId,
+    ));
+    _republishPersons();
+    return TempPassword(username: a.username, password: temp);
+  }
+
+  @override
+  Future<void> removePassword(String personId) async {
+    _requireController();
+    final me = _me();
+    if (_catalog.personById(personId) == null) {
+      throw const RepositoryException(AdminRules.noPerson);
+    }
+    _accounts[personId]!
+      ..password = null
+      ..mustChange = false
+      ..epoch += 1;
+    passwordAudit.add((
+      kind: 'remove',
+      personId: personId,
+      issuedBy: me.personId,
+    ));
+    _republishPersons();
   }
 
   static const _onlyController = 'Only the manager can do this.';
@@ -463,10 +725,13 @@ class MemoryRepository implements Repository {
     List<Person>? persons,
     List<Assignment>? assignments,
   }) {
-    _catalog = Catalog(
-      teams: teams ?? _catalog.teams,
-      persons: persons ?? _catalog.persons,
-      assignments: assignments ?? _catalog.assignments,
+    _catalog = _withAccounts(
+      persons ?? _catalog.persons,
+      Catalog(
+        teams: teams ?? _catalog.teams,
+        persons: const [],
+        assignments: assignments ?? _catalog.assignments,
+      ),
     );
     _catalogLive.value = _catalog;
   }
@@ -527,6 +792,7 @@ class MemoryRepository implements Repository {
     required String email,
     required AppRole role,
     bool active = true,
+    String? username,
   }) async {
     _requireController();
     final name = _ok(AdminRules.cleanPersonName(fullName));
@@ -551,6 +817,22 @@ class MemoryRepository implements Repository {
     if (persons.any((p) => p.id != id && p.email?.toLowerCase() == mail)) {
       throw const RepositoryException(AdminRules.emailTaken);
     }
+    // The username: typed (checked) or made from the address on creation.
+    final typed = trimText(username ?? '');
+    String? newName;
+    if (typed.isNotEmpty) {
+      newName = UsernameRules.clean(typed);
+      if (newName == null) {
+        throw const RepositoryException(UsernameRules.invalid);
+      }
+      final owner = _accounts.entries
+          .where((e) => e.value.username == newName)
+          .map((e) => e.key)
+          .firstOrNull;
+      if (owner != null && owner != id) {
+        throw const RepositoryException(UsernameRules.taken);
+      }
+    }
     final person = Person(
       id: id ?? 'person-${++_seq}',
       fullName: name,
@@ -558,6 +840,13 @@ class MemoryRepository implements Repository {
       appRole: role,
       active: active,
     );
+    if (id == null) {
+      _accounts[person.id] = _Account(
+        newName ?? UsernameRules.fromEmail(mail, _usernameTaken),
+      );
+    } else if (newName != null) {
+      _accounts[id]!.username = newName;
+    }
     // Nobody may take the last manager away, by role or by switching them off.
     if (i >= 0) {
       final cur = persons[i];
@@ -574,7 +863,7 @@ class MemoryRepository implements Repository {
       persons.add(person);
     }
     _setCatalog(persons: persons);
-    return person;
+    return _catalog.personById(person.id)!;
   }
 
   final _links = <String, _IssuedLink>{};
@@ -627,7 +916,7 @@ class MemoryRepository implements Repository {
     final p = _catalog.personById(link.personId);
     if (p == null || !p.active) throw refused;
     link.used = true;
-    return AppUser(personId: p.id, role: p.appRole, label: p.fullName);
+    return sessionFor(p.id);
   }
 
   @override
@@ -860,6 +1149,14 @@ class MemoryRepository implements Repository {
   }
 }
 
+class _Account {
+  _Account(this.username);
+  String username;
+  String? password;
+  bool mustChange = false;
+  int epoch = 0;
+}
+
 class _IssuedLink {
   _IssuedLink(this.personId, this.expiresAt);
   final String personId;
@@ -867,12 +1164,16 @@ class _IssuedLink {
   bool used = false;
 }
 
-/// Demo sign-in: pick who you are, no email.
-class DemoAuth implements AuthService {
-  DemoAuth(this._catalog) : _user = controller;
+/// Demo sign-in: pick who you are, no email. With [requireSignIn] it starts
+/// signed out and signs in with a username and password or a link, like the
+/// real thing (tests use this; the public demo does not).
+class DemoAuth implements AuthService, LinkSignIn {
+  DemoAuth(this._catalog, {this.requireSignIn = false})
+    : _user = requireSignIn ? null : controller;
 
   final Catalog _catalog;
-  AppUser _user;
+  final bool requireSignIn;
+  AppUser? _user;
   final _c = StreamController<AppUser?>.broadcast();
 
   static const controller = AppUser(
@@ -881,21 +1182,31 @@ class DemoAuth implements AuthService {
     label: 'Manager',
   );
 
+  MemoryRepository get _repo {
+    final repo = MemoryRepository._sources[_catalog];
+    if (repo == null) {
+      throw StateError('DemoAuth needs the MemoryRepository of its catalog.');
+    }
+    return repo;
+  }
+
   /// The demo people a viewer can act as. Follows the people of the
   /// repository built on the same catalog, so a person added later shows up.
   List<AppUser> get choices {
     final repo = MemoryRepository._sources[_catalog];
     final persons = repo?.currentPersons ?? _catalog.persons;
     return [
-      controller,
+      repo?.sessionFor(null) ?? controller,
       for (final p in persons)
-        AppUser(personId: p.id, role: p.appRole, label: p.fullName),
+        repo?.sessionFor(p.id) ??
+            AppUser(personId: p.id, role: p.appRole, label: p.fullName),
     ];
   }
 
   void actAs(AppUser u) {
-    _user = u;
-    _c.add(u);
+    final repo = MemoryRepository._sources[_catalog];
+    _user = repo == null ? u : repo.sessionFor(u.personId);
+    _c.add(_user);
   }
 
   @override
@@ -908,11 +1219,42 @@ class DemoAuth implements AuthService {
   }
 
   @override
-  bool get needsSignIn => false;
+  bool get needsSignIn => requireSignIn;
 
   @override
   Future<void> signInWithEmail(String email) async {}
 
   @override
-  Future<void> signOut() async {}
+  Future<void> signInWithPassword(String username, String password) async {
+    _user = _repo.loginWithPassword(username, password);
+    _c.add(_user);
+  }
+
+  @override
+  Future<void> exchangeToken(String token) async {
+    _user = _repo.redeemSignInLink('https://demo.invalid/?token=$token');
+    _c.add(_user);
+  }
+
+  @override
+  Future<void> changePassword({
+    String? currentPassword,
+    required String newPassword,
+  }) async {
+    final me = _user;
+    if (me == null) throw const UnauthorizedException('Please sign in.');
+    _user = _repo.changePasswordOf(
+      me,
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+    _c.add(_user);
+  }
+
+  @override
+  Future<void> signOut() async {
+    // The public demo has no sign-in: signing out goes back to the manager.
+    _user = requireSignIn ? null : _repo.sessionFor(null);
+    _c.add(_user);
+  }
 }

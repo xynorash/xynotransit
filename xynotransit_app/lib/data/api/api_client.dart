@@ -62,6 +62,9 @@ class RequestTimeout extends NetworkException {
   const RequestTimeout() : super('The server took too long to answer.');
 }
 
+/// The words of the 403 a person with a temporary password gets everywhere.
+const mustChangeMessage = 'Choose a new password first.';
+
 /// Plain words for an error status when the server sent no message.
 String fallbackMessage(int status) => switch (status) {
   400 => 'Some of the input is not valid.',
@@ -163,6 +166,10 @@ class ApiClient {
   /// meanwhile) is ignored, so a sign-in is never undone by a stale answer.
   void Function()? onUnauthorized;
 
+  /// Called when the server says the person must choose a new password first
+  /// (403 with that message), so the app can send them to that screen.
+  void Function()? onPasswordRequired;
+
   Uri uri(String path, [Map<String, String>? query]) {
     final base = baseUrl.endsWith('/')
         ? baseUrl.substring(0, baseUrl.length - 1)
@@ -227,7 +234,12 @@ class ApiClient {
     }
     final bytes = res.bodyBytes;
     if (res.statusCode >= 400) {
-      if (isUnreachableStatus(res.statusCode)) {
+      // The API's own 503 ("Busy, try again in a moment.", too many password
+      // hashes at once) carries its words; a proxy's 503 does not.
+      final busy =
+          res.statusCode == 503 &&
+          utf8.decode(bytes, allowMalformed: true).contains('Busy, try again');
+      if (isUnreachableStatus(res.statusCode) && !busy) {
         throw const NetworkException(
           'The service is not reachable right now. Try again in a moment.',
         );
@@ -241,6 +253,9 @@ class ApiClient {
           token != null &&
           tokens.token == token) {
         onUnauthorized?.call();
+      }
+      if (err.statusCode == 403 && err.message == mustChangeMessage) {
+        onPasswordRequired?.call();
       }
       throw err;
     }

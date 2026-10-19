@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    extract::ConnectInfo,
+    http::{HeaderMap, Request, StatusCode},
     Router,
 };
 use http_body_util::BodyExt;
@@ -131,6 +132,9 @@ impl TestApp {
             "DATABASE_URL" => Some(url.clone()),
             "JWT_SECRET" => Some(SECRET.into()),
             "PUBLIC_URL" => Some("http://127.0.0.1:8080".into()),
+            // Cheap Argon2 so the suite stays fast; production uses the OWASP minimum.
+            "PASSWORD_HASH_MEMORY_KIB" => Some("64".into()),
+            "PASSWORD_HASH_ITERATIONS" => Some("1".into()),
             _ => None,
         })
         .unwrap();
@@ -309,7 +313,7 @@ impl TestApp {
         sqlx::query(
             "truncate table team, person, assignment, metric_def, kpi_def, period, report,
              report_metric_value, report_kpi_result, report_note, deck_run, deck_run_item,
-             deck_text, login_token, login_attempt restart identity cascade",
+             deck_text, login_token, login_attempt, login_failure restart identity cascade",
         )
         .execute(&mut *tx)
         .await
@@ -319,14 +323,98 @@ impl TestApp {
 
     /// A token for a person without the magic link round trip (the link flow is rate limited).
     pub fn token_for(&self, person_id: &str, controller: bool) -> String {
+        self.token_for_epoch(person_id, controller, 0)
+    }
+
+    /// Like `token_for`, with the session epoch the token claims.
+    pub fn token_for_epoch(&self, person_id: &str, controller: bool, epoch: i32) -> String {
         let role = if controller {
             xynotransit_api::auth::Role::Controller
         } else {
             xynotransit_api::auth::Role::Contributor
         };
-        xynotransit_api::auth::issue_jwt(SECRET, person_id.parse().unwrap(), role)
+        xynotransit_api::auth::issue_jwt(SECRET, person_id.parse().unwrap(), role, epoch)
             .unwrap()
             .0
+    }
+
+    /// A JSON call as seen from a socket peer (and an optional X-Forwarded-For line), for the
+    /// sign-in limits, which count by client address.
+    pub async fn call_from(
+        &self,
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<Value>,
+        peer: &str,
+        forwarded_for: Option<&str>,
+    ) -> (StatusCode, HeaderMap, Value) {
+        let mut b = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(t) = token {
+            b = b.header("authorization", format!("Bearer {t}"));
+        }
+        if let Some(x) = forwarded_for {
+            b = b.header("x-forwarded-for", x);
+        }
+        let mut req = b
+            .body(Body::from(
+                body.map(|b| serde_json::to_vec(&b).unwrap())
+                    .unwrap_or_default(),
+            ))
+            .unwrap();
+        let addr: std::net::SocketAddr = format!("{peer}:40000")
+            .parse()
+            .or_else(|_| format!("[{peer}]:40000").parse())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        let res = self.router.clone().oneshot(req).await.unwrap();
+        let (status, headers) = (res.status(), res.headers().clone());
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let v = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, headers, v)
+    }
+
+    /// Sign in with a username and password; returns the whole answer.
+    pub async fn password_login(&self, username: &str, password: &str) -> (StatusCode, Value) {
+        self.call(
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({"username": username, "password": password})),
+        )
+        .await
+    }
+
+    /// Give a person a password through the manager's reset and the person's own change, so the
+    /// person ends up with `password`, no longer asked to change it. Returns a fresh token.
+    pub async fn give_password(&self, person_id: &str, username: &str, password: &str) -> String {
+        let manager = self.token_for(CORA, true);
+        let (s, v) = self
+            .call(
+                "POST",
+                &format!("/api/persons/{person_id}/password-reset"),
+                Some(&manager),
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::CREATED, "{v}");
+        let temp = v["temporary_password"].as_str().unwrap().to_string();
+        let (s, v) = self.password_login(username, &temp).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let tok = v["access_token"].as_str().unwrap().to_string();
+        let (s, v) = self
+            .call(
+                "POST",
+                "/api/auth/password",
+                Some(&tok),
+                Some(json!({"current_password": temp, "new_password": password})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        v["access_token"].as_str().unwrap().to_string()
     }
 
     pub async fn sql(&self, q: &str) {

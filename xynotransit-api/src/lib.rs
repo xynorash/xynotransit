@@ -4,15 +4,20 @@ pub mod auth;
 pub mod config;
 pub mod deck_text;
 pub mod error;
+pub mod hashing;
 pub mod http;
 pub mod listener;
+pub mod loginlimit;
 pub mod mail;
+pub mod password;
+pub mod passwords;
 pub mod routes;
 pub mod rules;
 pub mod signin;
 pub mod snapshot;
 pub mod state;
 pub mod summary;
+pub mod username;
 pub mod validate;
 
 use std::{future::Future, time::Duration};
@@ -89,7 +94,11 @@ pub async fn serve(
         tracing::info!("shutting down: finishing requests that are running");
         st.begin_shutdown();
     };
-    let server = axum::serve(listener, app).with_graceful_shutdown(graceful);
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(graceful);
     tokio::select! {
         r = server => r,
         _ = async move {

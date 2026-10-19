@@ -17,11 +17,13 @@ const _actor = #contractActor;
 
 /// Runs every call as one person, whoever else is acting at the same time.
 class _Acting implements Repository {
-  _Acting(this._r, this._me);
+  _Acting(this._r, this.me);
   final MemoryRepository _r;
-  final AppUser _me;
 
-  T _as<T>(T Function() f) => runZoned(f, zoneValues: {_actor: _me});
+  /// Replaced after a password change: the fresh session.
+  AppUser me;
+
+  T _as<T>(T Function() f) => runZoned(f, zoneValues: {_actor: me});
 
   @override
   Future<Catalog> loadCatalog({bool includeInactive = false}) =>
@@ -61,6 +63,7 @@ class _Acting implements Repository {
     required String email,
     required AppRole role,
     bool active = true,
+    String? username,
   }) => _as(
     () => _r.savePerson(
       id: id,
@@ -68,8 +71,15 @@ class _Acting implements Repository {
       email: email,
       role: role,
       active: active,
+      username: username,
     ),
   );
+  @override
+  Future<TempPassword> resetPassword(String personId) =>
+      _as(() => _r.resetPassword(personId));
+  @override
+  Future<void> removePassword(String personId) =>
+      _as(() => _r.removePassword(personId));
   @override
   Future<SignInLink> createSignInLink(String personId, {int hours = 24}) =>
       _as(() => _r.createSignInLink(personId, hours: hours));
@@ -105,6 +115,30 @@ class _Acting implements Repository {
   @override
   Future<Summary> loadSummary(String periodId, {int trend = 6}) =>
       _as(() => _r.loadSummary(periodId, trend: trend));
+}
+
+class _MemorySession implements PersonSession {
+  _MemorySession(this._r, this._acting);
+  final MemoryRepository _r;
+  final _Acting _acting;
+
+  @override
+  Repository get repo => _acting;
+
+  @override
+  Future<AppUser> me() async => _r.sessionFor(_acting.me.personId);
+
+  @override
+  Future<void> changePassword({
+    String? currentPassword,
+    required String newPassword,
+  }) async {
+    _acting.me = _r.changePasswordOf(
+      _acting.me,
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+  }
 }
 
 class MemoryArena implements Arena {
@@ -176,6 +210,19 @@ class MemoryArena implements Arena {
     final u = _repo.redeemSignInLink(url);
     return _Acting(_repo, u);
   }
+
+  @override
+  Future<PersonSession> signInWithPassword(
+    String username,
+    String password,
+  ) async => _MemorySession(
+    _repo,
+    _Acting(_repo, _repo.loginWithPassword(username, password)),
+  );
+
+  @override
+  Future<PersonSession> signInWithLinkSession(String url) async =>
+      _MemorySession(_repo, _Acting(_repo, _repo.redeemSignInLink(url)));
 
   @override
   DateTime start(int n) => DateTime(2080, 1 + n);

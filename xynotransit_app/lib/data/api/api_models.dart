@@ -69,13 +69,31 @@ AppUser parseUser(Object? data) => _guard(() {
     personId: j['person_id'] as String?,
     role: parseRole(j['role']),
     label: (j['label'] as String?) ?? 'Signed in',
+    username: j['username'] as String?,
+    hasPassword: j['has_password'] as bool? ?? false,
+    mustChangePassword: j['must_change_password'] as bool? ?? false,
   );
 });
+
+/// The user of a sign-in answer (`/auth/login`, `/auth/verify`): the person
+/// sits under `user`, the password state beside it.
+AppUser parseSessionUser(Map<String, Object?> j, {String? username}) {
+  final u = parseUser(j['user']);
+  return u.copyWith(
+    username: username ?? u.username,
+    hasPassword: j['has_password'] as bool? ?? u.hasPassword,
+    mustChangePassword:
+        j['must_change_password'] as bool? ?? u.mustChangePassword,
+  );
+}
 
 Map<String, Object?> userToJson(AppUser u) => {
   'person_id': u.personId,
   'role': u.role.name,
   'label': u.label,
+  if (u.username != null) 'username': u.username,
+  'has_password': u.hasPassword,
+  'must_change_password': u.mustChangePassword,
 };
 
 Team parseTeam(Object? data) => _guard(() {
@@ -96,6 +114,16 @@ Person parsePerson(Object? data) => _guard(() {
     email: p['email'] as String?,
     appRole: parseRole(p['app_role']),
     active: p['active'] as bool? ?? true,
+    username: p['username'] as String?,
+    hasPassword: p['has_password'] as bool? ?? false,
+  );
+});
+
+TempPassword parseTempPassword(Object? data) => _guard(() {
+  final j = asJson(data);
+  return TempPassword(
+    username: j['username'] as String,
+    password: j['temporary_password'] as String,
   );
 });
 
@@ -161,6 +189,7 @@ Map<String, Object?> personToJson({
   required String email,
   required AppRole role,
   required bool active,
+  String? username,
 }) => {
   'full_name': _line(fullName),
   // Empty means "no real email": the server makes an internal address on
@@ -168,6 +197,8 @@ Map<String, Object?> personToJson({
   if (trimText(email).isNotEmpty) 'email': trimText(email).toLowerCase(),
   'app_role': role.name,
   'active': active,
+  if (username != null && trimText(username).isNotEmpty)
+    'username': trimText(username).toLowerCase(),
 };
 
 /// Body of POST /assignments.

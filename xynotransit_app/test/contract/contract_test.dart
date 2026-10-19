@@ -24,6 +24,7 @@ import 'scenarios_admin.dart' as admin;
 import 'scenarios_concurrent.dart' as concurrent;
 import 'scenarios_deck.dart' as deck;
 import 'scenarios_reports.dart' as reports;
+import 'scenarios_passwords.dart' as passwords;
 import 'scenarios_signin.dart' as signin;
 
 typedef Scenario = Future<void> Function(Arena a);
@@ -58,6 +59,16 @@ final scenarios = <(String, Scenario, {bool lastManager})>[
   (
     'too many sign-in requests say when to retry',
     signin.signInLimit,
+    lastManager: false,
+  ),
+  (
+    'usernames and the life of a password',
+    passwords.passwordLifecycle,
+    lastManager: false,
+  ),
+  (
+    'five wrong tries lock a username for a while',
+    passwords.loginLimit,
     lastManager: false,
   ),
   ('things at the same time', concurrent.sameTime, lastManager: false),

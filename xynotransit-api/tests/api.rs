@@ -295,7 +295,8 @@ async fn me_and_role_changes_take_effect_at_once() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(
         v,
-        json!({"person_id": CORA, "role": "controller", "label": "Cora Boss"})
+        json!({"person_id": CORA, "role": "controller", "label": "Cora Boss",
+               "username": "cora", "has_password": false, "must_change_password": false})
     );
 
     let period = app.ensure_period(&cora, "2026-02-01").await;
