@@ -221,17 +221,30 @@ async fn the_link_answer_says_whether_there_is_a_password() {
 
 // ---------------------------------------------------------------------------------------------
 // limits
+//
+// Public addresses used below: A = 203.0.113.7 (the attacker), B = 203.0.113.8 (the person),
+// both as the socket peer. The tests in tests/common write rows with the same keys the API uses.
 // ---------------------------------------------------------------------------------------------
 
-async fn fail(app: &TestApp, who: &str) -> (StatusCode, Option<u64>, Value) {
+const A: &str = "203.0.113.7";
+const B: &str = "203.0.113.8";
+const TOO_MANY: &str = "Too many sign-in attempts. Try again later.";
+
+async fn try_login(
+    app: &TestApp,
+    who: &str,
+    password: &str,
+    peer: &str,
+    xff: Option<&str>,
+) -> (StatusCode, Option<u64>, Value) {
     let (s, h, v) = app
         .call_from(
             "POST",
             "/api/auth/login",
             None,
-            Some(json!({"username": who, "password": "definitely not it"})),
-            "203.0.113.7",
-            None,
+            Some(json!({"username": who, "password": password})),
+            peer,
+            xff,
         )
         .await;
     let ra = h
@@ -240,201 +253,283 @@ async fn fail(app: &TestApp, who: &str) -> (StatusCode, Option<u64>, Value) {
     (s, ra, v)
 }
 
+async fn fail_from(app: &TestApp, who: &str, peer: &str) -> (StatusCode, Option<u64>, Value) {
+    try_login(app, who, "definitely not it", peer, None).await
+}
+
+/// A wrong try with no socket at all: the address is unknown.
+async fn fail(app: &TestApp, who: &str) -> (StatusCode, Option<u64>, Value) {
+    let (s, v) = app.password_login(who, "definitely not it").await;
+    (s, None, v)
+}
+
+async fn many_logins(app: &TestApp, who: &str, peer: Option<&str>, n: usize) -> Vec<StatusCode> {
+    let mut set = tokio::task::JoinSet::new();
+    for _ in 0..n {
+        let router = app.router.clone();
+        let body = json!({"username": who, "password": "not the one"}).to_string();
+        let peer = peer.map(|p| {
+            format!("{p}:40000")
+                .parse::<std::net::SocketAddr>()
+                .unwrap()
+        });
+        set.spawn(async move {
+            use tower::ServiceExt;
+            let mut req = axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body))
+                .unwrap();
+            if let Some(p) = peer {
+                req.extensions_mut().insert(axum::extract::ConnectInfo(p));
+            }
+            router.oneshot(req).await.unwrap().status()
+        });
+    }
+    let mut codes = vec![];
+    while let Some(r) = set.join_next().await {
+        codes.push(r.unwrap());
+    }
+    codes
+}
+
 #[tokio::test]
-async fn five_failures_lock_only_that_name() {
+async fn five_failures_lock_only_that_pair() {
     let app = TestApp::new().await;
     app.give_password(ANA, "ana", PW).await;
     app.give_password(BEN, "ben", PW).await;
+    app.sql("delete from login_failure").await;
     for i in 0..5 {
-        let (s, ra, v) = fail(&app, "ana").await;
+        let (s, ra, v) = fail_from(&app, "ana", A).await;
         assert_eq!((s, ra), (StatusCode::UNAUTHORIZED, None), "try {i}: {v}");
     }
-    let (s, ra, v) = fail(&app, "Ana").await;
+    let (s, ra, v) = fail_from(&app, "Ana", A).await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        v,
-        json!({"error": "Too many sign-in attempts. Try again later."})
-    );
+    assert_eq!(v, json!({ "error": TOO_MANY }));
     let ra = ra.unwrap();
     assert!((890..=900).contains(&ra), "{ra}");
-    // Even the right password is refused while locked, and refusals are not counted again.
-    let (s, _, _) = app
-        .call_from(
-            "POST",
-            "/api/auth/login",
-            None,
-            Some(json!({"username": "ana", "password": PW})),
-            "203.0.113.7",
-            None,
-        )
-        .await;
-    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    // Even the right password is refused for that pair, and refusals are not counted again.
     assert_eq!(
-        app.scalar("select count(*) from login_failure where username_key = 'ana'")
-            .await,
-        5
-    );
-    // Another name from the same address is not locked, and its success changes nothing for ana.
-    let (s, _, v) = app
-        .call_from(
-            "POST",
-            "/api/auth/login",
-            None,
-            Some(json!({"username": "ben", "password": PW})),
-            "203.0.113.7",
-            None,
-        )
-        .await;
-    assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!(fail(&app, "ana").await.0, StatusCode::TOO_MANY_REQUESTS);
-    // The lock ends when the old failures leave the 15 minute window.
-    app.sql(
-        "update login_failure set at = now() - interval '16 minutes' where username_key = 'ana'",
-    )
-    .await;
-    let (s, _, v) = app
-        .call_from(
-            "POST",
-            "/api/auth/login",
-            None,
-            Some(json!({"username": "ana", "password": PW})),
-            "203.0.113.7",
-            None,
-        )
-        .await;
-    assert_eq!(s, StatusCode::OK, "{v}");
-}
-
-#[tokio::test]
-async fn unknown_names_lock_exactly_the_same_way() {
-    let app = TestApp::new().await;
-    let mut seen = vec![];
-    for _ in 0..6 {
-        let (s, ra, v) = fail(&app, "No.Such.Person").await;
-        seen.push((s, ra.is_some(), v));
-    }
-    let mut known = vec![];
-    for _ in 0..6 {
-        let (s, ra, v) = fail(&app, "cora").await;
-        known.push((s, ra.is_some(), v));
-    }
-    assert_eq!(seen, known);
-    assert_eq!(seen[4].0, StatusCode::UNAUTHORIZED);
-    assert_eq!(seen[5].0, StatusCode::TOO_MANY_REQUESTS);
-    // Case and spaces share one counter.
-    assert_eq!(
-        fail(&app, "  no.such.PERSON ").await.0,
+        try_login(&app, "ana", PW, A, None).await.0,
         StatusCode::TOO_MANY_REQUESTS
     );
-}
-
-#[tokio::test]
-async fn success_clears_that_name_only() {
-    let app = TestApp::new().await;
-    app.give_password(ANA, "ana", PW).await;
-    for _ in 0..4 {
-        fail(&app, "ana").await;
-        fail(&app, "ben").await;
-    }
-    assert_eq!(app.password_login("ana", PW).await.0, StatusCode::OK);
+    assert_eq!(app.pair_failures("ana", Some(A)).await, 5);
+    // Another name from the same address is not locked by the pair (and its success changes
+    // nothing for ana).
+    assert_eq!(try_login(&app, "ben", PW, A, None).await.0, StatusCode::OK);
     assert_eq!(
-        app.scalar("select count(*) from login_failure where username_key = 'ana'")
-            .await,
-        0
+        fail_from(&app, "ana", A).await.0,
+        StatusCode::TOO_MANY_REQUESTS
     );
-    assert_eq!(
-        app.scalar("select count(*) from login_failure where username_key = 'ben'")
-            .await,
-        4
-    );
-}
-
-#[tokio::test]
-async fn retry_after_counts_to_the_failure_that_frees_a_place() {
-    let app = TestApp::new().await;
-    // Seven failures: ages in minutes. The lock lifts when only four are left in the window,
-    // that is when the third oldest (9 minutes) is 15 minutes old: 6 minutes from now.
-    for age in [14, 12, 9, 5, 3, 2, 1] {
-        app.sql(&format!(
-            "insert into login_failure (username_key, ip, at) values ('ana', '1.1.1.1', now() - interval '{age} minutes')"
-        ))
+    // The lock ends when the old failures leave the 15 minute window.
+    app.sql("update login_failure set at = now() - interval '16 minutes'")
         .await;
-    }
-    let (s, ra, _) = fail(&app, "ana").await;
-    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
-    let ra = ra.unwrap();
-    assert!((358..=361).contains(&ra), "{ra}");
-    // Exactly five: the oldest one decides.
-    app.sql("delete from login_failure").await;
-    for age in [13, 10, 7, 4, 1] {
-        app.sql(&format!("insert into login_failure (username_key, ip, at) values ('ana', '1.1.1.1', now() - interval '{age} minutes')")).await;
-    }
-    let (s, ra, _) = fail(&app, "ana").await;
-    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
-    assert!((118..=121).contains(&ra.unwrap()), "{ra:?}");
+    let (s, _, v) = try_login(&app, "ana", PW, A, None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
 }
 
 #[tokio::test]
-async fn thirty_failures_from_one_address_lock_the_address() {
+async fn an_attacker_at_address_a_cannot_lock_out_the_person_at_address_b() {
     let app = TestApp::new().await;
-    app.give_password(ANA, "ana", PW).await;
-    let from = |peer: &'static str, xff: Option<&'static str>, who: String| {
-        let app = &app;
-        async move {
-            let (s, h, _) = app
-                .call_from(
-                    "POST",
-                    "/api/auth/login",
-                    None,
-                    Some(json!({"username": who, "password": PW})),
-                    peer,
-                    xff,
-                )
-                .await;
-            (s, h.get("retry-after").is_some())
-        }
-    };
-    for i in 0..30 {
-        let (s, _) = from("203.0.113.9", None, format!("guess{i}")).await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED, "{i}");
+    app.give_password(CORA, "cora", PW).await;
+    app.sql("delete from login_failure").await;
+    // The attacker hits the manager's name until the pair is locked, and keeps hitting.
+    for _ in 0..5 {
+        assert_eq!(fail_from(&app, "cora", A).await.0, StatusCode::UNAUTHORIZED);
     }
-    // A fresh name, even the right password, from the same address: locked.
+    for _ in 0..3 {
+        assert_eq!(
+            fail_from(&app, "cora", A).await.0,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+    // The person, from another address, signs in with the right password at once.
+    let (s, ra, v) = try_login(&app, "cora", PW, B, None).await;
+    assert_eq!((s, ra), (StatusCode::OK, None), "{v}");
+    // ... also behind our own proxies (private peer, the client in X-Forwarded-For) ...
     assert_eq!(
-        from("203.0.113.9", None, "ana".into()).await,
-        (StatusCode::TOO_MANY_REQUESTS, true)
-    );
-    // Another address is free.
-    assert_eq!(
-        from("203.0.113.10", None, "ana".into()).await.0,
-        StatusCode::OK
-    );
-    // Behind our proxy (private peer) the client from X-Forwarded-For is what counts: the locked
-    // one is still locked, a different one is not, and a made up left part changes nothing.
-    assert_eq!(
-        from("172.18.0.3", Some("203.0.113.9"), "ana".into())
+        try_login(&app, "cora", PW, "172.18.0.3", Some("203.0.113.99"))
             .await
             .0,
+        StatusCode::OK
+    );
+    // ... and a wrong try there is a plain 401, the person's own pair has room.
+    assert_eq!(fail_from(&app, "cora", B).await.0, StatusCode::UNAUTHORIZED);
+    // The attacker's address still has its pair locked, right password or not.
+    assert_eq!(
+        try_login(&app, "cora", PW, A, None).await.0,
         StatusCode::TOO_MANY_REQUESTS
     );
+    // The attacker cannot borrow a made-up client address either: a public peer is the client.
     assert_eq!(
-        from(
+        try_login(&app, "cora", PW, A, Some(B)).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Behind the proxy the attacker's true address (right-most public hop) is still the one that
+    // counts, whatever is written to the left of it.
+    assert_eq!(
+        try_login(
+            &app,
+            "cora",
+            PW,
             "172.18.0.3",
-            Some("1.2.3.4, 203.0.113.9, 10.0.0.2"),
-            "ana".into()
+            Some("203.0.113.8, 203.0.113.7")
         )
         .await
         .0,
         StatusCode::TOO_MANY_REQUESTS
     );
+}
+
+#[tokio::test]
+async fn unknown_names_behave_exactly_like_known_ones() {
+    let app = TestApp::new().await;
+    let mut unknown = vec![];
+    for _ in 0..7 {
+        let (s, ra, v) = fail_from(&app, "No.Such.Person", A).await;
+        unknown.push((s, ra.is_some(), v));
+    }
+    let mut known = vec![];
+    for _ in 0..7 {
+        let (s, ra, v) = fail_from(&app, "cora", A).await;
+        known.push((s, ra.is_some(), v));
+    }
+    assert_eq!(unknown, known);
+    assert_eq!(unknown[4].0, StatusCode::UNAUTHORIZED);
+    assert_eq!(unknown[5].0, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(unknown[5].2, json!({ "error": TOO_MANY }));
+    // Case and spaces share one counter.
     assert_eq!(
-        from("172.18.0.3", Some("203.0.113.77, 10.0.0.2"), "ana".into())
-            .await
-            .0,
+        fail_from(&app, "  no.such.PERSON ", A).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // The same with no determinable address (the shared 'unknown' pair).
+    let mut u2 = vec![];
+    let mut k2 = vec![];
+    for _ in 0..7 {
+        let (s, _, v) = fail(&app, "ghost.user").await;
+        u2.push((s, v));
+        let (s, _, v) = fail(&app, "ben").await;
+        k2.push((s, v));
+    }
+    assert_eq!(u2, k2);
+    assert_eq!(u2[5].0, StatusCode::TOO_MANY_REQUESTS);
+    // Even the answer to the right password is the same 429 for a known and an unknown name.
+    let (s1, _, b1) = try_login(&app, "cora", PW, A, None).await;
+    let (s2, _, b2) = try_login(&app, "no.such.person", PW, A, None).await;
+    assert_eq!((s1, b1), (s2, b2));
+}
+
+#[tokio::test]
+async fn success_clears_that_pair_only() {
+    let app = TestApp::new().await;
+    app.give_password(ANA, "ana", PW).await;
+    app.sql("delete from login_failure").await;
+    for _ in 0..4 {
+        fail_from(&app, "ana", A).await;
+        fail_from(&app, "ana", B).await;
+        fail_from(&app, "ben", A).await;
+    }
+    assert_eq!(try_login(&app, "ana", PW, A, None).await.0, StatusCode::OK);
+    assert_eq!(app.pair_failures("ana", Some(A)).await, 0);
+    assert_eq!(app.pair_failures("ana", Some(B)).await, 4);
+    assert_eq!(app.pair_failures("ben", Some(A)).await, 4);
+}
+
+#[tokio::test]
+async fn retry_after_is_right_for_each_case() {
+    let app = TestApp::new().await;
+    // Pair: seven failures, ages in minutes. The lock lifts when only four are left in the
+    // window, that is when the third oldest (9 minutes) is 15 minutes old: 6 minutes from now.
+    for age in [14, 12, 9, 5, 3, 2, 1] {
+        app.add_failure("ana", Some(A), age).await;
+    }
+    let (s, ra, _) = fail_from(&app, "ana", A).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    assert!((358..=361).contains(&ra.unwrap()), "{ra:?}");
+    // Exactly five: the oldest one decides.
+    app.sql("delete from login_failure").await;
+    for age in [13, 10, 7, 4, 1] {
+        app.add_failure("ana", Some(A), age).await;
+    }
+    let (s, ra, _) = fail_from(&app, "ana", A).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    assert!((118..=121).contains(&ra.unwrap()), "{ra:?}");
+
+    // Address cap: 31 failures of many names, the first 2 minutes old: the 2nd place frees when
+    // the second oldest (ages 12 and 11 are the two oldest) is out: 15 - 11 = 4 minutes.
+    app.sql("delete from login_failure").await;
+    app.add_failure("n0", Some(A), 12).await;
+    app.add_failure("n1", Some(A), 11).await;
+    for i in 2..31 {
+        app.add_failure(&format!("n{i}"), Some(A), 1).await;
+    }
+    let (s, ra, _) = fail_from(&app, "fresh.name", A).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    assert!((238..=241).contains(&ra.unwrap()), "{ra:?}");
+
+    // Backstop: 103 failures of one name from other addresses; four must expire to get below
+    // 100: the fourth oldest decides (ages 14, 13, 10, then a 1 minute old one): 14 minutes.
+    app.sql("delete from login_failure").await;
+    for (i, age) in [14, 13, 10].iter().enumerate() {
+        app.add_failure("ana", Some(&format!("198.51.100.{i}")), *age)
+            .await;
+    }
+    for i in 0..100 {
+        app.add_failure("ana", Some(&format!("198.51.101.{}", i % 50)), 1)
+            .await;
+    }
+    let (s, ra, _) = fail_from(&app, "ana", "203.0.113.50").await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    assert!((838..=841).contains(&ra.unwrap()), "{ra:?}");
+
+    // Two limits at once: the longer wait is the answer (pair frees in 5 minutes, backstop later).
+    app.sql("delete from login_failure").await;
+    for _ in 0..100 {
+        app.add_failure("ana", Some("198.51.100.1"), 2).await;
+    }
+    for age in [10, 9, 8, 7, 6] {
+        app.add_failure("ana", Some(A), age).await;
+    }
+    let (s, ra, _) = fail_from(&app, "ana", A).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    // 105 failures: the backstop needs 6 gone, the sixth oldest is 2 minutes old: 13 minutes.
+    assert!((778..=781).contains(&ra.unwrap()), "{ra:?}");
+}
+
+#[tokio::test]
+async fn thirty_failures_from_one_known_address_lock_the_address() {
+    let app = TestApp::new().await;
+    app.give_password(ANA, "ana", PW).await;
+    app.sql("delete from login_failure").await;
+    for i in 0..30 {
+        let (s, _, _) = try_login(&app, &format!("guess{i}"), PW, "203.0.113.9", None).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{i}");
+    }
+    // A fresh name, even the right password, from the same address: locked.
+    let (s, ra, _) = try_login(&app, "ana", PW, "203.0.113.9", None).await;
+    assert_eq!((s, ra.is_some()), (StatusCode::TOO_MANY_REQUESTS, true));
+    // Another address is free.
+    assert_eq!(
+        try_login(&app, "ana", PW, "203.0.113.10", None).await.0,
         StatusCode::OK
     );
+    // Behind our proxy the client from X-Forwarded-For is what counts: the locked one is still
+    // locked, a different one is not, and made up left parts change nothing.
+    let via = |xff: &'static str| {
+        let app = &app;
+        async move { try_login(app, "ana", PW, "172.18.0.3", Some(xff)).await.0 }
+    };
+    assert_eq!(via("203.0.113.9").await, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        via("1.2.3.4, 203.0.113.9, 10.0.0.2").await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(via("203.0.113.77, 10.0.0.2").await, StatusCode::OK);
     // A public peer is not trusted to say who it is.
     assert_eq!(
-        from("203.0.113.9", Some("203.0.113.200"), "ana".into())
+        try_login(&app, "ana", PW, "203.0.113.9", Some("203.0.113.200"))
             .await
             .0,
         StatusCode::TOO_MANY_REQUESTS
@@ -443,57 +538,278 @@ async fn thirty_failures_from_one_address_lock_the_address() {
     app.sql("update login_failure set at = now() - interval '16 minutes'")
         .await;
     assert_eq!(
-        from("203.0.113.9", None, "ana".into()).await.0,
+        try_login(&app, "ana", PW, "203.0.113.9", None).await.0,
         StatusCode::OK
     );
 }
 
 #[tokio::test]
-async fn a_wrong_current_password_counts_like_a_failed_sign_in() {
+async fn without_a_public_client_address_there_is_no_address_limit_and_no_shared_bucket() {
     let app = TestApp::new().await;
-    let tok = app.give_password(ANA, "ana", PW).await;
+    app.give_password(ANA, "ana", PW).await;
+    app.sql("delete from login_failure").await;
+    // Everything private: docker NAT, a LAN client, IPv6 through docker-proxy, a bad header, no
+    // socket at all. 40 different names fail from "everybody": nobody gets a 429 for that.
+    let cases: [(&str, Option<&str>); 5] = [
+        ("172.18.0.1", None),
+        ("172.18.0.1", Some("192.168.1.50")),
+        ("fd00::2", None),
+        ("172.18.0.1", Some("203.0.113.9, garbage")),
+        ("::ffff:172.18.0.1", Some("10.1.2.3, fe80::1")),
+    ];
+    let mut n = 0;
+    for (peer, xff) in cases {
+        for _ in 0..8 {
+            n += 1;
+            let (s, _, _) = try_login(&app, &format!("guess{n}"), "wrong wrong", peer, xff).await;
+            assert_eq!(s, StatusCode::UNAUTHORIZED, "{peer} {xff:?} try {n}");
+        }
+    }
+    for i in 0..8 {
+        assert_eq!(
+            fail(&app, &format!("nosocket{i}")).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    // The right password of a person with no failures passes from any of them.
+    for (peer, xff) in cases {
+        assert_eq!(
+            try_login(&app, "ana", PW, peer, xff).await.0,
+            StatusCode::OK,
+            "{peer} {xff:?}"
+        );
+    }
+    assert_eq!(app.password_login("ana", PW).await.0, StatusCode::OK);
+    // All of them share ONE pair per name, the 'unknown' address: five wrong tries for a name
+    // lock it for all unknown addresses, and only for them.
+    app.sql("delete from login_failure").await;
     for _ in 0..5 {
-        let (s, v) = status_of(
-            &app,
+        assert_eq!(
+            try_login(&app, "ana", "wrong wrong", "172.18.0.1", None)
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        try_login(&app, "ana", PW, "fd00::2", None).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        app.password_login("ana", PW).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(try_login(&app, "ana", PW, B, None).await.0, StatusCode::OK);
+    // An unknown address is never remembered as trusted.
+    assert_eq!(app.count("login_success").await, 1);
+    assert_eq!(
+        app.scalar(&format!(
+            "select count(*) from login_success where address_key = '{}'",
+            app.addr_key(None)
+        ))
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_hundred_failures_from_anywhere_lock_a_name_except_for_trusted_addresses() {
+    let app = TestApp::new().await;
+    app.give_password(ANA, "ana", PW).await;
+    app.sql("delete from login_failure").await;
+    app.sql("delete from login_success").await;
+    // Ana signed in from B (and from C a month and a day ago) before.
+    assert_eq!(try_login(&app, "ana", PW, B, None).await.0, StatusCode::OK);
+    app.add_success("ana", Some("203.0.113.40"), 31).await;
+    app.add_success("ben", Some("203.0.113.41"), 1).await;
+    // 99 failures from 99 addresses: still open to everybody.
+    for i in 0..99 {
+        app.add_failure("ana", Some(&format!("198.51.100.{i}")), 1)
+            .await;
+    }
+    assert_eq!(try_login(&app, "ana", PW, A, None).await.0, StatusCode::OK);
+    // The 100th failure closes the name for addresses that never signed in...
+    app.add_failure("ana", Some("198.51.100.200"), 1).await;
+    for peer in [
+        "203.0.113.42",
+        "203.0.113.40",
+        "203.0.113.41",
+        "203.0.113.99",
+    ] {
+        let (s, ra, v) = try_login(&app, "ana", PW, peer, None).await;
+        assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "{peer}");
+        assert_eq!(v, json!({ "error": TOO_MANY }));
+        assert!(ra.unwrap() > 0);
+    }
+    // ... and no address is "trusted" without a known address.
+    assert_eq!(
+        app.password_login("ana", PW).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // ... but not to an address that signed in within 30 days (B and A just did).
+    let (s, _, v) = try_login(&app, "ana", PW, B, None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // A trusted address still has its own pair limit: five wrong tries lock it for that name.
+    for _ in 0..5 {
+        assert_eq!(fail_from(&app, "ana", B).await.0, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(
+        try_login(&app, "ana", PW, B, None).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Another name is not affected by ana's backstop.
+    assert_eq!(
+        try_login(&app, "ben", PW2, A, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // The trust lasts 30 days.
+    app.sql(&format!(
+        "update login_success set at = now() - interval '31 days' where address_key = '{}'",
+        app.addr_key(Some(B))
+    ))
+    .await;
+    app.sql(&format!(
+        "delete from login_failure where address_key = '{}'",
+        app.addr_key(Some(B))
+    ))
+    .await;
+    assert_eq!(
+        try_login(&app, "ana", PW, B, None).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // The backstop ends with the window.
+    app.sql("update login_failure set at = now() - interval '16 minutes'")
+        .await;
+    assert_eq!(try_login(&app, "ana", PW, A, None).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_sign_in_link_makes_the_address_trusted_for_the_name() {
+    let app = TestApp::new().await;
+    app.give_password(ANA, "ana", PW).await;
+    app.sql("delete from login_failure").await;
+    app.sql("delete from login_success").await;
+    // Ask for a link and open it from B.
+    let before = app.state.mailer.sent().len();
+    let (s, _) = app
+        .call(
             "POST",
-            "/api/auth/password",
-            &tok,
-            Some(json!({"current_password": "nope nope nope", "new_password": PW2})),
+            "/api/auth/magic-link",
+            None,
+            Some(json!({"email": "ana@example.org"})),
         )
         .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let link = app.state.mailer.sent()[before].link.clone();
+    let token = link.split("token=").nth(1).unwrap().to_string();
+    let (s, _, v) = app
+        .call_from(
+            "POST",
+            "/api/auth/verify",
+            None,
+            Some(json!({"token": token})),
+            B,
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(app.count("login_success").await, 1);
+    for i in 0..100 {
+        app.add_failure("ana", Some(&format!("198.51.100.{i}")), 1)
+            .await;
+    }
+    assert_eq!(try_login(&app, "ana", PW, B, None).await.0, StatusCode::OK);
+    assert_eq!(
+        try_login(&app, "ana", PW, A, None).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Opening a link without a known address trusts nobody.
+    app.sql("delete from login_success").await;
+    let _ = app.login("ana@example.org").await;
+    assert_eq!(app.count("login_success").await, 0);
+}
+
+#[tokio::test]
+async fn a_wrong_current_password_counts_against_the_pair_and_only_that() {
+    let app = TestApp::new().await;
+    let tok = app.give_password(ANA, "ana", PW).await;
+    app.sql("delete from login_failure").await;
+    let change = |current: &'static str, peer: &'static str, tok: String| {
+        let app = &app;
+        async move {
+            let (s, h, v) = app
+                .call_from(
+                    "POST",
+                    "/api/auth/password",
+                    Some(&tok),
+                    Some(json!({"current_password": current, "new_password": PW2})),
+                    peer,
+                    None,
+                )
+                .await;
+            (s, h.get("retry-after").is_some(), v)
+        }
+    };
+    // Failures of OTHER addresses (a hundred, and a locked pair at C) never lock this session.
+    for i in 0..100 {
+        app.add_failure("ana", Some(&format!("198.51.100.{i}")), 1)
+            .await;
+    }
+    for _ in 0..5 {
+        app.add_failure("ana", Some("203.0.113.60"), 1).await;
+    }
+    for i in 0..5 {
+        let (s, _, v) = change("nope nope nope", A, tok.clone()).await;
         assert_eq!(
             (s, v["error"].as_str()),
             (
                 StatusCode::FORBIDDEN,
                 Some("Your current password is not right.")
-            )
+            ),
+            "try {i}"
         );
     }
-    let (s, v) = status_of(
-        &app,
-        "POST",
-        "/api/auth/password",
-        &tok,
-        Some(json!({"current_password": PW, "new_password": PW2})),
-    )
-    .await;
-    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "{v}");
-    // And the sign-in with the right password is locked too: it is the same counter.
+    assert_eq!(app.pair_failures("ana", Some(A)).await, 5);
+    // The sixth try from the same address is locked, right password or not ...
+    let (s, ra, v) = change(PW, A, tok.clone()).await;
+    assert_eq!((s, ra), (StatusCode::TOO_MANY_REQUESTS, true), "{v}");
+    // ... and so is the sign-in of that pair: it is the same counter.
     assert_eq!(
-        app.password_login("ana", PW).await.0,
+        try_login(&app, "ana", PW, A, None).await.0,
         StatusCode::TOO_MANY_REQUESTS
     );
+    // From another address the right current password works, even though the name has had a
+    // hundred failures from elsewhere and the pair at C is locked.
+    let (s, _, v) = change(PW, B, tok.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // Changing the password does not make the address trusted.
+    assert_eq!(app.count("login_success").await, 0);
 }
 
 #[tokio::test]
-async fn parallel_guesses_cannot_slip_past_the_limit() {
+async fn parallel_guesses_from_one_pair_cannot_slip_past_the_limit() {
     let app = TestApp::new().await;
+    for peer in [None, Some(A)] {
+        app.sql("delete from login_failure").await;
+        let codes = many_logins(&app, "cora", peer, 24).await;
+        let n = |c: StatusCode| codes.iter().filter(|x| **x == c).count();
+        assert_eq!(n(StatusCode::UNAUTHORIZED), 5, "{peer:?} {codes:?}");
+        assert_eq!(n(StatusCode::TOO_MANY_REQUESTS), 19, "{peer:?}");
+        assert_eq!(app.failures_of("cora").await, 5);
+    }
+    // Parallel tries from 30 addresses for one name stay within the backstop: exactly 100 get a
+    // 401 once the name is at its limit, no matter how many come at once.
+    app.sql("delete from login_failure").await;
+    for i in 0..96 {
+        app.add_failure("cora", Some(&format!("198.51.100.{i}")), 1)
+            .await;
+    }
     let mut set = tokio::task::JoinSet::new();
-    for _ in 0..24 {
-        let app = Arc::new(app.router.clone());
+    for i in 0..20 {
+        let router = app.router.clone();
         set.spawn(async move {
             use tower::ServiceExt;
-            let req = axum::http::Request::builder()
+            let mut req = axum::http::Request::builder()
                 .method("POST")
                 .uri("/api/auth/login")
                 .header("content-type", "application/json")
@@ -501,48 +817,97 @@ async fn parallel_guesses_cannot_slip_past_the_limit() {
                     r#"{"username":"cora","password":"not the one"}"#,
                 ))
                 .unwrap();
-            (*app).clone().oneshot(req).await.unwrap().status()
+            let peer: std::net::SocketAddr =
+                format!("203.0.113.{}:40000", 100 + i).parse().unwrap();
+            req.extensions_mut()
+                .insert(axum::extract::ConnectInfo(peer));
+            router.oneshot(req).await.unwrap().status()
         });
     }
-    let mut codes = vec![];
+    let mut ok = 0;
     while let Some(r) = set.join_next().await {
-        codes.push(r.unwrap());
+        if r.unwrap() == StatusCode::UNAUTHORIZED {
+            ok += 1;
+        }
     }
-    assert_eq!(
-        codes
-            .iter()
-            .filter(|c| **c == StatusCode::UNAUTHORIZED)
-            .count(),
-        5,
-        "{codes:?}"
-    );
-    assert_eq!(
-        codes
-            .iter()
-            .filter(|c| **c == StatusCode::TOO_MANY_REQUESTS)
-            .count(),
-        19
-    );
+    assert_eq!(ok, 4);
+    assert_eq!(app.failures_of("cora").await, 100);
 }
 
 #[tokio::test]
-async fn old_failures_are_purged() {
+async fn old_rows_are_purged() {
     let app = TestApp::new().await;
-    app.sql("insert into login_failure (username_key, ip, at) values ('a', 'x', now() - interval '2 days'), ('b', 'x', now() - interval '1 hour')").await;
+    app.add_failure("a", Some("1.1.1.1"), 3 * 24 * 60).await;
+    app.add_failure("b", Some("1.1.1.1"), 60).await;
+    app.add_success("a", Some("1.1.1.1"), 31).await;
+    app.add_success("b", Some("1.1.1.1"), 29).await;
     let n: i32 = sqlx::query_scalar("select xt_purge_expired()")
         .fetch_one(&app.state.pool)
         .await
         .unwrap();
-    assert!(n >= 1);
+    assert!(n >= 2);
     assert_eq!(app.count("login_failure").await, 1);
+    assert_eq!(app.count("login_success").await, 1);
     // A name's own old rows also go the next time that name is tried.
-    app.sql("insert into login_failure (username_key, ip, at) values ('zed', 'x', now() - interval '20 minutes')").await;
-    fail(&app, "zed").await;
-    assert_eq!(
-        app.scalar("select count(*) from login_failure where username_key = 'zed'")
-            .await,
-        1
-    );
+    app.add_failure("zed", Some(A), 20).await;
+    fail_from(&app, "zed", A).await;
+    assert_eq!(app.failures_of("zed").await, 1);
+}
+
+#[tokio::test]
+async fn the_limit_tables_keep_no_readable_names_or_addresses() {
+    let app = TestApp::new().await;
+    app.give_password(ANA, "ana", PW).await;
+    // People type their password in the username box.
+    let typed = "purple bicycle rain";
+    for (who, peer) in [(typed, A), ("ana", B), ("ana", "2001:db8:1:2:3:4:5:6")] {
+        try_login(&app, who, "wrong wrong", peer, None).await;
+    }
+    assert_eq!(try_login(&app, "ana", PW, B, None).await.0, StatusCode::OK);
+    for table in ["login_failure", "login_success"] {
+        let dump: String = sqlx::query_scalar(&format!(
+            "select coalesce(string_agg(x::text, ' '), '') from {table} x"
+        ))
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+        for secret in ["purple", "bicycle", "ana", "203.0.113", "unknown"] {
+            assert!(!dump.contains(secret), "{table} shows {secret}: {dump}");
+        }
+    }
+    let keys: Vec<(String, String)> =
+        sqlx::query_as("select username_key, address_key from login_failure")
+            .fetch_all(&app.state.pool)
+            .await
+            .unwrap();
+    // (ana's wrong try from B was cleared by her success there)
+    assert_eq!(keys.len(), 2);
+    for (u, a) in &keys {
+        for k in [u, a] {
+            assert_eq!(k.len(), 64);
+            assert!(k
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
+        }
+    }
+    assert!(keys.contains(&(app.user_key(typed), app.addr_key(Some(A)))));
+    // An IPv6 client counts per /64.
+    assert!(keys.contains(&(app.user_key("ana"), app.addr_key(Some("2001:db8:1:2::/64")))));
+    // The database itself refuses a readable key.
+    let r =
+        sqlx::query("insert into login_failure (username_key, address_key) values ('ana', 'x')")
+            .execute(&app.state.pool)
+            .await;
+    assert!(r.is_err());
+    let r =
+        sqlx::query("insert into login_success (username_key, address_key) values ('ana', 'x')")
+            .execute(&app.state.pool)
+            .await;
+    assert!(r.is_err());
+    // The key comes from the secret: another secret gives other keys.
+    let other =
+        xynotransit_api::loginlimit::LimitKeys::new("another secret another secret 1234567");
+    assert_ne!(other.user("ana"), app.user_key("ana"));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1736,9 +2101,19 @@ async fn the_migration_backfills_usernames_on_realistic_data_and_runs_twice() {
         .filter(|p| p.extension().is_some_and(|x| x == "sql"))
         .collect();
     files.sort();
-    let (before, twelve): (Vec<_>, Vec<_>) = files
+    let name_of = |p: &std::path::PathBuf| p.file_name().unwrap().to_string_lossy().to_string();
+    let before: Vec<_> = files
         .iter()
-        .partition(|p| !p.to_string_lossy().ends_with("12-passwords.sql"));
+        .filter(|p| name_of(p).as_str() < "12-")
+        .collect();
+    let twelve: Vec<_> = files
+        .iter()
+        .filter(|p| name_of(p).starts_with("12-"))
+        .collect();
+    let thirteen: Vec<_> = files
+        .iter()
+        .filter(|p| name_of(p).starts_with("13-"))
+        .collect();
     for f in before {
         sqlx::raw_sql(&std::fs::read_to_string(f).unwrap())
             .execute(&pool)
@@ -1910,6 +2285,91 @@ async fn the_migration_backfills_usernames_on_realistic_data_and_runs_twice() {
             "{email:?}"
         );
     }
+
+    // ---- 13-hashed-keys.sql on top of 12 ----
+    // Under 12 the table kept what was typed and the address; 13 drops those rows (they were only
+    // 15 minute counters) and the columns, adds login_success, and is safe to run again.
+    sqlx::query("insert into login_failure (username_key, ip) values ('purple bicycle rain', '203.0.113.7')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let sql13 = std::fs::read_to_string(thirteen[0]).unwrap();
+    sqlx::raw_sql(&sql13).execute(&pool).await.unwrap();
+    let cols: Vec<String> = sqlx::query_scalar(
+        "select column_name::text from information_schema.columns
+         where table_name = 'login_failure' order by ordinal_position",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(cols, ["id", "username_key", "address_key", "at"]);
+    let rows = |t: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(&format!("select count(*) from {t}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(rows("login_failure").await, 0, "old rows are gone");
+    assert_eq!(rows("login_success").await, 0);
+    let h = "a".repeat(64);
+    sqlx::query("insert into login_failure (username_key, address_key) values ($1, $1)")
+        .bind(&h)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("insert into login_success (username_key, address_key, at) values ($1, $1, now() - interval '40 days')")
+        .bind(&h)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // A second run (and a second run of 12 on top of it) keeps what is there and changes nothing.
+    sqlx::raw_sql(&sql13).execute(&pool).await.unwrap();
+    sqlx::raw_sql(&sql12).execute(&pool).await.unwrap();
+    sqlx::raw_sql(&sql13).execute(&pool).await.unwrap();
+    assert_eq!(rows("login_failure").await, 1);
+    // One success row per pair, refreshed in place.
+    let dup = sqlx::query("insert into login_success (username_key, address_key) values ($1, $1)")
+        .bind(&h)
+        .execute(&pool)
+        .await;
+    assert!(dup.is_err());
+    // Readable keys are refused by the database.
+    for bad in ["ana", &"A".repeat(64), &"a".repeat(63)] {
+        let r =
+            sqlx::query("insert into login_failure (username_key, address_key) values ($1, $2)")
+                .bind(bad)
+                .bind(&h)
+                .execute(&pool)
+                .await;
+        assert!(r.is_err(), "{bad}");
+    }
+    // The audit trail knows the new kind.
+    sqlx::query(
+        "insert into password_audit (person_id, kind) select id, 'change-via-link' from person limit 1",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Housekeeping drops trusted addresses older than 30 days and failures older than a day.
+    sqlx::query("select xt_purge_expired()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows("login_success").await, 0);
+    assert_eq!(rows("login_failure").await, 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "select count(*) from schema_migration where file = '13-hashed-keys.sql'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+
     pool.close().await;
     sqlx::query(&format!("drop database {name} with (force)"))
         .execute(&mut conn)

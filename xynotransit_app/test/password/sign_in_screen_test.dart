@@ -82,7 +82,9 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.text('Forgot your password? Ask your manager for a new one.'),
+      find.text(
+        'Forgot your password? Ask your manager for a sign-in link, then choose a new password from the account menu.',
+      ),
       findsOneWidget,
     );
     // The password form comes first, the link section below it.

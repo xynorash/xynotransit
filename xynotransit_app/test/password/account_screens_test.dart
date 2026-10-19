@@ -506,6 +506,117 @@ void main() {
       }
     }
   });
+
+  group('a link sign-in by a person who has a password', () {
+    Future<AuthHarness> openAfterLink(
+      WidgetTester tester, {
+      Size size = const Size(1000, 1100),
+      double textScale = 1.0,
+    }) async {
+      final h = await pumpAuthApp(
+        tester,
+        size: size,
+        textScale: textScale,
+        before: (h) => h.givePassword('p-rova', 'a purple bicycle'),
+      );
+      final token = await linkTokenFor(h, 'p-rova');
+      h.container.read(routerProvider).go('/auth/verify?token=$token');
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      h.container.read(routerProvider).go('/account/password');
+      await tester.pumpAndSettle();
+      return h;
+    }
+
+    testWidgets('no current password box, and the words say why', (
+      tester,
+    ) async {
+      final h = await openAfterLink(tester);
+      expect(find.text('Change password'), findsWidgets);
+      expect(_cur, findsNothing);
+      expect(find.text('Current password'), findsNothing);
+      expect(
+        find.text(
+          'You signed in with a link, so you can choose a new password '
+          'without the old one.',
+        ),
+        findsOneWidget,
+      );
+      await fill(
+        tester,
+        next: 'green kitchen sink',
+        again: 'green kitchen sink',
+      );
+      await save(tester);
+      expect(find.text('Password saved'), findsOneWidget);
+      expect(h.auth.currentUser!.recentLinkSession, isFalse);
+      // The next change is a password session: the box is back.
+      h.container.read(routerProvider).go('/report');
+      await tester.pumpAndSettle();
+      h.container.read(routerProvider).go('/account/password');
+      await tester.pumpAndSettle();
+      expect(_cur, findsOneWidget);
+      expect(find.byKey(const Key('link-recovery-note')), findsNothing);
+    });
+
+    testWidgets('after 15 minutes the server asks and the box comes back', (
+      tester,
+    ) async {
+      final h = await openAfterLink(tester);
+      expect(_cur, findsNothing);
+      h.clock.advance(const Duration(minutes: 16));
+      await fill(
+        tester,
+        next: 'green kitchen sink',
+        again: 'green kitchen sink',
+      );
+      await save(tester);
+      expect(find.text('Enter your current password.'), findsOneWidget);
+      expect(_cur, findsOneWidget);
+      expect(find.byKey(const Key('link-recovery-note')), findsNothing);
+      await fill(tester, current: 'a purple bicycle');
+      await save(tester);
+      expect(find.text('Password saved'), findsOneWidget);
+    });
+
+    testWidgets('a password sign-in shows the current password box', (
+      tester,
+    ) async {
+      final h = await pumpAuthApp(
+        tester,
+        before: (h) => h.givePassword('p-rova', 'a purple bicycle'),
+      );
+      await login(tester, 'rova', 'a purple bicycle');
+      h.container.read(routerProvider).go('/account/password');
+      await tester.pumpAndSettle();
+      expect(_cur, findsOneWidget);
+      expect(find.text('Current password'), findsOneWidget);
+    });
+
+    testWidgets('the note and the fields have semantics', (tester) async {
+      final handle = tester.ensureSemantics();
+      await openAfterLink(tester);
+      expect(
+        find.bySemanticsLabel(RegExp('You signed in with a link')),
+        findsOneWidget,
+      );
+      expect(find.bySemanticsLabel('New password'), findsOneWidget);
+      handle.dispose();
+    });
+
+    for (final (w, hh) in [(360.0, 800.0), (800.0, 1100.0), (1500.0, 900.0)]) {
+      for (final scale in [1.0, 2.0]) {
+        testWidgets('no overflow at ${w}x$hh, scale $scale', (tester) async {
+          await openAfterLink(tester, size: Size(w, hh), textScale: scale);
+          await fill(tester, next: 'password123', again: 'password124');
+          await save(tester);
+          expect(tester.takeException(), isNull);
+          expect(find.byKey(const Key('link-recovery-note')), findsOneWidget);
+        });
+      }
+    }
+  });
 }
 
 String _temp = '';

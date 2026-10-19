@@ -58,7 +58,15 @@ void main() {
     expect(l['username_max'], UsernameRules.maxLength);
     expect(l['password_min'], PasswordRules.minLength);
     expect(l['password_max'], PasswordRules.maxLength);
-    expect(l['login_failures_per_username'], PasswordRules.failuresPerUsername);
+    expect(l['login_failures_per_username'], PasswordRules.failuresPerPair);
+    expect(l['login_failures_per_pair'], PasswordRules.failuresPerPair);
+    expect(
+      l['login_failures_per_username_backstop'],
+      PasswordRules.failuresBackstop,
+    );
+    expect(l['login_failures_per_address'], PasswordRules.failuresPerAddress);
+    expect(l['trusted_address_days'], PasswordRules.trustDays);
+    expect(l['link_recovery_minutes'], PasswordRules.linkRecovery.inMinutes);
     expect(l['login_window_minutes'], PasswordRules.window.inMinutes);
     expect(l['resets_per_manager_per_hour'], PasswordRules.resetsPerHour);
     expect(l['temporary_password_chars'], PasswordRules.resetLength);

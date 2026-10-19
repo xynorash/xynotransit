@@ -270,7 +270,8 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Forgot your password? Ask your manager for a new one.',
+            'Forgot your password? Ask your manager for a sign-in link, then choose '
+            'a new password from the account menu.',
             style: bodyStyle(context, size: 15, color: t.muted, height: 1.4),
           ),
         ],

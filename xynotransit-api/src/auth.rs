@@ -29,6 +29,17 @@ impl Role {
     }
 }
 
+/// How the session began: with a sign-in link or with the password. A fresh link session may
+/// choose a new password without the old one (see `POST /api/auth/password`). Tokens made before
+/// this claim existed count as `Password`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Via {
+    Link,
+    #[default]
+    Password,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     sub: String,
@@ -39,6 +50,9 @@ struct Claims {
     /// adds 1 to the epoch, which ends every older token. Tokens from before this existed have 0.
     #[serde(default)]
     ep: i32,
+    /// "link" or "password".
+    #[serde(default)]
+    via: Via,
 }
 
 /// 32 random bytes, url-safe.
@@ -54,13 +68,35 @@ pub fn hash_token(token: &str) -> Vec<u8> {
 
 pub const JWT_DAYS: i64 = 7;
 
+/// A token for a session that began with the password (or from before `via` existed).
 pub fn issue_jwt(
     secret: &str,
     person_id: Uuid,
     role: Role,
     epoch: i32,
 ) -> Result<(String, DateTime<Utc>), ApiError> {
-    let now = Utc::now();
+    issue_jwt_via(secret, person_id, role, epoch, Via::Password)
+}
+
+pub fn issue_jwt_via(
+    secret: &str,
+    person_id: Uuid,
+    role: Role,
+    epoch: i32,
+    via: Via,
+) -> Result<(String, DateTime<Utc>), ApiError> {
+    issue_jwt_at(secret, person_id, role, epoch, via, Utc::now())
+}
+
+/// Like `issue_jwt_via` with the issue time given (tests make old sessions this way).
+pub fn issue_jwt_at(
+    secret: &str,
+    person_id: Uuid,
+    role: Role,
+    epoch: i32,
+    via: Via,
+    now: DateTime<Utc>,
+) -> Result<(String, DateTime<Utc>), ApiError> {
     let exp = now + Duration::days(JWT_DAYS);
     let claims = Claims {
         sub: person_id.to_string(),
@@ -68,6 +104,7 @@ pub fn issue_jwt(
         iat: now.timestamp(),
         exp: exp.timestamp(),
         ep: epoch,
+        via,
     };
     let token = encode(
         &Header::default(),
@@ -81,14 +118,26 @@ pub fn issue_jwt(
     Ok((token, exp))
 }
 
-fn person_from_jwt(secret: &str, token: &str) -> Option<(Uuid, i32)> {
+struct TokenFacts {
+    person_id: Uuid,
+    epoch: i32,
+    via: Via,
+    issued_at: i64,
+}
+
+fn person_from_jwt(secret: &str, token: &str) -> Option<TokenFacts> {
     let data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &Validation::new(jsonwebtoken::Algorithm::HS256),
     )
     .ok()?;
-    Some((Uuid::parse_str(&data.claims.sub).ok()?, data.claims.ep))
+    Some(TokenFacts {
+        person_id: Uuid::parse_str(&data.claims.sub).ok()?,
+        epoch: data.claims.ep,
+        via: data.claims.via,
+        issued_at: data.claims.iat,
+    })
 }
 
 /// The signed-in, active person. Role comes from the database.
@@ -102,9 +151,25 @@ pub struct AuthUser {
     pub epoch: i32,
     pub has_password: bool,
     pub must_change_password: bool,
+    /// How this session began and when (from the token; `load_user` alone cannot know, so it
+    /// says a password session issued at 0).
+    pub via: Via,
+    pub session_issued_at: i64,
 }
 
 impl AuthUser {
+    /// A session that began with a sign-in link, at most `LINK_RECOVERY_MINUTES` ago.
+    pub fn fresh_link_session(&self) -> bool {
+        let age = Utc::now().timestamp() - self.session_issued_at;
+        self.via == Via::Link && (0..=crate::rules::LINK_RECOVERY_MINUTES * 60).contains(&age)
+    }
+
+    /// A fresh link session of a person who has a password: they may choose a new one without
+    /// giving the old one (the way back for someone who forgot it).
+    pub fn recent_link_session(&self) -> bool {
+        self.has_password && self.fresh_link_session()
+    }
+
     pub fn is_controller(&self) -> bool {
         self.role == Role::Controller
     }
@@ -133,14 +198,16 @@ async fn authenticate(parts: &mut Parts, state: &AppState) -> Result<AuthUser, A
     let token = header
         .strip_prefix("Bearer ")
         .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
-    let (person_id, epoch) = person_from_jwt(&state.config.jwt_secret, token.trim())
+    let facts = person_from_jwt(&state.config.jwt_secret, token.trim())
         .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
-    let user = load_user(&state.pool, person_id)
+    let mut user = load_user(&state.pool, facts.person_id)
         .await?
         .ok_or_else(|| ApiError::unauthorized(SIGN_IN_MSG))?;
-    if user.epoch != epoch {
+    if user.epoch != facts.epoch {
         return Err(ApiError::unauthorized(SIGN_IN_AGAIN_MSG));
     }
+    user.via = facts.via;
+    user.session_issued_at = facts.issued_at;
     Ok(user)
 }
 
@@ -195,6 +262,8 @@ pub async fn load_user(pool: &sqlx::PgPool, person_id: Uuid) -> Result<Option<Au
             epoch,
             has_password,
             must_change_password,
+            via: Via::Password,
+            session_issued_at: 0,
         },
     ))
 }
@@ -219,12 +288,12 @@ mod tests {
         let secret = "0123456789012345678901234567890123";
         let id = Uuid::new_v4();
         let (t, _) = issue_jwt(secret, id, Role::Controller, 3).unwrap();
-        assert_eq!(person_from_jwt(secret, &t), Some((id, 3)));
-        assert_eq!(
-            person_from_jwt("another secret another secret 123456", &t),
-            None
-        );
-        assert_eq!(person_from_jwt(secret, "garbage"), None);
+        let f = person_from_jwt(secret, &t).unwrap();
+        assert_eq!((f.person_id, f.epoch, f.via), (id, 3, Via::Password));
+        assert!(person_from_jwt("another secret another secret 123456", &t).is_none());
+        assert!(person_from_jwt(secret, "garbage").is_none());
+        let (l, _) = issue_jwt_via(secret, id, Role::Contributor, 1, Via::Link).unwrap();
+        assert_eq!(person_from_jwt(secret, &l).unwrap().via, Via::Link);
     }
 
     #[test]

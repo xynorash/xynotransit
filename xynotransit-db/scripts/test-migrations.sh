@@ -54,8 +54,10 @@ if ! db_exists "$PGDATABASE"; then fail "live database $PGDATABASE not found"; e
   row_counts "$B" > $T/c2
   # The ledger may gain rows, and a migration may add new tables (new tables are not compared:
   # they did not exist before). Every table that already existed must keep its rows.
-  awk 'NR==FNR {t[$1]=1; next} ($1 in t) && $1 != "schema_migration"' $T/c1 $T/c2 > $T/c2b
-  grep -v '^schema_migration ' $T/c1 > $T/c1b
+  # login_failure is not compared either: 13-hashed-keys.sql empties it on purpose (it held only
+  # 15 minute counters with readable names; the new rows are keyed hashes).
+  awk 'NR==FNR {t[$1]=1; next} ($1 in t) && $1 != "schema_migration" && $1 != "login_failure"' $T/c1 $T/c2 > $T/c2b
+  grep -v -e '^schema_migration ' -e '^login_failure ' $T/c1 > $T/c1b
   if diff $T/c2b $T/c1b >/dev/null; then
     ok "row counts unchanged: $(awk '{s+=$2} END {print s}' $T/c1) rows in $(wc -l < $T/c1) tables"
   else fail "row counts changed"; diff $T/c2b $T/c1b | head; fi

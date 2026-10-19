@@ -33,6 +33,9 @@ class AppUser {
     this.hasPassword = false,
     this.mustChangePassword = false,
     this.sessionEpoch = 0,
+    this.recentLinkSession = false,
+    this.viaLink = false,
+    this.issuedAt,
   });
   final String? personId;
   final AppRole role;
@@ -50,11 +53,21 @@ class AppUser {
   /// A password change ends every session with an older epoch.
   final int sessionEpoch;
 
+  /// Signed in by a link a few minutes ago (the server decides, at most 15
+  /// minutes): the person may choose a new password without the old one.
+  final bool recentLinkSession;
+
+  /// In-memory sessions only: this session began with a link, and when. The
+  /// demo repository applies the 15 minute rule from these two.
+  final bool viaLink;
+  final DateTime? issuedAt;
+
   AppUser copyWith({
     String? username,
     bool? hasPassword,
     bool? mustChangePassword,
     int? sessionEpoch,
+    bool? recentLinkSession,
   }) => AppUser(
     personId: personId,
     role: role,
@@ -63,6 +76,9 @@ class AppUser {
     hasPassword: hasPassword ?? this.hasPassword,
     mustChangePassword: mustChangePassword ?? this.mustChangePassword,
     sessionEpoch: sessionEpoch ?? this.sessionEpoch,
+    recentLinkSession: recentLinkSession ?? this.recentLinkSession,
+    viaLink: viaLink,
+    issuedAt: issuedAt,
   );
 
   bool get isController => role == AppRole.controller;

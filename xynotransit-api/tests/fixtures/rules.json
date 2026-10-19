@@ -84,15 +84,20 @@
     "too_many_links": "Too many links requested. Try again later."
   },
   "passwords": {
-    "_about": "Usernames and passwords (added later; the sections above are unchanged). Password length counts Unicode scalar values, spaces are kept exactly as typed, nothing is trimmed. The policy checks run in the order of policy_order and the first that fails gives its message. A password may not equal (ignoring case) the username, the email, the part of the email before the @ or the full name. Run = every character is the next or every one the previous, ignoring case, digits wrap around (1234567890). common_list is embedded in the API (src/common_passwords.txt, lowercase compare, every entry 10 characters or longer); the Dart demo may use a shorter list.",
+    "_about": "Sign-in limits: login_failures_per_pair (5) wrong tries per (username, client address) per login_window_minutes lock that pair only; login_failures_per_username_backstop (100) from any addresses lock the name for everyone except addresses that signed in successfully for it within trusted_address_days; login_failures_per_address (30) apply only to a client address the server can determine. login_failures_per_username is the old name of the pair limit and is kept. A session that began with a sign-in link may choose a new password without the current one for link_recovery_minutes. Usernames and passwords (added later; the sections above are unchanged). Password length counts Unicode scalar values, spaces are kept exactly as typed, nothing is trimmed. The policy checks run in the order of policy_order and the first that fails gives its message. A password may not equal (ignoring case) the username, the email, the part of the email before the @ or the full name. Run = every character is the next or every one the previous, ignoring case, digits wrap around (1234567890). common_list is embedded in the API (src/common_passwords.txt, lowercase compare, every entry 10 characters or longer); the Dart demo may use a shorter list.",
     "limits": {
       "username_min": 3,
       "username_max": 40,
       "password_min": 10,
       "password_max": 128,
       "login_failures_per_username": 5,
+      "login_failures_per_pair": 5,
+      "login_failures_per_username_backstop": 100,
       "login_failures_per_address": 30,
       "login_window_minutes": 15,
+      "trusted_address_days": 30,
+      "link_recovery_minutes": 15,
+      "events_recheck_seconds": 30,
       "resets_per_manager_per_hour": 30,
       "temporary_password_chars": 16,
       "session_days": 7

@@ -27,7 +27,9 @@ pub fn router() -> Router<AppState> {
 
 async fn ticket(user: AuthUser, State(st): State<AppState>) -> Result<Json<Value>, ApiError> {
     user.require_controller()?;
-    Ok(Json(json!({ "ticket": st.issue_ticket(user.person_id) })))
+    Ok(Json(
+        json!({ "ticket": st.issue_ticket(user.person_id, user.epoch) }),
+    ))
 }
 
 async fn stream(
@@ -35,15 +37,16 @@ async fn stream(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, ApiError> {
     let ticket = q.get("ticket").map(String::as_str).unwrap_or("");
-    let person = st
+    let (person, ticket_epoch) = st
         .redeem_ticket(ticket)
         .ok_or_else(|| ApiError::unauthorized("Please sign in."))?;
-    // The person must still be active.
+    // The person must still be active, and nothing may have changed since the ticket was made:
+    // a password change, reset, removal or switch-off adds 1 to the epoch (or ends the person),
+    // which makes older tickets worthless.
     let user = load_user(&st.pool, person)
         .await?
         .ok_or_else(|| ApiError::unauthorized("Please sign in."))?;
-    // A ticket made before the person had to choose a new password opens nothing.
-    if user.must_change_password {
+    if user.epoch != ticket_epoch || user.must_change_password {
         return Err(ApiError::unauthorized("Please sign in."));
     }
     user.require_controller()?;
@@ -51,28 +54,48 @@ async fn stream(
 
     let mut rx = st.events.subscribe();
     let mut stopping = st.shutdown.subscribe();
+    let recheck = st.stream_recheck;
+    let pool = st.pool.clone();
     let events = async_stream::stream! {
+        enum Step {
+            Event(Result<ChangeEvent, RecvError>),
+            Check,
+            Stop,
+        }
+        let mut check = tokio::time::interval_at(tokio::time::Instant::now() + recheck, recheck);
+        check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            let next = tokio::select! {
-                r = rx.recv() => r,
+            let step = tokio::select! {
+                r = rx.recv() => Step::Event(r),
+                _ = check.tick() => Step::Check,
                 // The server is shutting down: end the stream so the connection can close.
-                _ = stopping.wait_for(|v| *v) => break,
+                _ = stopping.wait_for(|v| *v) => Step::Stop,
             };
-            match next {
-                Ok(ev) if ev.period_id == period_id => {
+            match step {
+                Step::Stop => break,
+                // Look the person up again: the stream ends when anything that mattered changed.
+                Step::Check => match load_user(&pool, person).await {
+                    Ok(Some(now))
+                        if now.epoch == ticket_epoch
+                            && !now.must_change_password
+                            && now.is_controller() => {}
+                    Ok(_) => break,
+                    Err(_) => tracing::warn!("could not re-check the person behind an event stream"),
+                },
+                Step::Event(Ok(ev)) if ev.period_id == period_id => {
                     yield Ok::<Event, Infallible>(Event::default().data(
                         serde_json::to_string(&ev).unwrap_or_default(),
                     ));
                 }
-                Ok(_) => {}
+                Step::Event(Ok(_)) => {}
                 // We missed messages: tell the page to refresh both things.
-                Err(RecvError::Lagged(_)) => {
+                Step::Event(Err(RecvError::Lagged(_))) => {
                     for kind in ["reports", "deck"] {
                         let ev = ChangeEvent { kind: kind.into(), period_id };
                         yield Ok(Event::default().data(serde_json::to_string(&ev).unwrap_or_default()));
                     }
                 }
-                Err(RecvError::Closed) => break,
+                Step::Event(Err(RecvError::Closed)) => break,
             }
         }
     };

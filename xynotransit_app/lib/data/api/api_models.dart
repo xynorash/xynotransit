@@ -72,6 +72,7 @@ AppUser parseUser(Object? data) => _guard(() {
     username: j['username'] as String?,
     hasPassword: j['has_password'] as bool? ?? false,
     mustChangePassword: j['must_change_password'] as bool? ?? false,
+    recentLinkSession: j['recent_link_session'] as bool? ?? false,
   );
 });
 
@@ -84,6 +85,7 @@ AppUser parseSessionUser(Map<String, Object?> j, {String? username}) {
     hasPassword: j['has_password'] as bool? ?? u.hasPassword,
     mustChangePassword:
         j['must_change_password'] as bool? ?? u.mustChangePassword,
+    recentLinkSession: j['recent_link_session'] as bool? ?? u.recentLinkSession,
   );
 }
 
@@ -94,6 +96,7 @@ Map<String, Object?> userToJson(AppUser u) => {
   if (u.username != null) 'username': u.username,
   'has_password': u.hasPassword,
   'must_change_password': u.mustChangePassword,
+  'recent_link_session': u.recentLinkSession,
 };
 
 Team parseTeam(Object? data) => _guard(() {

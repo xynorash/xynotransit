@@ -184,6 +184,66 @@ void main() {
       expect(auth.currentUser!.username, 'rosa.rakoto');
     });
 
+    test('recent_link_session from /me reaches the user', () async {
+      for (final flag in [true, false]) {
+        final (auth, _, _) = await authFor((r) async {
+          if (r.url.path == '/api/me') {
+            return json({
+              'person_id': 'p1',
+              'role': 'contributor',
+              'label': 'Rosa Rakoto',
+              'username': 'rosa.rakoto',
+              'has_password': true,
+              'must_change_password': false,
+              'recent_link_session': flag,
+            });
+          }
+          return json({
+            'access_token': 'tok-link',
+            'expires_at': '2026-10-26T00:00:00Z',
+            'user': {'person_id': 'p1', 'role': 'contributor', 'label': 'R'},
+            'has_password': true,
+            'must_change_password': false,
+          });
+        });
+        await auth.exchangeToken('abc');
+        expect(auth.currentUser!.recentLinkSession, flag);
+      }
+    });
+
+    test('a change from a link session sends no current password and ends '
+        'the recovery', () async {
+      final (auth, tokens, seen) = await authFor((r) async {
+        if (r.url.path == '/api/auth/password') {
+          return json({'access_token': 'tok-new', 'expires_at': 'x'});
+        }
+        if (r.url.path == '/api/me') {
+          return json({
+            'person_id': 'p1',
+            'role': 'contributor',
+            'label': 'Rosa Rakoto',
+            'has_password': true,
+            'must_change_password': false,
+            'recent_link_session': true,
+          });
+        }
+        return json({
+          'access_token': 'tok-link',
+          'user': {'person_id': 'p1', 'role': 'contributor', 'label': 'R'},
+          'has_password': true,
+          'must_change_password': false,
+        });
+      });
+      await auth.exchangeToken('abc');
+      expect(auth.currentUser!.recentLinkSession, isTrue);
+      await auth.changePassword(newPassword: 'a green kitchen sink');
+      expect(jsonDecode(seen.last.body), {
+        'new_password': 'a green kitchen sink',
+      });
+      expect(tokens.token, 'tok-new');
+      expect(auth.currentUser!.recentLinkSession, isFalse);
+    });
+
     test('works when /me cannot be read right then', () async {
       final (auth, tokens, _) = await authFor((r) async {
         if (r.url.path == '/api/me') return json({}, 502);

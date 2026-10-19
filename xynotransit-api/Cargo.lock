@@ -2657,6 +2657,8 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "futures-util",
+ "hkdf",
+ "hmac",
  "http-body-util",
  "jsonwebtoken",
  "lettre",

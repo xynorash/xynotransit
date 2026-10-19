@@ -24,6 +24,7 @@ import 'scenarios_admin.dart' as admin;
 import 'scenarios_concurrent.dart' as concurrent;
 import 'scenarios_deck.dart' as deck;
 import 'scenarios_reports.dart' as reports;
+import 'scenarios_lockout.dart' as lockout;
 import 'scenarios_passwords.dart' as passwords;
 import 'scenarios_signin.dart' as signin;
 
@@ -67,8 +68,33 @@ final scenarios = <(String, Scenario, {bool lastManager})>[
     lastManager: false,
   ),
   (
-    'five wrong tries lock a username for a while',
+    'five wrong tries lock a username for one address',
     passwords.loginLimit,
+    lastManager: false,
+  ),
+  (
+    'link recovery: a new password without the old one',
+    lockout.linkRecovery,
+    lastManager: false,
+  ),
+  (
+    'one address cannot lock a person out at another',
+    lockout.pairLockout,
+    lastManager: false,
+  ),
+  (
+    'the username backstop and trusted addresses',
+    lockout.backstop,
+    lastManager: false,
+  ),
+  (
+    'thirty failures lock one known address',
+    lockout.addressCap,
+    lastManager: false,
+  ),
+  (
+    'parallel wrong tries: exactly five are 401',
+    lockout.pairConcurrent,
     lastManager: false,
   ),
   ('things at the same time', concurrent.sameTime, lastManager: false),

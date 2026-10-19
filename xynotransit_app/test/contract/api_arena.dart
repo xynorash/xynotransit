@@ -61,6 +61,20 @@ Future<String?> psql(String sql) async {
   }
 }
 
+/// Adds `X-Forwarded-For`, as the reverse proxy in front of the API does, so a
+/// session can appear to come from a chosen public address.
+class _FromAddress extends http.BaseClient {
+  _FromAddress(this._inner, this._address);
+  final http.Client _inner;
+  final String _address;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    request.headers['X-Forwarded-For'] = _address;
+    return _inner.send(request);
+  }
+}
+
 class ApiSession {
   ApiSession(this.api, this.tokens, this.repo);
   final ApiClient api;
@@ -201,14 +215,16 @@ class ApiRun {
   /// Signs in with a username and a password, as the sign-in screen does.
   Future<ApiPersonSession> signInWithPassword(
     String username,
-    String password,
-  ) async {
+    String password, {
+    String? address,
+  }) async {
     SharedPreferences.setMockInitialValues({});
     final tokens = TokenStore(await SharedPreferences.getInstance());
     final api = ApiClient(
       baseUrl: '$contractApi/api',
       tokens: tokens,
       timeout: const Duration(seconds: 20),
+      client: address == null ? null : _FromAddress(http.Client(), address),
     );
     _clients.add(api);
     final auth = ApiAuthService(api);
@@ -216,7 +232,10 @@ class ApiRun {
     return _session(api, auth);
   }
 
-  Future<ApiPersonSession> signInWithLinkSession(String url) async {
+  Future<ApiPersonSession> signInWithLinkSession(
+    String url, {
+    String? address,
+  }) async {
     final token = Uri.parse(url).queryParameters['token'];
     if (token == null) {
       throw const RepositoryException('The link has no token.');
@@ -227,6 +246,7 @@ class ApiRun {
       baseUrl: '$contractApi/api',
       tokens: tokens,
       timeout: const Duration(seconds: 20),
+      client: address == null ? null : _FromAddress(http.Client(), address),
     );
     _clients.add(api);
     final auth = ApiAuthService(api);
@@ -373,12 +393,15 @@ class ApiArena implements Arena {
       (await run.signInWithLink(url)).repo;
 
   @override
-  Future<PersonSession> signInWithPassword(String username, String password) =>
-      run.signInWithPassword(username, password);
+  Future<PersonSession> signInWithPassword(
+    String username,
+    String password, {
+    String? address,
+  }) => run.signInWithPassword(username, password, address: address);
 
   @override
-  Future<PersonSession> signInWithLinkSession(String url) =>
-      run.signInWithLinkSession(url);
+  Future<PersonSession> signInWithLinkSession(String url, {String? address}) =>
+      run.signInWithLinkSession(url, address: address);
 
   @override
   DateTime start(int n) => DateTime(run.base.year, run.base.month + _n * 4 + n);

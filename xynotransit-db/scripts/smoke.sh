@@ -24,13 +24,14 @@ MAIL=${2:-http://127.0.0.1:8025}
 API="$BASE/api"
 MANAGER=${SMOKE_MANAGER:-${ENV_MANAGER:-smoke.manager@xynotransit.example}}
 RUN=$(date +%s)$RANDOM
+START_TS=$(date +%s)
 EMPLOYEE=${SMOKE_EMPLOYEE:-smoke.employee.$RUN@xynotransit.example}
 # Two different months between 2090 and 2100 (the API accepts years up to 2100).
 rand_month() { printf '%d-%02d-01' $((2090 + RANDOM % 11)) $((1 + RANDOM % 12)); }
 PERIOD_START=$(rand_month)
 EMPTY_START=$(rand_month)
 while [ "$EMPTY_START" = "$PERIOD_START" ]; do EMPTY_START=$(rand_month); done
-TEAM="" PERSON="" SEAT="" PERIOD="" EMPTY="" M=""
+TEAM="" PERSON="" SEAT="" PERIOD="" EMPTY="" M="" PASSWORD_STEPS=""
 
 cleanup() {
   local rc=$?
@@ -50,6 +51,9 @@ cleanup() {
       q+=" delete from deck_text where period_id = '$p'; delete from period p where p.id = '$p' and not exists (select 1 from report r where r.period_id = p.id);"
     done
     [ -n "$PERSON" ] && q+=" delete from login_token where person_id = '$PERSON'; delete from person where id = '$PERSON';"
+    # The sign-in limit rows hold keyed hashes only, so they cannot be matched by name; the
+    # password steps left a few of them (15 minute counters), all newer than this run.
+    [ -n "$PASSWORD_STEPS" ] && q+=" delete from login_failure where at >= to_timestamp($START_TS); delete from login_success where at >= to_timestamp($START_TS);"
     [ -n "$TEAM" ] && q+=" delete from team where id = $TEAM and not exists (select 1 from assignment where team_id = $TEAM);"
     q+=" commit;"
     psql_db "$PGDATABASE" -c "$q" >/dev/null 2>&1 || echo "note: smoke rows were deactivated but not purged from the database" >&2
@@ -150,5 +154,54 @@ for i in 1 2 3 4 5; do
 done
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/auth/magic-link" -H 'content-type: application/json' -d "{\"email\":\"$ghost\"}")
 [ "$code" = 429 ] || fail "6th request for unknown address returned $code, expected 429"
+
+step "passwords: the manager resets the employee password, the employee signs in with it"
+PASSWORD_STEPS=1
+code_of() { # method url token [json body] -> prints "<status> <body>"
+  local m=$1 u=$2 t=${3:-} b=${4:-} args=(-s -X "$1" -w $'\n%{http_code}' "$2" -H 'content-type: application/json')
+  [ -n "$t" ] && args+=(-H "authorization: Bearer $t")
+  [ -n "$b" ] && args+=(-d "$b")
+  local out; out=$(curl "${args[@]}")
+  printf '%s %s' "${out##*$'\n'}" "${out%$'\n'*}"
+}
+RESET=$(curl -fsS -X POST "$API/persons/$PERSON/password-reset" "${H[@]}" -d '{}')
+EUSER=$(echo "$RESET" | j "d['username']")
+TEMP=$(echo "$RESET" | j "d['temporary_password']")
+[ "$(echo "$RESET" | j "d['must_change_password']")" = True ] || fail "reset must ask for a new password"
+# The link session from before is over.
+res=$(code_of GET "$API/me" "$E")
+[ "${res%% *}" = 401 ] || fail "the old link session must end after a reset (got ${res%% *})"
+TOKEN1=$(curl -fsS -X POST "$API/auth/login" -H 'content-type: application/json' \
+  -d "{\"username\":\"$EUSER\",\"password\":\"$TEMP\"}" | j "d['access_token']")
+
+step "passwords: until a new one is chosen, every other route says so"
+res=$(code_of GET "$API/catalog" "$TOKEN1")
+[ "${res%% *}" = 403 ] || fail "catalog with a temporary password returned ${res%% *}"
+echo "${res#* }" | grep -q 'Choose a new password first.' || fail "the 403 must say: Choose a new password first. (got ${res#* })"
+[ "$(curl -fsS "$API/me" -H "authorization: Bearer $TOKEN1" | j "d['must_change_password']")" = True ] || fail "/me must show must_change_password"
+
+step "passwords: the employee changes the password and signs in with the new one"
+NEWPW="smoke violet harbor $RUN lamp"
+res=$(code_of POST "$API/auth/password" "$TOKEN1" "{\"current_password\":\"$TEMP\",\"new_password\":\"$NEWPW\"}")
+[ "${res%% *}" = 200 ] || fail "change password returned ${res#* }"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$API/catalog" -H "authorization: Bearer $(echo "${res#* }" | j "d['access_token']")")
+[ "$code" = 200 ] || fail "the session returned by the change must work (got $code)"
+TOKEN2=$(curl -fsS -X POST "$API/auth/login" -H 'content-type: application/json' \
+  -d "{\"username\":\"$EUSER\",\"password\":\"$NEWPW\"}" | j "d['access_token']")
+code=$(curl -s -o /dev/null -w '%{http_code}' "$API/me" -H "authorization: Bearer $TOKEN1")
+[ "$code" = 401 ] || fail "the token from before the change must be refused (got $code)"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$API/catalog" -H "authorization: Bearer $TOKEN2")
+[ "$code" = 200 ] || fail "new password session returned $code"
+res=$(code_of POST "$API/auth/login" "" "{\"username\":\"$EUSER\",\"password\":\"$TEMP\"}")
+[ "${res%% *}" = 401 ] || fail "the temporary password must not work any more (got ${res%% *})"
+
+step "passwords: the manager removes the password, sign-in with it stops"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$API/persons/$PERSON/password" "${H[@]}")
+[ "$code" = 204 ] || fail "remove password returned $code"
+res=$(code_of POST "$API/auth/login" "" "{\"username\":\"$EUSER\",\"password\":\"$NEWPW\"}")
+[ "${res%% *}" = 401 ] || fail "login after the password was removed returned ${res%% *}"
+echo "${res#* }" | grep -q 'Username or password is wrong.' || fail "the 401 must say: Username or password is wrong."
+code=$(curl -s -o /dev/null -w '%{http_code}' "$API/me" -H "authorization: Bearer $TOKEN2")
+[ "$code" = 401 ] || fail "the session must end when the password is removed (got $code)"
 
 echo "SMOKE OK"

@@ -5,13 +5,12 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::{
-    auth::{hash_token, issue_jwt, random_token, Role, SessionUser, SIGN_IN_AGAIN_MSG},
+    auth::{hash_token, issue_jwt_via, random_token, Role, SessionUser, Via, SIGN_IN_AGAIN_MSG},
     error::{ApiError, ApiJson},
-    loginlimit::{self, msg as limit_msg, ClientKey},
+    loginlimit::{self, msg as limit_msg, ClientAddr, Kind, Who},
     password::{self, msg as pw_msg, Subject},
     passwords,
     state::AppState,
-    username,
 };
 
 pub fn router() -> Router<AppState> {
@@ -150,6 +149,7 @@ struct VerifyBody {
 
 async fn verify(
     State(st): State<AppState>,
+    client: ClientAddr,
     ApiJson(body): ApiJson<VerifyBody>,
 ) -> Result<Json<Value>, ApiError> {
     let expired =
@@ -169,7 +169,20 @@ async fn verify(
     let user = crate::auth::load_user(&st.pool, person_id)
         .await?
         .ok_or_else(expired)?;
-    let (access_token, exp) = issue_jwt(&st.config.jwt_secret, person_id, user.role, user.epoch)?;
+    // A link is a sign-in too: this address is trusted for the name, and the pair starts from zero.
+    loginlimit::succeed(
+        &st.pool,
+        &Who::new(&st.limit_keys, &user.username, &client),
+        true,
+    )
+    .await;
+    let (access_token, exp) = issue_jwt_via(
+        &st.config.jwt_secret,
+        person_id,
+        user.role,
+        user.epoch,
+        Via::Link,
+    )?;
     Ok(Json(json!({
         "access_token": access_token,
         "expires_at": exp.to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -189,13 +202,14 @@ struct LoginBody {
 /// switched off, no password set) gives the same 401 after the same work.
 async fn login(
     State(st): State<AppState>,
-    ClientKey(ip): ClientKey,
+    client: ClientAddr,
     ApiJson(body): ApiJson<LoginBody>,
 ) -> Result<Json<Value>, ApiError> {
     let wrong = || ApiError::unauthorized(limit_msg::WRONG);
-    let key = username::lookup_key(&body.username);
-    let attempt = loginlimit::begin_attempt(&st.pool, &key, &ip).await?;
+    let who = Who::new(&st.limit_keys, &body.username, &client);
+    let attempt = loginlimit::begin_attempt(&st.pool, &who, Kind::Login).await?;
 
+    let key = crate::username::lookup_key(&body.username);
     let found: Option<(Uuid, Option<String>, bool)> = match sqlx::query_as(
         "select id, password_hash, active from person where lower(username) = $1",
     )
@@ -232,7 +246,7 @@ async fn login(
     if !verdict.ok {
         return Err(wrong());
     }
-    loginlimit::succeed(&st.pool, &key).await;
+    loginlimit::succeed(&st.pool, &who, true).await;
 
     let user = crate::auth::load_user(&st.pool, person_id)
         .await?
@@ -240,7 +254,13 @@ async fn login(
     if verdict.needs_rehash {
         rehash(&st, person_id, stored.as_deref(), &body.password).await;
     }
-    let (access_token, exp) = issue_jwt(&st.config.jwt_secret, person_id, user.role, user.epoch)?;
+    let (access_token, exp) = issue_jwt_via(
+        &st.config.jwt_secret,
+        person_id,
+        user.role,
+        user.epoch,
+        Via::Password,
+    )?;
     Ok(Json(json!({
         "access_token": access_token,
         "expires_at": exp.to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -275,12 +295,15 @@ struct ChangeBody {
 }
 
 /// Choose or change the password of the person who is signed in. A person who has one must give
-/// it (a wrong one counts like a failed sign-in); a person who has none (first password after a
-/// link) does not. All older sessions end and the answer carries a fresh one.
+/// it (a wrong one counts against their pair like a failed sign-in), with one exception: a
+/// session that began with a sign-in link at most 15 minutes ago needs no current password (the
+/// way back for someone who forgot it; audit kind `change-via-link`). A person who has none
+/// (first password after a link) does not need it either. All older sessions end and the answer
+/// carries a fresh one, which counts as a password session.
 async fn change_password(
     SessionUser(user): SessionUser,
     State(st): State<AppState>,
-    ClientKey(ip): ClientKey,
+    client: ClientAddr,
     ApiJson(body): ApiJson<ChangeBody>,
 ) -> Result<Json<Value>, ApiError> {
     if body.new_password.is_empty() {
@@ -292,31 +315,38 @@ async fn change_password(
             .fetch_one(&st.pool)
             .await?;
 
+    let mut kind = "change";
     if let Some(hash) = &stored {
-        let current = body
-            .current_password
-            .as_deref()
-            .filter(|c| !c.is_empty())
-            .ok_or_else(|| ApiError::bad(pw_msg::CURRENT_REQUIRED))?;
-        let key = username::lookup_key(&user.username);
-        let attempt = loginlimit::begin_attempt(&st.pool, &key, &ip).await?;
-        let ok = if password::too_long(current) {
-            false
+        if user.fresh_link_session() {
+            // Signed in by a link a moment ago: the link proves it is them. The old password is
+            // neither asked for nor looked at (so this cannot be used to test guesses).
+            kind = "change-via-link";
         } else {
-            match st.hasher.verify(current, Some(hash)).await {
-                Ok(v) => v.ok,
-                Err(e) => {
-                    loginlimit::forgive(&st.pool, attempt).await;
-                    return Err(e.into());
+            let current = body
+                .current_password
+                .as_deref()
+                .filter(|c| !c.is_empty())
+                .ok_or_else(|| ApiError::bad(pw_msg::CURRENT_REQUIRED))?;
+            let who = Who::new(&st.limit_keys, &user.username, &client);
+            let attempt = loginlimit::begin_attempt(&st.pool, &who, Kind::Change).await?;
+            let ok = if password::too_long(current) {
+                false
+            } else {
+                match st.hasher.verify(current, Some(hash)).await {
+                    Ok(v) => v.ok,
+                    Err(e) => {
+                        loginlimit::forgive(&st.pool, attempt).await;
+                        return Err(e.into());
+                    }
                 }
+            };
+            if !ok {
+                return Err(ApiError::forbidden(pw_msg::CURRENT_WRONG));
             }
-        };
-        if !ok {
-            return Err(ApiError::forbidden(pw_msg::CURRENT_WRONG));
-        }
-        loginlimit::succeed(&st.pool, &key).await;
-        if password::normalize(current) == password::normalize(&body.new_password) {
-            return Err(ApiError::bad(pw_msg::SAME));
+            loginlimit::succeed(&st.pool, &who, false).await;
+            if password::normalize(current) == password::normalize(&body.new_password) {
+                return Err(ApiError::bad(pw_msg::SAME));
+            }
         }
     }
 
@@ -341,18 +371,18 @@ async fn change_password(
     if now.map(|r| r.0) != Some(stored) {
         return Err(ApiError::unauthorized(SIGN_IN_AGAIN_MSG));
     }
-    let epoch = passwords::store_password(
-        &mut tx,
-        user.person_id,
-        Some(&new_hash),
-        false,
-        "change",
-        None,
-    )
-    .await?
-    .ok_or(ApiError::Internal)?;
+    let epoch =
+        passwords::store_password(&mut tx, user.person_id, Some(&new_hash), false, kind, None)
+            .await?
+            .ok_or(ApiError::Internal)?;
     tx.commit().await?;
-    let (access_token, exp) = issue_jwt(&st.config.jwt_secret, user.person_id, user.role, epoch)?;
+    let (access_token, exp) = issue_jwt_via(
+        &st.config.jwt_secret,
+        user.person_id,
+        user.role,
+        epoch,
+        Via::Password,
+    )?;
     Ok(Json(json!({
         "access_token": access_token,
         "expires_at": exp.to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -365,6 +395,9 @@ pub fn me_json(u: &crate::auth::AuthUser) -> Value {
     v["username"] = json!(u.username);
     v["has_password"] = json!(u.has_password);
     v["must_change_password"] = json!(u.must_change_password);
+    // True for a person with a password whose session began with a link a moment ago: the
+    // change-password form may leave out the current password.
+    v["recent_link_session"] = json!(u.recent_link_session());
     v
 }
 

@@ -54,6 +54,9 @@ pub const TREND_MAX: i64 = 24;
 /// Magic links per email per hour, and how long one works.
 pub const MAX_LINKS_PER_HOUR: i64 = 5;
 pub const LINK_MINUTES: i32 = 15;
+/// A session that began with a sign-in link may choose a new password without the old one for
+/// this many minutes.
+pub const LINK_RECOVERY_MINUTES: i64 = 15;
 /// Largest request body.
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
 pub const NOTE_KINDS: [&str; 3] = ["well", "wrong", "next"];
@@ -568,8 +571,14 @@ mod tests {
             ("username_max", username::USERNAME_MAX as i64),
             ("password_min", password::MIN_CHARS as i64),
             ("password_max", password::MAX_CHARS as i64),
+            // Kept for older readers: the same number as the pair limit.
             (
                 "login_failures_per_username",
+                loginlimit::MAX_FAILURES_PER_PAIR,
+            ),
+            ("login_failures_per_pair", loginlimit::MAX_FAILURES_PER_PAIR),
+            (
+                "login_failures_per_username_backstop",
                 loginlimit::MAX_FAILURES_PER_USER,
             ),
             (
@@ -577,6 +586,12 @@ mod tests {
                 loginlimit::MAX_FAILURES_PER_IP,
             ),
             ("login_window_minutes", loginlimit::WINDOW_MINUTES),
+            ("trusted_address_days", loginlimit::TRUSTED_DAYS),
+            ("link_recovery_minutes", LINK_RECOVERY_MINUTES),
+            (
+                "events_recheck_seconds",
+                crate::state::STREAM_RECHECK_SECS as i64,
+            ),
             (
                 "resets_per_manager_per_hour",
                 loginlimit::MAX_RESETS_PER_HOUR,

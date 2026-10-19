@@ -1,37 +1,62 @@
 //! Limits on password sign-in: how many wrong tries, from which name and from which address.
 //!
-//! Rows of `login_failure` (windows of 15 minutes):
-//!   * 5 failures for one username key (what was typed, trimmed and lowercased, known or not)
-//!     lock that name: 429 "Too many sign-in attempts. Try again later." with Retry-After.
-//!   * 30 failures from one client address lock the address.
+//! Rows of `login_failure` (windows of 15 minutes), counted three ways:
+//!   * per PAIR (username, client address): 5 failures lock that pair only. Someone else's
+//!     address is not affected, so an attacker cannot lock the real person out.
+//!   * per USERNAME, a backstop: 100 failures from any addresses lock the name for everybody
+//!     except addresses that signed in successfully for that name (by password or link) within the
+//!     last 30 days (`login_success`).
+//!   * per ADDRESS: 30 failures lock the address, but only an address the server can determine.
 //!
+//! All three answer 429 "Too many sign-in attempts. Try again later." with Retry-After.
 //! A try is written down BEFORE the password is checked (under advisory locks), and taken back when
 //! it turns out right, so parallel guesses cannot all slip past the count. While locked, even the
 //! right password is refused and the refused tries are not counted again. A success clears that
-//! name's rows only; nobody else's counters change.
+//! pair's failures only.
 //!
-//! The client address comes from the socket. The API sits behind nginx and Caddy, which are on
-//! private addresses; only when the connecting peer is a private network address (10/8, 172.16/12,
-//! 192.168/16, 100.64/10, loopback, link-local, IPv6 fc00::/7 and fe80::/10) is `X-Forwarded-For`
-//! read, from the right: private hops are our own proxies and are skipped, and the right-most
-//! address that is not private is the client. A peer that is not private is the client itself and
-//! the header is ignored. If the header is unusable the peer is used. IPv6 clients count per /64.
+//! Nothing readable is stored: the username text and the address are kept as HMAC-SHA256 hex keys
+//! (`LimitKeys`, key from JWT_SECRET by HKDF-SHA256 with the label `xt-ratelimit-v1`).
+//!
+//! The client address is a PUBLIC address only. The API sits behind Caddy (and nginx), which are on
+//! private addresses. When the socket peer is public it is the client and X-Forwarded-For is
+//! ignored. When the peer is private (10/8, 172.16/12, 192.168/16, 100.64/10, loopback, link-local,
+//! IPv6 fc00::/7 and fe80::/10), X-Forwarded-For is read from the right: private hops are our own
+//! proxies and are skipped, and the right-most hop that is not private is the client. If there is
+//! none (everything private, as with Docker NAT or IPv6 through docker-proxy), the header is
+//! unusable or there is no peer, the address is UNKNOWN: the per-address limit is skipped and the
+//! pair uses the constant address `unknown`. IPv6 clients count per /64.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::atomic::{AtomicI64, Ordering},
+};
 
 use axum::{
     extract::{ConnectInfo, FromRequestParts},
     http::request::Parts,
 };
+use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use sqlx::PgPool;
 
 use crate::{error::ApiError, state::AppState};
 
 pub const WINDOW_MINUTES: i64 = 15;
-pub const MAX_FAILURES_PER_USER: i64 = 5;
+/// Failures per (username, address) pair.
+pub const MAX_FAILURES_PER_PAIR: i64 = 5;
+/// Backstop: failures per username from all addresses together.
+pub const MAX_FAILURES_PER_USER: i64 = 100;
+/// Failures per determinable client address.
 pub const MAX_FAILURES_PER_IP: i64 = 30;
+/// Days an address stays trusted for a username after a successful sign-in.
+pub const TRUSTED_DAYS: i64 = 30;
 /// Temporary passwords a manager may issue per hour.
 pub const MAX_RESETS_PER_HOUR: i64 = 30;
+/// The HKDF label of the key behind the stored keys.
+pub const KEY_LABEL: &[u8] = b"xt-ratelimit-v1";
+/// The address text used when the client address cannot be determined.
+pub const UNKNOWN_ADDRESS: &str = "unknown";
 
 pub mod msg {
     pub const WRONG: &str = "Username or password is wrong.";
@@ -88,31 +113,43 @@ pub fn key_of(ip: IpAddr) -> String {
     }
 }
 
-/// The client address key from the socket peer and the X-Forwarded-For header (all its lines,
-/// joined with commas). See the module notes.
-pub fn client_key(peer: Option<IpAddr>, forwarded_for: Option<&str>) -> String {
-    let Some(peer) = peer else {
-        return "unknown".into();
-    };
+/// The key of the PUBLIC client address from the socket peer and the X-Forwarded-For header (all
+/// its lines, joined with commas), or `None` when it cannot be determined. See the module notes.
+pub fn client_addr(peer: Option<IpAddr>, forwarded_for: Option<&str>) -> Option<String> {
+    let peer = peer?;
     if !is_private(peer) {
-        return key_of(peer);
+        return Some(key_of(peer));
     }
-    if let Some(xff) = forwarded_for {
-        for hop in xff.rsplit(',') {
-            match parse_hop(hop) {
-                Some(ip) if is_private(ip) => continue,
-                Some(ip) => return key_of(ip),
-                None => break,
-            }
+    for hop in forwarded_for?.rsplit(',') {
+        match parse_hop(hop) {
+            Some(ip) if is_private(ip) => continue,
+            Some(ip) => return Some(key_of(ip)),
+            // Garbage right of everything else: never guess.
+            None => return None,
         }
     }
-    key_of(peer)
+    None
 }
 
-/// The caller's address key, for handlers that count tries.
-pub struct ClientKey(pub String);
+/// The caller's public address key, or `None` when it cannot be determined.
+pub struct ClientAddr(pub Option<String>);
 
-impl FromRequestParts<AppState> for ClientKey {
+static LAST_UNKNOWN_LOG: AtomicI64 = AtomicI64::new(0);
+
+/// Log that an address was unknown, at most once a minute.
+fn note_unknown() {
+    let now = chrono::Utc::now().timestamp();
+    let last = LAST_UNKNOWN_LOG.load(Ordering::Relaxed);
+    if now - last >= 60
+        && LAST_UNKNOWN_LOG
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        tracing::warn!("client address unknown, per-address limit skipped");
+    }
+}
+
+impl FromRequestParts<AppState> for ClientAddr {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut Parts, _: &AppState) -> Result<Self, Self::Rejection> {
@@ -127,11 +164,79 @@ impl FromRequestParts<AppState> for ClientKey {
             .filter_map(|v| v.to_str().ok())
             .collect();
         let joined = lines.join(",");
-        Ok(ClientKey(client_key(
-            peer,
-            (!lines.is_empty()).then_some(joined.as_str()),
-        )))
+        let addr = client_addr(peer, (!lines.is_empty()).then_some(joined.as_str()));
+        if addr.is_none() {
+            note_unknown();
+        }
+        Ok(ClientAddr(addr))
     }
+}
+
+/// The key behind the stored username and address keys.
+pub struct LimitKeys {
+    key: [u8; 32],
+}
+
+impl LimitKeys {
+    /// HKDF-SHA256 of the JWT secret with the fixed label.
+    pub fn new(secret: &str) -> Self {
+        let mut key = [0u8; 32];
+        Hkdf::<Sha256>::new(None, secret.as_bytes())
+            .expand(KEY_LABEL, &mut key)
+            .expect("32 bytes is a valid HKDF length");
+        LimitKeys { key }
+    }
+
+    fn hex(&self, domain: &str, text: &str) -> String {
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.key).expect("any key length");
+        mac.update(domain.as_bytes());
+        mac.update(&[0]);
+        mac.update(text.as_bytes());
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// The stored key of a typed username (already through `username::lookup_key`).
+    pub fn user(&self, lookup_key: &str) -> String {
+        self.hex("user", lookup_key)
+    }
+
+    /// The stored key of a client address key, or of `unknown`.
+    pub fn address(&self, addr: Option<&str>) -> String {
+        self.hex("address", addr.unwrap_or(UNKNOWN_ADDRESS))
+    }
+}
+
+/// Who is trying: the stored keys, and whether the address is a real one.
+pub struct Who {
+    pub user: String,
+    pub address: String,
+    /// False when the address is unknown: no per-address limit, no trusted address.
+    pub known_address: bool,
+}
+
+impl Who {
+    /// `typed` is what was typed in the username box (or the signed-in username).
+    pub fn new(keys: &LimitKeys, typed: &str, client: &ClientAddr) -> Self {
+        Who {
+            user: keys.user(&crate::username::lookup_key(typed)),
+            address: keys.address(client.0.as_deref()),
+            known_address: client.0.is_some(),
+        }
+    }
+}
+
+/// Which tries a check counts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A sign-in: pair, backstop (unless trusted) and address.
+    Login,
+    /// A wrong current password while signed in: pair and address only. Failures from other
+    /// addresses never lock a person who is already signed in.
+    Change,
 }
 
 async fn lock(tx: &mut sqlx::PgConnection, what: &str) -> Result<(), sqlx::Error> {
@@ -142,21 +247,53 @@ async fn lock(tx: &mut sqlx::PgConnection, what: &str) -> Result<(), sqlx::Error
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum Scope {
+    Pair,
+    User,
+    Address,
+}
+
+impl Scope {
+    fn filter(self) -> &'static str {
+        match self {
+            Scope::Pair => "username_key = $1 and address_key = $2",
+            Scope::User => "username_key = $1 and $2::text is not null",
+            Scope::Address => "address_key = $2 and $1::text is not null",
+        }
+    }
+}
+
+async fn count(tx: &mut sqlx::PgConnection, who: &Who, scope: Scope) -> Result<i64, sqlx::Error> {
+    let sql = format!(
+        "select count(*) from login_failure
+         where {} and at > now() - make_interval(mins => {WINDOW_MINUTES})",
+        scope.filter()
+    );
+    sqlx::query_scalar(&sql)
+        .bind(&who.user)
+        .bind(&who.address)
+        .fetch_one(tx)
+        .await
+}
+
 /// Seconds until the failure that holds a place beyond `limit` is out of the window.
 async fn wait_for(
     tx: &mut sqlx::PgConnection,
-    column: &str,
-    value: &str,
+    who: &Who,
+    scope: Scope,
     count: i64,
     limit: i64,
 ) -> Result<i64, sqlx::Error> {
     let sql = format!(
         "select ceil(extract(epoch from (at + make_interval(mins => {WINDOW_MINUTES}) - now())))::bigint
-         from login_failure where {column} = $1 and at > now() - make_interval(mins => {WINDOW_MINUTES})
-         order by at, id offset $2 limit 1"
+         from login_failure where {} and at > now() - make_interval(mins => {WINDOW_MINUTES})
+         order by at, id offset $3 limit 1",
+        scope.filter()
     );
     let w: Option<i64> = sqlx::query_scalar(&sql)
-        .bind(value)
+        .bind(&who.user)
+        .bind(&who.address)
         .bind((count - limit).max(0))
         .fetch_optional(tx)
         .await?;
@@ -164,60 +301,66 @@ async fn wait_for(
         .clamp(1, WINDOW_MINUTES * 60))
 }
 
-/// Write down one try for this username key and address, or refuse with 429. Returns the id of
-/// the row, which the caller drops with `forgive` when the try was right or never a real guess.
-pub async fn begin_attempt(pool: &PgPool, user_key: &str, ip: &str) -> Result<i64, ApiError> {
+/// Write down one try, or refuse with 429. Returns the id of the row, which the caller drops
+/// with `forgive` when the try was never a real guess; `succeed` drops it when it was right.
+pub async fn begin_attempt(pool: &PgPool, who: &Who, kind: Kind) -> Result<i64, ApiError> {
     let mut tx = pool.begin().await?;
-    // Always the address first, then the name, so two requests cannot wait for each other.
-    lock(&mut tx, &format!("xt_login_ip:{ip}")).await?;
-    lock(&mut tx, &format!("xt_login_user:{user_key}")).await?;
+    // Always the address first, then the name, so two requests cannot wait for each other. The
+    // name lock also keeps the pair and the name counts exact under parallel tries.
+    if who.known_address {
+        lock(&mut tx, &format!("xt_login_addr:{}", who.address)).await?;
+    }
+    lock(&mut tx, &format!("xt_login_user:{}", who.user)).await?;
     sqlx::query(
         "delete from login_failure where username_key = $1
          and at < now() - make_interval(mins => $2::int)",
     )
-    .bind(user_key)
+    .bind(&who.user)
     .bind(WINDOW_MINUTES as i32)
     .execute(&mut *tx)
     .await?;
-    let count = |col: &'static str| {
-        format!(
-            "select count(*) from login_failure
-             where {col} = $1 and at > now() - make_interval(mins => {WINDOW_MINUTES})"
-        )
-    };
-    let by_user: i64 = sqlx::query_scalar(&count("username_key"))
-        .bind(user_key)
-        .fetch_one(&mut *tx)
-        .await?;
-    let by_ip: i64 = sqlx::query_scalar(&count("ip"))
-        .bind(ip)
-        .fetch_one(&mut *tx)
-        .await?;
-    if by_user >= MAX_FAILURES_PER_USER || by_ip >= MAX_FAILURES_PER_IP {
-        let mut wait = 0;
+
+    let mut wait = 0i64;
+    let by_pair = count(&mut tx, who, Scope::Pair).await?;
+    if by_pair >= MAX_FAILURES_PER_PAIR {
+        wait = wait.max(wait_for(&mut tx, who, Scope::Pair, by_pair, MAX_FAILURES_PER_PAIR).await?);
+    }
+    if who.known_address {
+        let by_addr = count(&mut tx, who, Scope::Address).await?;
+        if by_addr >= MAX_FAILURES_PER_IP {
+            wait = wait
+                .max(wait_for(&mut tx, who, Scope::Address, by_addr, MAX_FAILURES_PER_IP).await?);
+        }
+    }
+    if kind == Kind::Login {
+        let by_user = count(&mut tx, who, Scope::User).await?;
         if by_user >= MAX_FAILURES_PER_USER {
-            wait = wait.max(
-                wait_for(
-                    &mut tx,
-                    "username_key",
-                    user_key,
-                    by_user,
-                    MAX_FAILURES_PER_USER,
-                )
-                .await?,
-            );
+            let trusted: bool = who.known_address
+                && sqlx::query_scalar(&format!(
+                    "select exists (select 1 from login_success
+                     where username_key = $1 and address_key = $2
+                       and at > now() - make_interval(days => {TRUSTED_DAYS}))"
+                ))
+                .bind(&who.user)
+                .bind(&who.address)
+                .fetch_one(&mut *tx)
+                .await?;
+            if !trusted {
+                wait = wait.max(
+                    wait_for(&mut tx, who, Scope::User, by_user, MAX_FAILURES_PER_USER).await?,
+                );
+            }
         }
-        if by_ip >= MAX_FAILURES_PER_IP {
-            wait = wait.max(wait_for(&mut tx, "ip", ip, by_ip, MAX_FAILURES_PER_IP).await?);
-        }
+    }
+    if wait > 0 {
         tx.commit().await?;
         return Err(ApiError::TooManyRequests(msg::TOO_MANY.into(), wait as u64));
     }
     let id: i64 = sqlx::query_scalar(
-        "insert into login_failure (username_key, ip) values ($1, $2) returning id",
+        "insert into login_failure (username_key, address_key) values ($1, $2) returning id",
     )
-    .bind(user_key)
-    .bind(ip)
+    .bind(&who.user)
+    .bind(&who.address)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -235,13 +378,30 @@ pub async fn forgive(pool: &PgPool, id: i64) {
     }
 }
 
-/// The try was right: this name starts again from zero. Other names are not touched.
-pub async fn succeed(pool: &PgPool, user_key: &str) {
-    if let Err(e) = sqlx::query("delete from login_failure where username_key = $1")
-        .bind(user_key)
-        .execute(pool)
-        .await
-    {
+/// The try was right: this pair starts again from zero (other pairs are not touched). With
+/// `trust` (a real sign-in, by password or link) a known address is remembered for 30 days.
+pub async fn succeed(pool: &PgPool, who: &Who, trust: bool) {
+    let r: Result<(), sqlx::Error> = async {
+        let mut tx = pool.begin().await?;
+        sqlx::query("delete from login_failure where username_key = $1 and address_key = $2")
+            .bind(&who.user)
+            .bind(&who.address)
+            .execute(&mut *tx)
+            .await?;
+        if trust && who.known_address {
+            sqlx::query(
+                "insert into login_success (username_key, address_key) values ($1, $2)
+                 on conflict (username_key, address_key) do update set at = now()",
+            )
+            .bind(&who.user)
+            .bind(&who.address)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await
+    }
+    .await;
+    if let Err(e) = r {
         tracing::error!(error = %e, "could not clear sign-in tries");
     }
 }
@@ -290,88 +450,147 @@ mod tests {
 
     #[test]
     fn forwarded_for_table() {
-        let cases: &[(Option<&str>, Option<&str>, &str)] = &[
+        let cases: &[(Option<&str>, Option<&str>, Option<&str>)] = &[
             // No peer known (not a real socket).
-            (None, Some("1.2.3.4"), "unknown"),
+            (None, Some("1.2.3.4"), None),
             // A public peer is the client; the header is a lie.
-            (Some("8.8.8.8"), Some("1.2.3.4"), "8.8.8.8"),
-            (Some("8.8.8.8"), None, "8.8.8.8"),
-            // A private peer without a header.
-            (Some("172.18.0.2"), None, "172.18.0.2"),
+            (Some("8.8.8.8"), Some("1.2.3.4"), Some("8.8.8.8")),
+            (Some("8.8.8.8"), None, Some("8.8.8.8")),
+            (
+                Some("2001:db8:1:2:3:4:5:6"),
+                Some("1.2.3.4"),
+                Some("2001:db8:1:2::/64"),
+            ),
+            // A private peer without a header: nobody to name.
+            (Some("172.18.0.2"), None, None),
+            (Some("::1"), None, None),
             // One proxy hop.
-            (Some("172.18.0.2"), Some("203.0.113.9"), "203.0.113.9"),
+            (Some("172.18.0.2"), Some("203.0.113.9"), Some("203.0.113.9")),
             // Two of our proxies: the right-most public address is the client.
             (
                 Some("172.18.0.2"),
                 Some("203.0.113.9, 10.0.0.5"),
-                "203.0.113.9",
+                Some("203.0.113.9"),
             ),
             (
                 Some("127.0.0.1"),
                 Some("203.0.113.9, 192.168.1.1, 10.0.0.5"),
-                "203.0.113.9",
+                Some("203.0.113.9"),
             ),
-            // The client wrote a fake first hop: only the right-most untrusted one counts.
+            // The client wrote fake left hops: only the right-most untrusted one counts.
             (
                 Some("172.18.0.2"),
                 Some("1.1.1.1, 203.0.113.9"),
-                "203.0.113.9",
+                Some("203.0.113.9"),
             ),
             (
                 Some("172.18.0.2"),
                 Some("1.1.1.1, 203.0.113.9, 10.0.0.5"),
-                "203.0.113.9",
+                Some("203.0.113.9"),
             ),
-            // A fake private address typed by the client sits left of the real one.
             (
                 Some("172.18.0.2"),
                 Some("10.9.9.9, 203.0.113.9"),
-                "203.0.113.9",
+                Some("203.0.113.9"),
             ),
-            // Everything private: the peer.
             (
                 Some("172.18.0.2"),
-                Some("10.0.0.1, 192.168.0.4"),
-                "172.18.0.2",
+                Some("2.2.2.2, 3.3.3.3, 4.4.4.4, 203.0.113.9"),
+                Some("203.0.113.9"),
             ),
-            // Garbage on the right: the peer, never the garbage.
+            // A private LAN client (nginx and Caddy on the same LAN): unknown, never the proxy.
+            (Some("172.18.0.2"), Some("192.168.1.50"), None),
+            (Some("172.18.0.2"), Some("10.0.0.1, 192.168.0.4"), None),
+            (Some("172.18.0.2"), Some("fd00::5, 10.0.0.1"), None),
+            // A public hop left of private proxies is the client.
             (
                 Some("172.18.0.2"),
-                Some("203.0.113.9, not-an-ip"),
-                "172.18.0.2",
+                Some("8.8.4.4, 10.0.0.1"),
+                Some("8.8.4.4"),
             ),
-            (Some("172.18.0.2"), Some(""), "172.18.0.2"),
-            (Some("172.18.0.2"), Some(" , "), "172.18.0.2"),
+            // Garbage on the right: unknown, never the garbage and never what is left of it.
+            (Some("172.18.0.2"), Some("203.0.113.9, not-an-ip"), None),
+            (Some("172.18.0.2"), Some("203.0.113.9, "), None),
+            (Some("172.18.0.2"), Some(""), None),
+            (Some("172.18.0.2"), Some(" , "), None),
+            (Some("172.18.0.2"), Some(",,,"), None),
+            (Some("172.18.0.2"), Some("unknown"), None),
+            (Some("172.18.0.2"), Some("999.1.1.1"), None),
+            (Some("172.18.0.2"), Some("203.0.113.9/24"), None),
             // Ports and brackets are cut.
-            (Some("172.18.0.2"), Some("203.0.113.9:5555"), "203.0.113.9"),
+            (
+                Some("172.18.0.2"),
+                Some("203.0.113.9:5555"),
+                Some("203.0.113.9"),
+            ),
             (
                 Some("172.18.0.2"),
                 Some("[2001:db8:1:2:3:4:5:6]:443"),
-                "2001:db8:1:2::/64",
+                Some("2001:db8:1:2::/64"),
             ),
             (
                 Some("172.18.0.2"),
                 Some("[2001:db8:1:2:3:4:5:6]"),
-                "2001:db8:1:2::/64",
+                Some("2001:db8:1:2::/64"),
             ),
             // IPv6 clients count per /64.
             (
                 Some("::1"),
                 Some("2001:db8:1:2:aaaa:bbbb:cccc:dddd"),
-                "2001:db8:1:2::/64",
+                Some("2001:db8:1:2::/64"),
             ),
-            (Some("::1"), Some("2001:db8:1:2:1::1"), "2001:db8:1:2::/64"),
+            (
+                Some("::1"),
+                Some("2001:db8:1:2:1::1"),
+                Some("2001:db8:1:2::/64"),
+            ),
+            (
+                Some("fd00::2"),
+                Some("2a00:1450::1"),
+                Some("2a00:1450:0:0::/64"),
+            ),
+            // IPv6 through docker-proxy: the peer is private, there is no header.
+            (Some("fd00::2"), None, None),
             // IPv4 in IPv6 is the IPv4 address.
             (
                 Some("::ffff:172.18.0.2"),
                 Some("::ffff:203.0.113.9"),
-                "203.0.113.9",
+                Some("203.0.113.9"),
             ),
-            (Some("::ffff:8.8.4.4"), None, "8.8.4.4"),
+            (Some("::ffff:8.8.4.4"), None, Some("8.8.4.4")),
+            (Some("::ffff:10.0.0.9"), Some("::ffff:192.168.1.5"), None),
+            (
+                Some("::ffff:10.0.0.9"),
+                Some("::ffff:8.8.8.8, ::ffff:10.0.0.1"),
+                Some("8.8.8.8"),
+            ),
         ];
         for (peer, xff, want) in cases {
             let peer = peer.and_then(ip);
-            assert_eq!(client_key(peer, *xff), *want, "{peer:?} {xff:?}");
+            assert_eq!(
+                client_addr(peer, *xff).as_deref(),
+                *want,
+                "{peer:?} {xff:?}"
+            );
         }
+    }
+
+    #[test]
+    fn keys_are_stable_hex_and_keyed() {
+        let a = LimitKeys::new("0123456789012345678901234567890123");
+        let b = LimitKeys::new("another secret another secret 1234567");
+        let k = a.user("ana");
+        assert_eq!(k.len(), 64);
+        assert!(k
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
+        assert_eq!(k, a.user("ana"));
+        assert_ne!(k, a.user("ben"));
+        assert_ne!(k, b.user("ana"));
+        // A name and an address with the same text still differ.
+        assert_ne!(a.user("unknown"), a.address(None));
+        assert_eq!(a.address(None), a.address(Some("unknown")));
+        assert_ne!(a.address(Some("1.2.3.4")), a.address(None));
+        assert!(!k.contains("ana"));
     }
 }

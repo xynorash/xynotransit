@@ -64,7 +64,16 @@ impl TestApp {
         Self::build(Duration::from_secs(60), false).await
     }
 
+    /// Open event streams look the person up again this often (30 seconds in production).
+    pub async fn with_stream_recheck(every: Duration) -> Self {
+        Self::build_with(Duration::from_secs(60), true, Some(every)).await
+    }
+
     async fn build(ttl: Duration, with_fixture: bool) -> Self {
+        Self::build_with(ttl, with_fixture, None).await
+    }
+
+    async fn build_with(ttl: Duration, with_fixture: bool, recheck: Option<Duration>) -> Self {
         let admin = admin_url();
         let db_name = format!("xt_test_{}", Uuid::new_v4().simple());
         let mut conn = PgConnection::connect(&admin)
@@ -140,6 +149,9 @@ impl TestApp {
         .unwrap();
         let mut state = AppState::new(pool, config, Mailer::capture());
         state.ticket_ttl = ttl;
+        if let Some(r) = recheck {
+            state.stream_recheck = r;
+        }
         let router = build_router(state.clone());
         TestApp {
             state,
@@ -313,7 +325,7 @@ impl TestApp {
         sqlx::query(
             "truncate table team, person, assignment, metric_def, kpi_def, period, report,
              report_metric_value, report_kpi_result, report_note, deck_run, deck_run_item,
-             deck_text, login_token, login_attempt, login_failure restart identity cascade",
+             deck_text, login_token, login_attempt, login_failure, login_success restart identity cascade",
         )
         .execute(&mut *tx)
         .await
@@ -391,7 +403,13 @@ impl TestApp {
     /// Give a person a password through the manager's reset and the person's own change, so the
     /// person ends up with `password`, no longer asked to change it. Returns a fresh token.
     pub async fn give_password(&self, person_id: &str, username: &str, password: &str) -> String {
-        let manager = self.token_for(CORA, true);
+        // The manager may have a password (and so an epoch) already.
+        let epoch: i32 = sqlx::query_scalar("select session_epoch from person where id = $1")
+            .bind(uuid::Uuid::parse_str(CORA).unwrap())
+            .fetch_one(&self.state.pool)
+            .await
+            .unwrap();
+        let manager = self.token_for_epoch(CORA, true, epoch);
         let (s, v) = self
             .call(
                 "POST",
@@ -415,6 +433,94 @@ impl TestApp {
             .await;
         assert_eq!(s, StatusCode::OK, "{v}");
         v["access_token"].as_str().unwrap().to_string()
+    }
+
+    /// A token that began with a link (or a password) `age_minutes` ago.
+    pub fn token_via(
+        &self,
+        person_id: &str,
+        controller: bool,
+        epoch: i32,
+        via: xynotransit_api::auth::Via,
+        age_minutes: i64,
+    ) -> String {
+        let role = if controller {
+            xynotransit_api::auth::Role::Controller
+        } else {
+            xynotransit_api::auth::Role::Contributor
+        };
+        let at = chrono::Utc::now() - chrono::Duration::minutes(age_minutes);
+        xynotransit_api::auth::issue_jwt_at(
+            SECRET,
+            person_id.parse().unwrap(),
+            role,
+            epoch,
+            via,
+            at,
+        )
+        .unwrap()
+        .0
+    }
+
+    /// The stored key of a username as typed.
+    pub fn user_key(&self, typed: &str) -> String {
+        self.state
+            .limit_keys
+            .user(&xynotransit_api::username::lookup_key(typed))
+    }
+
+    /// The stored key of a client address key (`None` is the unknown address).
+    pub fn addr_key(&self, addr: Option<&str>) -> String {
+        self.state.limit_keys.address(addr)
+    }
+
+    /// Write a failure that is `age_minutes` old (what a past wrong try left behind).
+    pub async fn add_failure(&self, typed: &str, addr: Option<&str>, age_minutes: i64) {
+        sqlx::query(
+            "insert into login_failure (username_key, address_key, at)
+             values ($1, $2, now() - make_interval(mins => $3::int))",
+        )
+        .bind(self.user_key(typed))
+        .bind(self.addr_key(addr))
+        .bind(age_minutes as i32)
+        .execute(&self.state.pool)
+        .await
+        .unwrap();
+    }
+
+    /// Write a successful sign-in that is `age_days` old.
+    pub async fn add_success(&self, typed: &str, addr: Option<&str>, age_days: i64) {
+        sqlx::query(
+            "insert into login_success (username_key, address_key, at)
+             values ($1, $2, now() - make_interval(days => $3::int))",
+        )
+        .bind(self.user_key(typed))
+        .bind(self.addr_key(addr))
+        .bind(age_days as i32)
+        .execute(&self.state.pool)
+        .await
+        .unwrap();
+    }
+
+    /// Failures stored for a typed name (all addresses).
+    pub async fn failures_of(&self, typed: &str) -> i64 {
+        sqlx::query_scalar("select count(*) from login_failure where username_key = $1")
+            .bind(self.user_key(typed))
+            .fetch_one(&self.state.pool)
+            .await
+            .unwrap()
+    }
+
+    /// Failures stored for a typed name from one address.
+    pub async fn pair_failures(&self, typed: &str, addr: Option<&str>) -> i64 {
+        sqlx::query_scalar(
+            "select count(*) from login_failure where username_key = $1 and address_key = $2",
+        )
+        .bind(self.user_key(typed))
+        .bind(self.addr_key(addr))
+        .fetch_one(&self.state.pool)
+        .await
+        .unwrap()
     }
 
     pub async fn sql(&self, q: &str) {

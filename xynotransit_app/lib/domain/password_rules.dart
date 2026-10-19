@@ -2,6 +2,11 @@
 /// same words as the API (xynotransit-api/src/rules.rs). The in-memory demo
 /// uses these too, and the parity test holds the numbers against
 /// xynotransit-api/tests/fixtures/rules.json.
+///
+/// Normalisation: the server normalises passwords to Unicode NFKC before it
+/// checks and hashes them (so "ﬁ" and "fi" are the same password). The hints
+/// in the app look at the raw text as typed; this is on purpose and the server
+/// has the last word. Usernames are trimmed and lower-cased on both sides.
 library;
 
 import 'common_passwords.dart';
@@ -88,8 +93,24 @@ class PasswordRules {
   static const tooManyResets =
       'Too many temporary passwords created. Try again later.';
 
-  /// Failed sign-ins allowed for one username in [window].
-  static const failuresPerUsername = 5;
+  /// Failed sign-ins allowed for one pair of username and address in
+  /// [window]; only that pair is locked.
+  static const failuresPerPair = 5;
+
+  /// Failed sign-ins for one username from any address in [window]. Then
+  /// every address that has not signed in as that person lately is locked.
+  static const failuresBackstop = 100;
+
+  /// Failed sign-ins from one known public address in [window].
+  static const failuresPerAddress = 30;
+
+  /// An address that signed in as the person within this many days is
+  /// trusted when the backstop applies.
+  static const trustDays = 30;
+
+  /// A session that began with a link may choose a new password without the
+  /// old one for this long.
+  static const linkRecovery = Duration(minutes: 15);
   static const window = Duration(minutes: 15);
   static const resetsPerHour = 30;
   static const resetLength = 16;

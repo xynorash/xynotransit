@@ -19,6 +19,8 @@ axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
+hkdf = "0.12"
+hmac = "0.12"
 jsonwebtoken = "9"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
 rand = "0.9"

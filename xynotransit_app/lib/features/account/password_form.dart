@@ -11,6 +11,10 @@ import '../../data/repository.dart';
 import '../../domain/password_rules.dart';
 import 'password_widgets.dart';
 
+const linkRecoveryNote =
+    'You signed in with a link, so you can choose a new password without the '
+    'old one.';
+
 /// Which of the three password moments this is.
 enum PasswordMode {
   /// A link sign-in, no password yet. Optional, can be skipped.
@@ -61,6 +65,10 @@ class _PasswordFormState extends ConsumerState<PasswordForm> {
   bool _busy = false;
   String? _error;
 
+  /// The server wanted the current password after all (the link session
+  /// grew too old while this screen was open).
+  bool _askCurrent = false;
+
   @override
   void dispose() {
     _current.dispose();
@@ -69,7 +77,12 @@ class _PasswordFormState extends ConsumerState<PasswordForm> {
     super.dispose();
   }
 
-  bool get _needsCurrent => widget.mode != PasswordMode.first;
+  bool get _linkRecovery =>
+      widget.mode != PasswordMode.first &&
+      !_askCurrent &&
+      (ref.read(userProvider).value?.recentLinkSession ?? false);
+
+  bool get _needsCurrent => widget.mode != PasswordMode.first && !_linkRecovery;
 
   Future<void> _save() async {
     final user = ref.read(authServiceProvider).currentUser;
@@ -107,7 +120,14 @@ class _PasswordFormState extends ConsumerState<PasswordForm> {
       if (!mounted) return;
       widget.onDone();
     } on RepositoryException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          if (_linkRecovery && e.message == PasswordRules.currentRequired) {
+            _askCurrent = true;
+          }
+        });
+      }
     } on Object {
       if (mounted) {
         setState(
@@ -130,6 +150,14 @@ class _PasswordFormState extends ConsumerState<PasswordForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (_linkRecovery) ...[
+            Text(
+              linkRecoveryNote,
+              key: const Key('link-recovery-note'),
+              style: bodyStyle(context, size: 15, height: 1.4),
+            ),
+            const SizedBox(height: 14),
+          ],
           if (_needsCurrent) ...[
             PasswordField(
               key: const Key('current-password'),

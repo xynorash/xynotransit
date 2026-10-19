@@ -63,11 +63,19 @@ abstract class Arena {
   /// Signs in with a username and a password, like the sign-in screen.
   /// Throws [RepositoryException] (an [ApiException] with `retryAfterSeconds`
   /// when locked) with the words of the server.
-  Future<PersonSession> signInWithPassword(String username, String password);
+  ///
+  /// [address] is the public address the sign-in appears to come from (a
+  /// TEST-NET address in the scenarios). Every later call of the session comes
+  /// from the same address. Null means the backend cannot name one.
+  Future<PersonSession> signInWithPassword(
+    String username,
+    String password, {
+    String? address,
+  });
 
   /// Signs in with the link a manager made (the first password after it has
   /// no current one).
-  Future<PersonSession> signInWithLinkSession(String url);
+  Future<PersonSession> signInWithLinkSession(String url, {String? address});
 
   /// The first month of the n-th period of this scenario (n = 0, 1, 2, ...).
   /// Consecutive n are consecutive months, far from real data.

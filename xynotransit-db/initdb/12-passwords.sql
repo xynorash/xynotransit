@@ -98,9 +98,17 @@ create table if not exists login_failure (
   ip           text        not null,
   at           timestamptz not null default now()
 );
-create index if not exists login_failure_user_idx on login_failure (username_key, at);
-create index if not exists login_failure_ip_idx   on login_failure (ip, at);
-create index if not exists login_failure_at_idx   on login_failure (at);
+-- (13-hashed-keys.sql later replaces this table: column ip becomes address_key. The indexes on ip
+-- are only made while that column exists, so this file still runs twice after 13.)
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'login_failure' and column_name = 'ip') then
+    create index if not exists login_failure_user_idx on login_failure (username_key, at);
+    create index if not exists login_failure_ip_idx   on login_failure (ip, at);
+    create index if not exists login_failure_at_idx   on login_failure (at);
+  end if;
+end $$;
 
 -- Who set, changed, reset or removed a password. kind: change (the person), reset and remove (a
 -- manager, issued_by), cli (the server command, no issuer). Never a password or a hash.

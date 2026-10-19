@@ -121,8 +121,11 @@ class MemoryRepository implements Repository {
 
   /// Like [_me], but also for a person who must choose a new password first
   /// (the only calls such a person may make).
-  AppUser _meRaw() {
-    final u = _currentUser();
+  AppUser _meRaw() => refreshed(_currentUser());
+
+  /// What the server would answer to `GET /api/me` for the session [u]: the
+  /// person as the catalog and the account know them now.
+  AppUser refreshed(AppUser u) {
     final id = u.personId;
     if (id != null) {
       final p = _catalog.personById(id);
@@ -144,8 +147,17 @@ class MemoryRepository implements Repository {
       hasPassword: a.password != null,
       mustChangePassword: a.mustChange,
       sessionEpoch: a.epoch,
+      viaLink: u.viaLink,
+      issuedAt: u.issuedAt,
+      recentLinkSession: _recentLink(u, a),
     );
   }
+
+  bool _recentLink(AppUser u, _Account a) =>
+      u.viaLink &&
+      a.password != null &&
+      u.issuedAt != null &&
+      _clock().difference(u.issuedAt!) <= PasswordRules.linkRecovery;
 
   // ---- Passwords ----
 
@@ -188,7 +200,7 @@ class MemoryRepository implements Repository {
 
   /// The signed-in state of [personId] as a fresh session, like the one the
   /// server hands out after a sign-in. Null personId is the demo manager.
-  AppUser sessionFor(String? personId) {
+  AppUser sessionFor(String? personId, {bool viaLink = false}) {
     final p = personId == null ? null : _catalog.personById(personId);
     final a = _accounts[personId ?? _managerKey]!;
     return AppUser(
@@ -199,11 +211,18 @@ class MemoryRepository implements Repository {
       hasPassword: a.password != null,
       mustChangePassword: a.mustChange,
       sessionEpoch: a.epoch,
+      viaLink: viaLink,
+      issuedAt: _clock(),
+      recentLinkSession: viaLink && a.password != null,
     );
   }
 
-  ApiException _locked(List<DateTime> times, DateTime now) {
-    final wait = times.first.add(PasswordRules.window).difference(now);
+  /// The 429 for a list of failures in the window: the person may try again
+  /// when enough of the oldest ones have aged out (so that fewer than [limit]
+  /// remain).
+  ApiException _locked(List<DateTime> times, int limit, DateTime now) {
+    final oldest = times[times.length - limit];
+    final wait = oldest.add(PasswordRules.window).difference(now);
     final s = wait.inMilliseconds <= 0
         ? 1
         : (wait.inMilliseconds + 999) ~/ 1000;
@@ -220,17 +239,80 @@ class MemoryRepository implements Repository {
     return l;
   }
 
+  /// The address key of a pair when the address cannot be determined.
+  static const unknownAddress = 'unknown';
+
+  String _pairKey(String user, String? address) =>
+      'pair|$user|${address ?? unknownAddress}';
+
+  /// Where a sign-in came from last: an address with a successful sign-in
+  /// (password or link) for this username within 30 days is trusted.
+  final _successes = <String, Map<String, DateTime>>{};
+
+  bool _trusted(String user, String? address, DateTime now) {
+    if (address == null) return false;
+    final at = _successes[user]?[address];
+    return at != null &&
+        now.difference(at) < Duration(days: PasswordRules.trustDays);
+  }
+
+  void _noteSuccess(String user, String? address, DateTime now) {
+    // An address nobody can name is no proof of anything.
+    if (address == null) return;
+    (_successes[user] ??= {})[address] = now;
+  }
+
+  /// Counts one failure for the pair, the username backstop and (for a known
+  /// address) the address.
+  void _noteFailure(String user, String? address, DateTime now) {
+    _recentFailures(_pairKey(user, address), now).add(now);
+    _recentFailures('user|$user', now).add(now);
+    if (address != null) _recentFailures('addr|$address', now).add(now);
+  }
+
+  /// Throws the 429 that applies, or returns. [backstop] is false for the
+  /// signed-in password change: failures from other addresses never lock it.
+  void _checkLocks(
+    String user,
+    String? address,
+    DateTime now, {
+    bool backstop = true,
+  }) {
+    final pair = _recentFailures(_pairKey(user, address), now);
+    if (pair.length >= PasswordRules.failuresPerPair) {
+      throw _locked(pair, PasswordRules.failuresPerPair, now);
+    }
+    if (address != null) {
+      final addr = _recentFailures('addr|$address', now);
+      if (addr.length >= PasswordRules.failuresPerAddress) {
+        throw _locked(addr, PasswordRules.failuresPerAddress, now);
+      }
+    }
+    if (backstop) {
+      final all = _recentFailures('user|$user', now);
+      if (all.length >= PasswordRules.failuresBackstop &&
+          !_trusted(user, address, now)) {
+        throw _locked(all, PasswordRules.failuresBackstop, now);
+      }
+    }
+  }
+
   /// Signs in with a username and a password, with the same answers as the
-  /// API: one wrong-login message for every reason, and 5 failures per
-  /// username in 15 minutes lock that name (also an unknown one) for a while.
-  AppUser loginWithPassword(String username, String password) {
+  /// API: one wrong-login message for every reason (also for an unknown
+  /// name). 5 failures per pair of username and [address] in 15 minutes lock
+  /// that pair only; 100 failures for the username from anywhere lock it for
+  /// every address that has not signed in as that person in 30 days; 30
+  /// failures from one known address lock that address. A null [address] is
+  /// one the server cannot name: it has no address limit.
+  AppUser loginWithPassword(
+    String username,
+    String password, {
+    String? address,
+  }) {
     _requireOnline();
     final key = trimText(username).toLowerCase();
     final now = _clock();
-    final fails = _recentFailures(key, now);
-    if (fails.length >= PasswordRules.failuresPerUsername) {
-      throw _locked(fails, now);
-    }
+    _checkLocks(key, address, now);
     final id = _accounts.entries
         .where((e) => e.value.username == key && e.key != _managerKey)
         .map((e) => e.key)
@@ -241,20 +323,23 @@ class MemoryRepository implements Repository {
         !person.active ||
         account?.password == null ||
         account!.password != password) {
-      fails.add(now);
+      _noteFailure(key, address, now);
       throw const UnauthorizedException(PasswordRules.wrongLogin);
     }
-    // The right password: this name starts again from zero (others do not).
-    fails.clear();
+    // The right password: this pair starts again from zero (others do not).
+    _recentFailures(_pairKey(key, address), now).clear();
+    _noteSuccess(key, address, now);
     return sessionFor(id);
   }
 
   /// Changes the password of [who] and returns the fresh session. Everything
-  /// older ends.
+  /// older ends. A session that began with a link at most 15 minutes ago
+  /// needs no current password.
   AppUser changePasswordOf(
     AppUser who, {
     String? currentPassword,
     required String newPassword,
+    String? address,
   }) {
     _requireOnline();
     // Check the session the caller holds.
@@ -272,19 +357,23 @@ class MemoryRepository implements Repository {
       throw const RepositoryException(PasswordRules.newRequired);
     }
     final now = _clock();
-    if (a.password != null) {
+    final issued = who.issuedAt;
+    final viaLink =
+        who.viaLink &&
+        issued != null &&
+        now.difference(issued) <= PasswordRules.linkRecovery;
+    if (a.password != null && !viaLink) {
       if (currentPassword == null || currentPassword.isEmpty) {
         throw const RepositoryException(PasswordRules.currentRequired);
       }
-      final fails = _recentFailures(a.username, now);
-      if (fails.length >= PasswordRules.failuresPerUsername) {
-        throw _locked(fails, now);
-      }
+      // Counts against the pair like a wrong login, but only this pair can
+      // lock it: others cannot lock a signed-in person out of their own change.
+      _checkLocks(a.username, address, now, backstop: false);
       if (currentPassword != a.password) {
-        fails.add(now);
+        _noteFailure(a.username, address, now);
         throw const ApiException(403, PasswordRules.currentWrong);
       }
-      fails.clear();
+      _recentFailures(_pairKey(a.username, address), now).clear();
       if (newPassword == a.password) {
         throw const RepositoryException(PasswordRules.sameAsCurrent);
       }
@@ -297,12 +386,13 @@ class MemoryRepository implements Repository {
       fullName: p?.fullName ?? who.label,
     );
     if (problem != null) throw RepositoryException(problem);
+    final hadPassword = a.password != null;
     a
       ..password = newPassword
       ..mustChange = false
       ..epoch += 1;
     passwordAudit.add((
-      kind: 'change',
+      kind: hadPassword && viaLink ? 'change-via-link' : 'change',
       personId: who.personId ?? _managerKey,
       issuedBy: null,
     ));
@@ -904,7 +994,7 @@ class MemoryRepository implements Repository {
   /// token: once, before it expires, for a person who is still active. Returns
   /// the person now signed in. Demo links are only displayed in the app; this
   /// is for tests and the contract suite.
-  AppUser redeemSignInLink(String url) {
+  AppUser redeemSignInLink(String url, {String? address}) {
     const refused = RepositoryException(
       'This link has expired or was already used. Ask for a new one.',
     );
@@ -916,7 +1006,10 @@ class MemoryRepository implements Repository {
     final p = _catalog.personById(link.personId);
     if (p == null || !p.active) throw refused;
     link.used = true;
-    return sessionFor(p.id);
+    final who = _catalog.personById(p.id)!;
+    final account = _accounts[who.id];
+    if (account != null) _noteSuccess(account.username, address, _clock());
+    return sessionFor(p.id, viaLink: true);
   }
 
   @override

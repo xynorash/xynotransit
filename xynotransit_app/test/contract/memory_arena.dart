@@ -118,15 +118,16 @@ class _Acting implements Repository {
 }
 
 class _MemorySession implements PersonSession {
-  _MemorySession(this._r, this._acting);
+  _MemorySession(this._r, this._acting, this._address);
   final MemoryRepository _r;
   final _Acting _acting;
+  final String? _address;
 
   @override
   Repository get repo => _acting;
 
   @override
-  Future<AppUser> me() async => _r.sessionFor(_acting.me.personId);
+  Future<AppUser> me() async => _r.refreshed(_acting.me);
 
   @override
   Future<void> changePassword({
@@ -137,6 +138,7 @@ class _MemorySession implements PersonSession {
       _acting.me,
       currentPassword: currentPassword,
       newPassword: newPassword,
+      address: _address,
     );
   }
 }
@@ -214,15 +216,26 @@ class MemoryArena implements Arena {
   @override
   Future<PersonSession> signInWithPassword(
     String username,
-    String password,
-  ) async => _MemorySession(
+    String password, {
+    String? address,
+  }) async => _MemorySession(
     _repo,
-    _Acting(_repo, _repo.loginWithPassword(username, password)),
+    _Acting(
+      _repo,
+      _repo.loginWithPassword(username, password, address: address),
+    ),
+    address,
   );
 
   @override
-  Future<PersonSession> signInWithLinkSession(String url) async =>
-      _MemorySession(_repo, _Acting(_repo, _repo.redeemSignInLink(url)));
+  Future<PersonSession> signInWithLinkSession(
+    String url, {
+    String? address,
+  }) async => _MemorySession(
+    _repo,
+    _Acting(_repo, _repo.redeemSignInLink(url, address: address)),
+    address,
+  );
 
   @override
   DateTime start(int n) => DateTime(2080, 1 + n);

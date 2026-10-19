@@ -96,11 +96,15 @@ class ApiAuthService implements AuthService, LinkSignIn {
     final j = asJson(
       await _api.post('/auth/verify', body: {'token': token}, auth: false),
     );
-    await _startSession(j);
+    // A link session may choose a new password without the old one for a
+    // few minutes; the server's /me below confirms it.
+    await _startSession(j, viaLink: true);
     // The answer has no username; ask who we are (best effort).
     try {
       final me = parseUser(await _api.get('/me'));
-      if (me.personId == _user?.personId) await _keep(me);
+      if (me.personId == _user?.personId) {
+        await _keep(me);
+      }
     } on Object {
       // Offline now? The sign-in stands; the name shows up on the next start.
     }
@@ -143,18 +147,31 @@ class ApiAuthService implements AuthService, LinkSignIn {
     await _tokens.save(access);
     final u = _user;
     if (u != null) {
-      await _keep(u.copyWith(hasPassword: true, mustChangePassword: false));
+      await _keep(
+        u.copyWith(
+          hasPassword: true,
+          mustChangePassword: false,
+          recentLinkSession: false,
+        ),
+      );
     }
   }
 
-  Future<void> _startSession(Map<String, Object?> j, {String? username}) async {
+  Future<void> _startSession(
+    Map<String, Object?> j, {
+    String? username,
+    bool viaLink = false,
+  }) async {
     final access = j['access_token'];
     if (access is! String || access.isEmpty) {
       throw const RepositoryException(
         'The server sent an answer the app cannot read.',
       );
     }
-    final user = parseSessionUser(j, username: username);
+    var user = parseSessionUser(j, username: username);
+    if (viaLink && user.hasPassword && j['recent_link_session'] != false) {
+      user = user.copyWith(recentLinkSession: true);
+    }
     await _tokens.save(access);
     await _keep(user);
   }
