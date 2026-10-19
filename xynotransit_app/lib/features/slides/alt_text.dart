@@ -15,9 +15,14 @@ String slideAltText(SlideSpec spec) {
       for (final m in s.snapshot.metrics) '${m.label}: ${m.total}.',
     ].join(' '),
     ResultsSlideSpec s =>
-      '${w.resultsTitle(s.snapshot)}. ${s.snapshot.well.length} highlights, ${s.snapshot.wrong.length} lowlights, '
-          '${s.snapshot.next.length} priorities for the next three months.',
-    CoverSpec s => '${w.title(s.periodLabel)}, ${s.periodLabel}.',
+      '${w.resultsTitle(s.snapshot)}. ${s.snapshot.well.length} ${spec.texts['highlightsTitle']}, '
+          '${s.snapshot.wrong.length} ${spec.texts['lowlightsTitle']}, '
+          '${s.snapshot.next.length} ${spec.texts['nextTitle']}.',
+    CoverSpec s => [
+      '${w.title(s.periodLabel)}, ${s.periodLabel}.',
+      if (spec.texts['dateText'].trim().isNotEmpty)
+        '${spec.texts['dateText'].trim()}.',
+    ].join(' '),
     DividerSpec s =>
       '${w.dividerTitle(s.team)}, ${s.people.length} ${s.people.length == 1 ? 'report' : 'reports'}.',
     SuggestionsSpec _ =>

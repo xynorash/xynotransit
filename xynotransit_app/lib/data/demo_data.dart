@@ -108,6 +108,11 @@ List<Report> buildDemoReports(
         assignmentId: a.id,
         status: ReportStatus.submitted,
         submittedAt: stamp.add(Duration(hours: i * 3)),
+        reporter: Reporter(
+          name: catalog.personOf(a).fullName,
+          country: catalog.teamOf(a).name,
+          role: a.roleTitle,
+        ),
         values: values,
         kpis: withComments,
         notes: {

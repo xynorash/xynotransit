@@ -125,7 +125,13 @@ class FormController extends Notifier<FormModel> {
       }
     }
     final queued = prefs.containsKey(_pendingKey(period, assignmentId));
-    final working = draft ?? _workingCopy(existing, period.id, assignmentId);
+    var working = draft ?? _workingCopy(existing, period.id, assignmentId);
+    working = working.copyWith(
+      reporter:
+          working.reporter ??
+          existing?.reporter ??
+          profileReporter(assignmentId),
+    );
     _syncLines(working);
     _comments.clear();
     state = FormModel(
@@ -151,6 +157,32 @@ class FormController extends Notifier<FormModel> {
       values: {for (final e in r.values.entries) e.key: List<int?>.of(e.value)},
       kpis: Map.of(r.kpis),
       notes: {for (final e in r.notes.entries) e.key: List<String>.of(e.value)},
+      reporter: r.reporter,
+    );
+  }
+
+  /// Name, country and role of the seat's profile: person full name, team
+  /// name and role title. What the form starts from.
+  Reporter profileReporter(String assignmentId) {
+    final a = _catalog.assignmentById(assignmentId);
+    if (a == null) return const Reporter();
+    return Reporter(
+      name: _catalog.personOf(a).fullName,
+      country: _catalog.teamOf(a).name,
+      role: a.roleTitle,
+    );
+  }
+
+  /// Own words for who the report is from. Empty and long values are kept as
+  /// typed: sending checks them.
+  void setReporter({String? name, String? country, String? role}) {
+    final r = state.report;
+    if (r == null) return;
+    final cur = r.reporter ?? const Reporter();
+    _change(
+      r.copyWith(
+        reporter: cur.copyWith(name: name, country: country, role: role),
+      ),
     );
   }
 
@@ -159,7 +191,11 @@ class FormController extends Notifier<FormModel> {
     final period = _period;
     if (period == null) return;
     ref.read(prefsProvider).remove(_draftKey(period, r.assignmentId));
-    final working = _workingCopy(r, period.id, r.assignmentId);
+    final working = _workingCopy(
+      r,
+      period.id,
+      r.assignmentId,
+    ).copyWith(reporter: r.reporter ?? profileReporter(r.assignmentId));
     _syncLines(working);
     _comments.clear();
     state = FormModel(

@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::error::ApiError;
 
 pub const MAX_METRICS: usize = 8;
-pub const MAX_KPIS: usize = 20;
+pub const MAX_KPIS: usize = 10;
 pub const MAX_LABEL: usize = 60;
 pub const MAX_KPI_TEXT: usize = 200;
 pub const MAX_ROLE_TITLE: usize = 80;
@@ -206,10 +206,10 @@ pub fn check_metrics(raw: &[(Option<Uuid>, String)]) -> Result<Vec<Entry>, ApiEr
     Ok(out)
 }
 
-/// 0..=20 targets, each 1..=200 characters.
+/// 0..=10 targets, each 1..=200 characters.
 pub fn check_kpis(raw: &[(Option<Uuid>, String)]) -> Result<Vec<Entry>, ApiError> {
     if raw.len() > MAX_KPIS {
-        return Err(ApiError::bad("A seat can have at most 20 targets."));
+        return Err(ApiError::bad("A seat can have at most 10 targets."));
     }
     let mut out = Vec::with_capacity(raw.len());
     for (id, text) in raw {
@@ -312,9 +312,9 @@ mod tests {
 
     #[test]
     fn kpi_rules() {
-        let many: Vec<_> = (0..20).map(|i| (None, format!("t{i}"))).collect();
+        let many: Vec<_> = (0..10).map(|i| (None, format!("t{i}"))).collect();
         assert!(check_kpis(&many).is_ok());
-        let too_many: Vec<_> = (0..21).map(|i| (None, format!("t{i}"))).collect();
+        let too_many: Vec<_> = (0..11).map(|i| (None, format!("t{i}"))).collect();
         assert!(check_kpis(&too_many).is_err());
         assert!(check_kpis(&[(None, "x".repeat(200))]).is_ok());
         assert!(check_kpis(&[(None, "x".repeat(201))]).is_err());

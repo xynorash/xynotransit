@@ -155,6 +155,14 @@ class _ReceivedCardState extends ConsumerState<ReceivedCard> {
                   ),
                 ),
                 const SizedBox(height: 8),
+                if (ref.watch(isControllerProvider)) ...[
+                  Text(
+                    'Generate with what is in: the slides do not need everyone.',
+                    key: const ValueKey('generate-partial-hint'),
+                    style: bodyStyle(context, size: 14, color: t.muted),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,

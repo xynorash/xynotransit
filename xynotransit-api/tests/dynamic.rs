@@ -1059,7 +1059,7 @@ async fn definition_errors_are_plain_and_change_nothing() {
         "A target can have at most 200 characters.",
     )
     .await;
-    let many: Vec<Value> = (0..21).map(|i| json!({"text": format!("t{i}")})).collect();
+    let many: Vec<Value> = (0..11).map(|i| json!({"text": format!("t{i}")})).collect();
     expect(
         &app,
         "PUT",
@@ -1067,7 +1067,7 @@ async fn definition_errors_are_plain_and_change_nothing() {
         &t,
         json!({"metrics": [], "kpis": many}),
         400,
-        "A seat can have at most 20 targets.",
+        "A seat can have at most 10 targets.",
     )
     .await;
     let belongs = "One of the counts or targets does not belong to this seat.";
@@ -1216,6 +1216,7 @@ async fn send(app: &TestApp, who: &str, period: &str, seat: &str, body: Value) {
 
 fn files_report(a: i64, b: i64, c: i64) -> Value {
     json!({
+        "reporter": {"name": "Ana Rakoto", "country": "Tana", "role": "Import"},
         "values": [
             {"metric_def_id": M_FILES, "month_offset": 0, "value": a},
             {"metric_def_id": M_FILES, "month_offset": 1, "value": b},
@@ -1255,6 +1256,7 @@ async fn summary_numbers_trend_and_label_grouping() {
         &aug,
         A_BEN,
         json!({
+            "reporter": {"name": "Ben Rabe", "country": "Tana", "role": "Export"},
             "values": [
                 {"metric_def_id": M_BOXES, "month_offset": 0, "value": 5},
                 {"metric_def_id": M_BOXES, "month_offset": 1, "value": 5},

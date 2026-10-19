@@ -238,6 +238,7 @@ Report parseReport(Object? data) {
     values: values,
     kpis: kpis,
     notes: notes,
+    reporter: Reporter.fromJson(j['reporter']),
   );
 }
 
@@ -267,6 +268,7 @@ Map<String, Object?> reportToJson(Report r) => {
       for (final (i, text) in r.notesOf(kind).indexed)
         {'kind': kind.name, 'position': i + 1, 'text': text},
   ],
+  if (r.reporter != null) 'reporter': r.reporter!.toJson(),
 };
 
 String? _commentOrNull(String? c) {

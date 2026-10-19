@@ -63,6 +63,7 @@ abstract class Repository {
   Stream<DeckRun?> watchDeck(String periodId);
 
   /// Controller only. Freezes the submitted reports into a new deck run.
+  /// Works with any number of reports, including none.
   Future<DeckRun> generateDeck(Period period, Catalog catalog);
 
   // ---- Manager only: who reports, on what ----
@@ -100,7 +101,7 @@ abstract class Repository {
     required List<KpiInput> kpis,
   });
 
-  /// Manager only. The words of the deck in force for the period: its own, or
+  /// Any signed-in person. The words of the deck in force for the period: its own, or
   /// carried over from the latest earlier period, or the built-in ones.
   Future<DeckTextsState> loadDeckTexts(String periodId);
 

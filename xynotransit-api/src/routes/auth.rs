@@ -33,43 +33,60 @@ async fn magic_link(
         return Err(ApiError::bad("Enter a valid email address."));
     }
 
-    let person: Option<(Uuid,)> =
-        sqlx::query_as("select id from person where active and lower(email) = $1")
-            .bind(&email)
-            .fetch_optional(&st.pool)
-            .await?;
-    // Unknown address: same answer as a known one, nothing sent.
-    let Some((person_id,)) = person else {
-        return Ok((StatusCode::ACCEPTED, Json(json!({}))));
-    };
-
-    let token = random_token();
-    // Serialise per person so parallel requests cannot all pass the count.
+    // The limit is keyed by the normalised email string, not by the person, so a known and an
+    // unknown address behave exactly the same (same 202s, same 429) and the answer never
+    // reveals whether an address is registered.
     let mut tx = st.pool.begin().await?;
+    // Serialise per address so parallel requests cannot all pass the count.
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-        .bind(person_id.to_string())
+        .bind(&email)
         .execute(&mut *tx)
         .await?;
-    // Insert only while fewer than the allowed number were created in the last hour.
-    let inserted = sqlx::query(
-        "insert into login_token (token_hash, person_id, expires_at)
-         select $1, $2, now() + make_interval(mins => $3)
-         where (select count(*) from login_token
-                where person_id = $2 and created_at > now() - interval '1 hour') < $4",
+    let counted = sqlx::query(
+        "insert into login_attempt (email)
+         select $1
+         where (select count(*) from login_attempt
+                where email = $1 and at > now() - interval '1 hour') < $2",
     )
-    .bind(hash_token(&token))
-    .bind(person_id)
-    .bind(LINK_MINUTES)
+    .bind(&email)
     .bind(MAX_LINKS_PER_HOUR)
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    tx.commit().await?;
-    if inserted == 0 {
+    if counted == 0 {
+        tx.commit().await?;
         return Err(ApiError::TooManyRequests(
             "Too many links requested. Try again later.".into(),
         ));
     }
+    // Housekeeping: attempts older than a day no longer matter.
+    sqlx::query("delete from login_attempt where email = $1 and at < now() - interval '1 day'")
+        .bind(&email)
+        .execute(&mut *tx)
+        .await?;
+
+    let person: Option<(Uuid,)> =
+        sqlx::query_as("select id from person where active and lower(email) = $1")
+            .bind(&email)
+            .fetch_optional(&mut *tx)
+            .await?;
+    // Unknown address: same answer as a known one, nothing sent.
+    let Some((person_id,)) = person else {
+        tx.commit().await?;
+        return Ok((StatusCode::ACCEPTED, Json(json!({}))));
+    };
+
+    let token = random_token();
+    sqlx::query(
+        "insert into login_token (token_hash, person_id, expires_at)
+         values ($1, $2, now() + make_interval(mins => $3))",
+    )
+    .bind(hash_token(&token))
+    .bind(person_id)
+    .bind(LINK_MINUTES)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
 
     let link = format!("{}/auth/verify?token={}", st.config.public_url, token);
     if st.config.log_magic_links {

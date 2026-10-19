@@ -79,12 +79,16 @@ class CoverSpec extends SlideSpec {
 class DividerSpec extends SlideSpec {
   const DividerSpec({
     required this.team,
+    required this.periodLabel,
     required this.index,
     required this.total,
     required this.people,
     super.texts,
   });
+
+  /// The country of this group, as first spelled in the deck.
   final String team;
+  final String periodLabel;
   final int index;
   final int total;
 
@@ -108,16 +112,27 @@ class SuggestionsSpec extends SlideSpec {
   final String periodLabel;
 }
 
-/// Deck order: cover, then per team a divider followed by two slides per person,
-/// then the suggestions page.
-/// Teams without a submitted report are skipped. Items are already in catalog order.
+/// Key that makes "Madagascar", " madagascar " and "MADAGASCAR" one group.
+String groupKey(String country) =>
+    country.trim().split(RegExp(r'\s+')).join(' ').toLowerCase();
+
+/// Deck order: cover, then per country a divider followed by two slides per
+/// person, then the suggestions page. Groups are by the country text of the
+/// snapshot (case and extra spaces ignored), in order of first appearance, and
+/// show the first spelling seen. With no reports the deck is the cover and the
+/// suggestions page. Items are already in catalog order.
 List<SlideSpec> buildDeck(DeckRun run, Period? period) {
-  final teams = <String>[];
-  final byTeam = <String, List<DeckItem>>{};
+  final names = <String>[];
+  final keys = <String>[];
+  final byKey = <String, List<DeckItem>>{};
   for (final it in run.items) {
     final t = it.snapshot.team;
-    if (!byTeam.containsKey(t)) teams.add(t);
-    byTeam.putIfAbsent(t, () => []).add(it);
+    final k = groupKey(t);
+    if (!byKey.containsKey(k)) {
+      keys.add(k);
+      names.add(t.trim().split(RegExp(r'\s+')).join(' '));
+    }
+    byKey.putIfAbsent(k, () => []).add(it);
   }
   final label = run.items.isNotEmpty
       ? run.items.first.snapshot.periodLabel
@@ -126,17 +141,21 @@ List<SlideSpec> buildDeck(DeckRun run, Period? period) {
     CoverSpec(
       periodLabel: label,
       meetingDate: period?.meetingDate,
-      teamCounts: [for (final t in teams) (t, byTeam[t]!.length)],
+      teamCounts: [
+        for (var i = 0; i < keys.length; i++)
+          (names[i], byKey[keys[i]]!.length),
+      ],
       texts: run.texts,
     ),
   ];
-  for (var i = 0; i < teams.length; i++) {
-    final items = byTeam[teams[i]]!;
+  for (var i = 0; i < keys.length; i++) {
+    final items = byKey[keys[i]]!;
     slides.add(
       DividerSpec(
-        team: teams[i],
+        team: names[i],
+        periodLabel: label,
         index: i + 1,
-        total: teams.length,
+        total: keys.length,
         people: [
           for (final it in items) '${it.snapshot.name} · ${it.snapshot.role}',
         ],

@@ -342,13 +342,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.text(
-        'Only 1 of 14 reports are in. Generate the slides with what you have?',
+        '1 of 14 reports are in. Generate the slides with what you have?',
       ),
       findsOneWidget,
     );
     await tester.tap(find.text('Wait'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Only 1 of 14'), findsNothing);
+    expect(find.textContaining('1 of 14 reports are in'), findsNothing);
 
     await tester.tap(find.text('Generate slides'));
     await tester.pumpAndSettle();

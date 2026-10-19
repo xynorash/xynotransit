@@ -1,0 +1,65 @@
+{
+  "note": "Shared contract: the Rust snapshot builder and the Dart live preview must both turn catalog + period + report into expected_snapshot. Name, role and team (= country) come from the reporter; metrics by series; targets by sort with status null when unanswered; notes by position (trimmed); months from the period start.",
+  "catalog": {
+    "assignment": {
+      "code": "ana-import",
+      "person_name": "Ana Rakoto",
+      "role_title": "Import",
+      "team_name": "Tana"
+    },
+    "metrics": [
+      {"id": "m-calls", "key": "calls", "label": "Calls", "series": 1},
+      {"id": "m-files", "key": "files", "label": "Files", "series": 0}
+    ],
+    "kpis": [
+      {"id": "k-noerr", "sort": 2, "text": "No errors"},
+      {"id": "k-ontime", "sort": 1, "text": "On time"},
+      {"id": "k-extra", "sort": 3, "text": "Keep costs down"}
+    ]
+  },
+  "period": {"start_month": "2026-11-01"},
+  "report": {
+    "reporter": {"name": "Ana R.", "country": "Madagascar", "role": "Import lead"},
+    "values": [
+      {"metric_def_id": "m-files", "month_offset": 0, "value": 10},
+      {"metric_def_id": "m-files", "month_offset": 1, "value": 11},
+      {"metric_def_id": "m-files", "month_offset": 2, "value": 12},
+      {"metric_def_id": "m-calls", "month_offset": 0, "value": 0},
+      {"metric_def_id": "m-calls", "month_offset": 1, "value": 5},
+      {"metric_def_id": "m-calls", "month_offset": 2, "value": 6}
+    ],
+    "kpis": [
+      {"kpi_def_id": "k-noerr", "status": "partly", "comment": "two slips"},
+      {"kpi_def_id": "k-ontime", "status": "met", "comment": null}
+    ],
+    "notes": [
+      {"kind": "well", "position": 2, "text": "Second good thing"},
+      {"kind": "well", "position": 1, "text": "  First good thing  "},
+      {"kind": "next", "position": 1, "text": "Hire one more"}
+    ]
+  },
+  "expected_snapshot": {
+    "assignmentCode": "ana-import",
+    "name": "Ana R.",
+    "role": "Import lead",
+    "team": "Madagascar",
+    "periodLabel": "Nov 2026 to Jan 2027",
+    "months": [
+      {"offset": 0, "year": 2026, "month": 11, "short": "Nov"},
+      {"offset": 1, "year": 2026, "month": 12, "short": "Dec"},
+      {"offset": 2, "year": 2027, "month": 1, "short": "Jan"}
+    ],
+    "metrics": [
+      {"key": "files", "label": "Files", "series": 0, "values": [10, 11, 12]},
+      {"key": "calls", "label": "Calls", "series": 1, "values": [0, 5, 6]}
+    ],
+    "targets": [
+      {"text": "On time", "status": "met"},
+      {"text": "No errors", "status": "partly"},
+      {"text": "Keep costs down", "status": null}
+    ],
+    "well": ["First good thing", "Second good thing"],
+    "wrong": [],
+    "next": ["Hire one more"]
+  }
+}

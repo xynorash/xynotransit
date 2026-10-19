@@ -15,7 +15,7 @@ class KpiInput {
 /// Limits shared by the forms, the in-memory demo and the API.
 abstract final class DefinitionRules {
   static const maxMetrics = 8;
-  static const maxKpis = 20;
+  static const maxKpis = 10;
   static const maxMetricLabel = 60;
   static const maxKpiText = 200;
   static const maxRoleTitle = 80;

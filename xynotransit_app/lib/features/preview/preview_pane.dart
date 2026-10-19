@@ -12,6 +12,7 @@ import '../../data/repository.dart';
 import '../../domain/deck.dart';
 import '../slides/slide_words.dart';
 import '../../domain/period.dart';
+import '../../domain/report.dart';
 import '../export/export_menu.dart';
 import '../slides/alt_text.dart';
 import '../slides/slide_view.dart';
@@ -83,6 +84,22 @@ final slideNavProvider = Provider<SlideNav>((ref) {
   return nav;
 });
 
+/// Reports sent (or re-sent) after [deck] was generated, or not in it at all.
+int reportsSinceDeck(DeckRun deck, Iterable<Report> reports) {
+  final inDeck = {for (final it in deck.items) it.reportId};
+  var k = 0;
+  for (final r in reports) {
+    if (!r.isSubmitted) continue;
+    final at = r.submittedAt;
+    final later = at != null && at.isAfter(deck.generatedAt);
+    if (later || r.id == null || !inDeck.contains(r.id)) k++;
+  }
+  return k;
+}
+
+String newReportsNotice(int k) =>
+    '$k ${k == 1 ? 'report was' : 'reports were'} sent after this deck was generated. Regenerate to include ${k == 1 ? 'it' : 'them'}.';
+
 const staleTextNotice =
     'Slide text changed after this deck was generated. Regenerate to apply it.';
 
@@ -99,10 +116,12 @@ class PreviewHeader extends ConsumerWidget {
     // when the saved words have moved on.
     final stale =
         deck != null &&
-        deck.items.isNotEmpty &&
-        saved != null &&
         ref.watch(isControllerProvider) &&
+        saved != null &&
         saved != deck.texts;
+    final newCount = deck != null && ref.watch(isControllerProvider)
+        ? reportsSinceDeck(deck, ref.watch(reportsProvider).value ?? const [])
+        : 0;
     return XCard(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
       child: Column(
@@ -138,11 +157,14 @@ class PreviewHeader extends ConsumerWidget {
               ),
             ],
           ),
-          if (deck != null && deck.items.isNotEmpty) ...[
+          if (deck != null) ...[
             const SizedBox(height: 6),
             Text(
-              SlideWords(deck.texts)
-                  .title(deck.items.first.snapshot.periodLabel),
+              SlideWords(deck.texts).title(
+                deck.items.isNotEmpty
+                    ? deck.items.first.snapshot.periodLabel
+                    : (period?.label ?? ''),
+              ),
               key: const ValueKey('deck-title'),
               style: bodyStyle(context, size: 16, weight: FontWeight.w500),
             ),
@@ -161,8 +183,21 @@ class PreviewHeader extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
           ],
+          if (newCount > 0) ...[
+            SoftBanner(
+              child: Semantics(
+                liveRegion: true,
+                child: Text(
+                  newReportsNotice(newCount),
+                  key: const ValueKey('new-reports-notice'),
+                  style: bodyStyle(context, size: 15, height: 1.4),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           const GenerateControls(),
-          if (deck != null && deck.items.isNotEmpty) ...[
+          if (deck != null) ...[
             const SizedBox(height: 12),
             _Navigator(run: deck, period: period),
           ],
@@ -220,6 +255,14 @@ class _GenerateControlsState extends ConsumerState<GenerateControls> {
     final n = reports.where((r) => r.isSubmitted).length;
     final total = catalog.assignments.length;
     final hint = '$n of $total reports in for ${period.label}';
+    final inIds = {
+      for (final r in reports)
+        if (r.isSubmitted) r.assignmentId,
+    };
+    final missing = [
+      for (final a in catalog.assignments)
+        if (!inIds.contains(a.id)) catalog.labelOf(a),
+    ];
 
     if (!isController) {
       return Text(
@@ -239,7 +282,7 @@ class _GenerateControlsState extends ConsumerState<GenerateControls> {
               label: _busy
                   ? 'Generating…'
                   : (deck == null ? 'Generate slides' : 'Regenerate slides'),
-              onPressed: _busy || n == 0
+              onPressed: _busy
                   ? null
                   : () {
                       if (n < total) {
@@ -263,9 +306,46 @@ class _GenerateControlsState extends ConsumerState<GenerateControls> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Only $n of $total reports are in. Generate the slides with what you have?',
+                  n == 0
+                      ? 'No reports are in yet. The deck will only have the cover and the suggestions page.'
+                      : '$n of $total reports are in. Generate the slides with what you have?',
+                  key: const ValueKey('confirm-text'),
                   style: bodyStyle(context, size: 15, height: 1.4),
                 ),
+                if (missing.isNotEmpty && n > 0) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Still missing',
+                    style: bodyStyle(context, size: 14, color: t.muted),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final m in missing.take(12))
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: t.soft,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            m,
+                            style: bodyStyle(context, size: 14, height: 1.3),
+                          ),
+                        ),
+                      if (missing.length > 12)
+                        Text(
+                          '+ ${missing.length - 12} more',
+                          style: bodyStyle(context, size: 14, color: t.muted),
+                        ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
@@ -419,7 +499,7 @@ class SlideListSliver extends ConsumerWidget {
     final deck = ref.watch(deckProvider).value;
     final period = ref.watch(periodProvider).value;
     final nav = ref.watch(slideNavProvider);
-    if (deck == null || deck.items.isEmpty) {
+    if (deck == null) {
       return SliverToBoxAdapter(
         key: nav.anchorKey,
         child: Padding(

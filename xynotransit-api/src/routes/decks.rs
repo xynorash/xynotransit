@@ -65,11 +65,11 @@ fn texts_json(settings: Map<String, Value>, inherited: Value, updated: Value) ->
 }
 
 async fn get_texts(
-    user: AuthUser,
+    _user: AuthUser,
     State(st): State<AppState>,
     Path(period_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    user.require_controller()?;
+    // Every signed-in active person: employees need the words for their live preview.
     let period_id = parse_id(&period_id)?;
     let mut conn = st.pool.acquire().await?;
     let period = find_period(&mut conn, period_id).await?;
@@ -264,11 +264,15 @@ async fn generate(
             v.into_iter().map(|n| n.1).collect()
         };
 
+        let (name, role, team) = snapshot::words(
+            &report["reporter"],
+            (&seat.full_name, &seat.role_title, &seat.team),
+        );
         let input = SnapshotInput {
             assignment_code: seat.code.clone(),
-            name: seat.full_name.clone(),
-            role: seat.role_title.clone(),
-            team: seat.team.clone(),
+            name,
+            role,
+            team,
             start_month: start,
             metrics: metric_defs
                 .iter()

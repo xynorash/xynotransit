@@ -215,7 +215,8 @@ void main() {
         label: 'Rova',
       );
       const only = 'Only the controller can do this.';
-      await expectLater(repo.loadDeckTexts(p.id), fails(only));
+      // Every signed-in person can read the words (the live preview needs them).
+      expect((await repo.loadDeckTexts(p.id)).texts, DeckTexts.defaults);
       await expectLater(
         repo.saveDeckTexts(p.id, DeckTexts.defaults),
         fails(only),

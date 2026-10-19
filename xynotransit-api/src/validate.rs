@@ -37,8 +37,67 @@ pub struct NoteIn {
     pub text: String,
 }
 
+pub const REPORTER_MAX_CHARS: usize = 80;
+
+/// Who the report is from, in the reporter's own words.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ReporterIn {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub country: String,
+    #[serde(default)]
+    pub role: String,
+}
+
+impl ReporterIn {
+    /// The three words, trimmed.
+    pub fn trimmed(&self) -> (String, String, String) {
+        (
+            self.name.trim().to_string(),
+            self.country.trim().to_string(),
+            self.role.trim().to_string(),
+        )
+    }
+}
+
+/// Problems of one reporter field: empty, too long (in characters), or not plain text.
+fn field_problem(value: &str, what: &str) -> Option<String> {
+    let t = value.trim();
+    if t.is_empty() {
+        Some(format!("Enter your {what}."))
+    } else if t.chars().count() > REPORTER_MAX_CHARS {
+        Some(format!(
+            "Your {what} can be at most {REPORTER_MAX_CHARS} characters."
+        ))
+    } else if t
+        .chars()
+        .any(|c| c.is_control() || crate::rules::is_invisible(c))
+    {
+        Some(format!("Your {what} must be plain text on one line."))
+    } else {
+        None
+    }
+}
+
+/// Problems of the reporter block, in field order. A missing block is three empty fields.
+pub fn reporter_problems(r: Option<&ReporterIn>) -> Vec<String> {
+    let empty = ReporterIn::default();
+    let r = r.unwrap_or(&empty);
+    [
+        field_problem(&r.name, "name"),
+        field_problem(&r.country, "country"),
+        field_problem(&r.role, "role"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ReportInput {
+    #[serde(default)]
+    pub reporter: Option<ReporterIn>,
     #[serde(default)]
     pub values: Vec<ValueIn>,
     #[serde(default)]
@@ -59,7 +118,7 @@ pub fn validate(
     kpi_ids: &[Uuid],
     start_month: NaiveDate,
 ) -> Vec<String> {
-    let mut problems = Vec::new();
+    let mut problems = reporter_problems(input.reporter.as_ref());
 
     // Ids must belong to this assignment.
     let metric_ids: HashSet<Uuid> = metrics.iter().map(|m| m.id).collect();
@@ -255,6 +314,11 @@ mod tests {
             }
         }
         ReportInput {
+            reporter: Some(ReporterIn {
+                name: "Rova R.".into(),
+                country: "Madagascar".into(),
+                role: "Import".into(),
+            }),
             values,
             kpis: vec![
                 KpiIn {
@@ -293,6 +357,9 @@ mod tests {
         assert_eq!(
             p,
             vec![
+                "Enter your name.".to_string(),
+                "Enter your country.".to_string(),
+                "Enter your role.".to_string(),
                 "Enter a number for \"Files\" in February.".to_string(),
                 "Enter a number for \"Calls\" in February.".to_string(),
                 "Answer all targets in step 3 (2 left).".to_string(),
@@ -448,5 +515,92 @@ mod tests {
         );
         i.notes = vec![note("well", 1, "   ")];
         assert_eq!(run(&f, &i), vec!["A note cannot be empty.".to_string()]);
+    }
+
+    fn with_reporter(f: &Fx, name: &str, country: &str, role: &str) -> Vec<String> {
+        let mut i = good(f);
+        i.reporter = Some(ReporterIn {
+            name: name.into(),
+            country: country.into(),
+            role: role.into(),
+        });
+        run(f, &i)
+    }
+
+    #[test]
+    fn missing_reporter_asks_for_all_three_first() {
+        let f = fx();
+        let mut i = good(&f);
+        i.reporter = None;
+        assert_eq!(
+            run(&f, &i),
+            vec![
+                "Enter your name.".to_string(),
+                "Enter your country.".to_string(),
+                "Enter your role.".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn blank_reporter_fields_are_messages_in_field_order() {
+        let f = fx();
+        assert_eq!(
+            with_reporter(&f, "   ", "Madagascar", ""),
+            vec![
+                "Enter your name.".to_string(),
+                "Enter your role.".to_string()
+            ]
+        );
+        assert_eq!(
+            with_reporter(&f, "Rova", "\t ", "Import"),
+            vec!["Enter your country.".to_string()]
+        );
+    }
+
+    #[test]
+    fn reporter_length_counts_characters_not_bytes() {
+        let f = fx();
+        // 80 two-byte characters (160 bytes) are fine; 81 are not.
+        let ok = "é".repeat(80);
+        assert!(with_reporter(&f, &ok, &ok, &ok).is_empty());
+        let long = "é".repeat(81);
+        assert_eq!(
+            with_reporter(&f, &long, "x", &long),
+            vec![
+                "Your name can be at most 80 characters.".to_string(),
+                "Your role can be at most 80 characters.".to_string()
+            ]
+        );
+        // Surrounding spaces do not count.
+        let padded = format!("  {}  ", "a".repeat(80));
+        assert!(with_reporter(&f, &padded, "x", "y").is_empty());
+    }
+
+    #[test]
+    fn reporter_must_be_plain_text() {
+        let f = fx();
+        assert_eq!(
+            with_reporter(&f, "Ro\nva", "x", "y"),
+            vec!["Your name must be plain text on one line.".to_string()]
+        );
+        assert_eq!(
+            with_reporter(&f, "x", "Mada\u{200B}gascar", "y"),
+            vec!["Your country must be plain text on one line.".to_string()]
+        );
+        assert_eq!(
+            with_reporter(&f, "x", "y", "a\0b"),
+            vec!["Your role must be plain text on one line.".to_string()]
+        );
+    }
+
+    #[test]
+    fn reporter_is_trimmed() {
+        let r = ReporterIn {
+            name: " A ".into(),
+            country: "B\u{a0}".into(),
+            role: "C".into(),
+        };
+        assert_eq!(r.trimmed(), ("A".into(), "B".into(), "C".into()));
     }
 }

@@ -8,10 +8,6 @@ import 'kpi_slide.dart';
 import 'results_slide.dart';
 import 'suggestions_slide.dart';
 
-/// The period label a divider shows for {period}. A DividerSpec does not carry
-/// it yet, so it is empty until the spec has a periodLabel.
-String dividerPeriodLabel(DividerSpec s) => '';
-
 /// The widget for one entry of the deck.
 Widget slideFor(SlideSpec spec, {Key? key}) => switch (spec) {
   CoverSpec s => SlideCover(
@@ -27,7 +23,7 @@ Widget slideFor(SlideSpec spec, {Key? key}) => switch (spec) {
     index: s.index,
     total: s.total,
     people: s.people,
-    periodLabel: dividerPeriodLabel(s),
+    periodLabel: s.periodLabel,
     texts: s.texts,
   ),
   KpiSlideSpec s => SlideKpi(s.snapshot, key: key, texts: s.texts),

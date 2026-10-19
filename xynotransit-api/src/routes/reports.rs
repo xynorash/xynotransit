@@ -32,8 +32,18 @@ pub async fn load_reports(
     assignment: Option<Uuid>,
     only_submitted: bool,
 ) -> Result<Vec<Value>, ApiError> {
-    let rows: Vec<(Uuid, Uuid, String, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "select id, assignment_id, status::text, submitted_at from report
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        Uuid,
+        Uuid,
+        String,
+        Option<DateTime<Utc>>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "select id, assignment_id, status::text, submitted_at,
+                reporter_name, reporter_country, reporter_role from report
          where period_id = $1 and ($2::uuid is null or assignment_id = $2)
            and (not $3 or status = 'submitted')
          order by created_at, id",
@@ -88,12 +98,21 @@ pub async fn load_reports(
 
     Ok(rows
         .into_iter()
-        .map(|(id, assignment_id, status, submitted_at)| {
+        .map(|(id, assignment_id, status, submitted_at, rn, rc, rr)| {
+            // Reports sent before reporter words existed have none: null, and the deck falls
+            // back to the catalog profile.
+            let reporter = match (rn, rc, rr) {
+                (Some(name), Some(country), Some(role)) => {
+                    json!({"name": name, "country": country, "role": role})
+                }
+                _ => Value::Null,
+            };
             json!({
                 "id": id.to_string(),
                 "period_id": period_id.to_string(),
                 "assignment_id": assignment_id.to_string(),
                 "status": status,
+                "reporter": reporter,
                 "submitted_at": submitted_at.map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true)),
                 "values": v_by.remove(&id).unwrap_or_default(),
                 "kpis": k_by.remove(&id).unwrap_or_default(),
@@ -190,14 +209,23 @@ async fn send(
         return Err(ApiError::BadRequest(first));
     }
 
+    // validate() accepted it, so the block exists.
+    let reporter = body.reporter.as_ref().ok_or(ApiError::Internal)?.trimmed();
     let (report_id,): (Uuid,) = sqlx::query_as(
-        "insert into report (period_id, assignment_id, status) values ($1, $2, 'draft')
+        "insert into report (period_id, assignment_id, status, reporter_name, reporter_country, reporter_role)
+         values ($1, $2, 'draft', $3, $4, $5)
          on conflict (period_id, assignment_id)
-         do update set status = 'draft', submitted_at = null
+         do update set status = 'draft', submitted_at = null,
+           reporter_name = excluded.reporter_name,
+           reporter_country = excluded.reporter_country,
+           reporter_role = excluded.reporter_role
          returning id",
     )
     .bind(period_id)
     .bind(assignment_id)
+    .bind(&reporter.0)
+    .bind(&reporter.1)
+    .bind(&reporter.2)
     .fetch_one(&mut *tx)
     .await?;
 

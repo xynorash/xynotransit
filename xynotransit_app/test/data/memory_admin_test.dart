@@ -458,6 +458,11 @@ void main() {
       final r = Report(
         periodId: period.id,
         assignmentId: rova.id,
+        reporter: const Reporter(
+          name: 'Rova',
+          country: 'Madagascar',
+          role: 'Agent',
+        ),
         values: {
           for (final m in saved.metrics) m.id: [1, 1, 1],
         },

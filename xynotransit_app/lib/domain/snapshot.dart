@@ -124,11 +124,26 @@ class ReportSnapshot {
         for (final k in assignment.kpis)
           SnapshotTarget(text: k.text, status: report.kpis[k.id]?.status),
       ],
-      well: List.of(report.notesOf(NoteKind.well)),
-      wrong: List.of(report.notesOf(NoteKind.wrong)),
-      next: List.of(report.notesOf(NoteKind.next)),
+      well: [for (final s in report.notesOf(NoteKind.well)) s.trim()],
+      wrong: [for (final s in report.notesOf(NoteKind.wrong)) s.trim()],
+      next: [for (final s in report.notesOf(NoteKind.next)) s.trim()],
     );
   }
+
+  /// The live preview of a form in progress: same as [build], and safe on a
+  /// partial form (blank numbers count 0, unanswered targets stay null, blank
+  /// reporter parts fall back to the profile).
+  static ReportSnapshot draft(
+    Report draft,
+    Assignment assignment,
+    Catalog catalog,
+    Period period,
+  ) => build(
+    report: draft,
+    assignment: assignment,
+    catalog: catalog,
+    period: period,
+  );
 
   Map<String, Object?> toJson() => {
     'assignmentCode': assignmentCode,
@@ -167,3 +182,12 @@ class ReportSnapshot {
     );
   }
 }
+
+/// The employee's live preview: what the slides would show for [draft] now.
+/// Never throws on a partial form.
+ReportSnapshot buildDraftSnapshot(
+  Report draft,
+  Assignment assignment,
+  Catalog catalog,
+  Period period,
+) => ReportSnapshot.draft(draft, assignment, catalog, period);

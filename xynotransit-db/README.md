@@ -58,6 +58,7 @@ The API variables `SMTP_HOST` (`mailpit`), `SMTP_PORT` (`1025`) and `BIND` (`0.0
 | `02-api.sql` | `login_token` table and the NOTIFY triggers for live updates. |
 | `03-dynamic.sql` | Widens the `metric_def.series` check to 0..9999 so a seat can have up to 8 counts and the API can reorder them. Safe to run again. |
 | `04-deck-text.sql` | `deck_text` (the slide words of a period) and `deck_run.texts` (the words frozen into each deck). Safe to run again. |
+| `05-reporter.sql` | `report.reporter_name/country/role` (null on old rows) and `login_attempt` (magic link rate limit by email string). Safe to run again. |
 
 A fresh database has an empty catalog. The first manager comes from `BOOTSTRAP_CONTROLLER_EMAIL` and builds teams, people and seats in the app. The old seed (`10-seed.sql`, `20-seed-demo.sql`) lives in `examples/` and is not loaded automatically; see `examples/README.md` to load it by hand.
 
@@ -67,7 +68,7 @@ To apply a new file to an existing volume, run it by hand:
 docker compose exec -T db psql -U xynotransit -d xynotransit < initdb/02-api.sql
 ```
 
-For the slide words, run `initdb/04-deck-text.sql` the same way on a volume made before it existed. Existing data is kept and decks made earlier read as the default words.
+For the slide words, run `initdb/04-deck-text.sql` the same way on a volume made before it existed. Existing data is kept and decks made earlier read as the default words. Likewise run `initdb/05-reporter.sql` on a volume made before it existed.
 
 ## Useful commands
 

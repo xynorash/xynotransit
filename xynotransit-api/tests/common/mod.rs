@@ -85,6 +85,7 @@ impl TestApp {
             "02-api.sql",
             "03-dynamic.sql",
             "04-deck-text.sql",
+            "05-reporter.sql",
         ] {
             let sql = std::fs::read_to_string(format!("{initdb}{file}")).unwrap();
             sqlx::raw_sql(&sql).execute(&pool).await.unwrap();
@@ -261,6 +262,7 @@ impl Drop for TestApp {
 
 pub fn ana_report() -> Value {
     json!({
+        "reporter": {"name": "Ana Rakoto", "country": "Tana", "role": "Import"},
         "values": [
             {"metric_def_id": M_FILES, "month_offset": 0, "value": 10},
             {"metric_def_id": M_FILES, "month_offset": 1, "value": 11},
@@ -283,6 +285,7 @@ pub fn ana_report() -> Value {
 
 pub fn ben_report() -> Value {
     json!({
+        "reporter": {"name": "Ben Rabe", "country": "Tana", "role": "Export"},
         "values": [
             {"metric_def_id": M_BOXES, "month_offset": 0, "value": 1},
             {"metric_def_id": M_BOXES, "month_offset": 1, "value": 2},
@@ -295,6 +298,7 @@ pub fn ben_report() -> Value {
 
 pub fn cora_report() -> Value {
     json!({
+        "reporter": {"name": "Cora Boss", "country": "Antsirabe", "role": "Operations"},
         "values": [],
         "kpis": [{"kpi_def_id": K_CALM, "status": "met"}],
         "notes": [{"kind": "wrong", "position": 1, "text": "Too many meetings"}],

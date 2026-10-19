@@ -74,6 +74,7 @@ void main() {
         final r = Report(
           periodId: 'p',
           assignmentId: rova.id,
+          reporter: const Reporter(name: 'A', country: 'B', role: 'C'),
           values: {
             rova.metrics[0].id: [1, null, 3],
             rova.metrics[1].id: [null, null, null],
@@ -90,8 +91,23 @@ void main() {
 
     test('roles without counts only need targets', () {
       final shalini = catalog.assignmentByCode('shalini')!;
+      final r = Report(
+        periodId: 'p',
+        assignmentId: shalini.id,
+        reporter: const Reporter(name: 'A', country: 'B', role: 'C'),
+      );
+      expect(r.validate(shalini, period), [
+        'Answer all targets in step 3 (4 left).',
+      ]);
+    });
+
+    test('a report without a reporter needs name, country and role first', () {
+      final shalini = catalog.assignmentByCode('shalini')!;
       final r = Report(periodId: 'p', assignmentId: shalini.id);
       expect(r.validate(shalini, period), [
+        'Enter your name.',
+        'Enter your country.',
+        'Enter your role.',
         'Answer all targets in step 3 (4 left).',
       ]);
     });
@@ -188,7 +204,11 @@ void main() {
 
     test('refuses an incomplete report with a readable message', () async {
       final rado = catalog.assignmentByCode('rado')!;
-      final r = Report(periodId: period.id, assignmentId: rado.id);
+      final r = Report(
+        periodId: period.id,
+        assignmentId: rado.id,
+        reporter: const Reporter(name: 'A', country: 'B', role: 'C'),
+      );
       expect(
         repo.sendReport(r),
         throwsA(

@@ -273,7 +273,13 @@ void main() {
       expect(find.text('Reports'), findsNothing);
       await tester.tap(find.byTooltip('Menu'));
       await tester.pumpAndSettle();
-      for (final t in ['Overview', 'Reports', 'Deck text', 'People', 'Fill in a report']) {
+      for (final t in [
+        'Overview',
+        'Reports',
+        'Deck text',
+        'People',
+        'Fill in a report',
+      ]) {
         expect(find.text(t), findsWidgets, reason: t);
       }
       await tester.tap(find.text('Reports').last);
@@ -283,7 +289,13 @@ void main() {
 
     testWidgets('a contributor has no section links', (tester) async {
       await pumpApp(tester, demo: true, user: tahina, location: '/');
-      for (final t in ['Overview', 'Reports', 'Deck text', 'People', 'Fill in a report']) {
+      for (final t in [
+        'Overview',
+        'Reports',
+        'Deck text',
+        'People',
+        'Fill in a report',
+      ]) {
         expect(find.text(t), findsNothing, reason: t);
       }
     });

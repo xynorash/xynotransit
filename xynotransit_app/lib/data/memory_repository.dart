@@ -206,6 +206,7 @@ class MemoryRepository implements Repository {
       id: i >= 0 ? list[i].id : 'r-${++_seq}',
       status: ReportStatus.submitted,
       submittedAt: _clock(),
+      reporter: Reporter.fromJson(report.reporter?.toJson()),
     );
     if (i >= 0) {
       list[i] = saved;
@@ -229,6 +230,7 @@ class MemoryRepository implements Repository {
     if (!_currentUser().isController) {
       throw const RepositoryException('Only the controller can do this.');
     }
+    // Works with any number of submitted reports, none included.
     final submitted = _reportsOf(period.id)
         .where((r) => r.isSubmitted)
         .toList();
@@ -500,7 +502,7 @@ class MemoryRepository implements Repository {
       throw const RepositoryException('A seat can have 8 counts at most.');
     }
     if (kpis.length > DefinitionRules.maxKpis) {
-      throw const RepositoryException('A seat can have 20 targets at most.');
+      throw const RepositoryException('A seat can have at most 10 targets.');
     }
     final labels = <String>{};
     for (final m in metrics) {
@@ -640,7 +642,9 @@ class MemoryRepository implements Repository {
 
   @override
   Future<DeckTextsState> loadDeckTexts(String periodId) async {
-    _requireController();
+    // Every signed-in person reads the words: the live preview needs them.
+    _requireOnline();
+    _currentUser();
     if (!_periods.containsKey(periodId)) {
       throw const RepositoryException('That period does not exist.');
     }

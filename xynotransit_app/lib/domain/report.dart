@@ -36,6 +36,15 @@ class Reporter {
 
   static const maxLength = 80;
 
+  /// Control, format (zero width) and separator characters, bar the plain space.
+  static final _hidden = RegExp(
+    r'[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]|(?!\u0020)\p{Zs}',
+    unicode: true,
+  );
+
+  /// True when [s] holds only visible characters and plain spaces.
+  static bool isPlain(String s) => !_hidden.hasMatch(s);
+
   final String name;
   final String country;
   final String role;
@@ -51,15 +60,21 @@ class Reporter {
     if (name.trim().isEmpty)
       'Enter your name.'
     else if (name.trim().runes.length > maxLength)
-      'Your name can be at most $maxLength characters.',
+      'Your name can be at most $maxLength characters.'
+    else if (!isPlain(name.trim()))
+      'Your name can only use plain text.',
     if (country.trim().isEmpty)
       'Enter your country.'
     else if (country.trim().runes.length > maxLength)
-      'Your country can be at most $maxLength characters.',
+      'Your country can be at most $maxLength characters.'
+    else if (!isPlain(country.trim()))
+      'Your country can only use plain text.',
     if (role.trim().isEmpty)
       'Enter your role.'
     else if (role.trim().runes.length > maxLength)
-      'Your role can be at most $maxLength characters.',
+      'Your role can be at most $maxLength characters.'
+    else if (!isPlain(role.trim()))
+      'Your role can only use plain text.',
   ];
 
   Map<String, Object?> toJson() => {

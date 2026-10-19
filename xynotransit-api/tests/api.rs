@@ -271,7 +271,10 @@ async fn sixth_link_in_an_hour_is_rate_limited() {
         )
         .await;
     assert_eq!(s, StatusCode::ACCEPTED);
-    app.sql("update login_token set created_at = now() - interval '2 hours' where person_id = '00000000-0000-0000-0000-0000000000a1'").await;
+    app.sql(
+        "update login_attempt set at = now() - interval '2 hours' where email = 'ana@example.org'",
+    )
+    .await;
     let (s, _) = app
         .call(
             "POST",
@@ -652,6 +655,30 @@ async fn every_validation_problem_is_said_in_plain_words() {
         &ana,
         &period,
         json!({"values": [], "kpis": [], "notes": []}),
+        "Enter your name.",
+    )
+    .await;
+    let mut b = ana_report();
+    b["reporter"]["country"] = json!("  ");
+    expect(&app, &ana, &period, b, "Enter your country.").await;
+    let mut b = ana_report();
+    b["reporter"]["role"] = json!("r".repeat(81));
+    expect(
+        &app,
+        &ana,
+        &period,
+        b,
+        "Your role can be at most 80 characters.",
+    )
+    .await;
+    let mut b = ana_report();
+    b["values"] = json!([]);
+    b["kpis"] = json!([]);
+    expect(
+        &app,
+        &ana,
+        &period,
+        b,
         "Enter a number for \"Files\" in February.",
     )
     .await;

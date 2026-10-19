@@ -28,7 +28,16 @@ class ExportMenu extends StatefulWidget {
 class _ExportMenuState extends State<ExportMenu> {
   String? _progress;
 
+  /// 0..1 while slides are drawn, null when the length is not known.
+  double? _fraction;
+
+  /// True from the first click until the export is over, so a second click
+  /// cannot start another one.
+  bool _busy = false;
+
   Future<void> _export(_Format format) async {
+    if (_busy) return;
+    _busy = true;
     final slides = buildDeck(widget.run, widget.period);
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -37,11 +46,19 @@ class _ExportMenuState extends State<ExportMenu> {
         slides,
         isActive: () => mounted,
         onProgress: (i, n) {
-          if (mounted) setState(() => _progress = 'Exporting ${i + 1} of $n…');
+          if (mounted) {
+            setState(() {
+              _progress = 'Exporting slide ${i + 1} of $n…';
+              _fraction = (i + 1) / n;
+            });
+          }
         },
       );
       if (!mounted) return;
-      setState(() => _progress = 'Saving…');
+      setState(() {
+        _progress = 'Saving…';
+        _fraction = null;
+      });
       final base = deckFileBase(widget.period, title: meetingTitleOf(slides));
       switch (format) {
         case _Format.pdf:
@@ -66,7 +83,13 @@ class _ExportMenuState extends State<ExportMenu> {
         SnackBar(content: Text('Could not export the slides. $e')),
       );
     } finally {
-      if (mounted) setState(() => _progress = null);
+      _busy = false;
+      if (mounted) {
+        setState(() {
+          _progress = null;
+          _fraction = null;
+        });
+      }
     }
   }
 
@@ -100,15 +123,35 @@ class _ExportMenuState extends State<ExportMenu> {
     if (_progress != null) {
       return Semantics(
         liveRegion: true,
-        child: Text(
-          _progress!,
-          style: monoStyle(context, size: 13, color: t.ink),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 220, maxWidth: 320),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _progress!,
+                style: monoStyle(context, size: 16, color: t.ink),
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  key: const ValueKey('export-progress'),
+                  value: _fraction,
+                  minHeight: 8,
+                  color: t.accent,
+                  backgroundColor: t.soft,
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }
     return PopupMenuButton<_Format>(
       tooltip: 'Export the slides',
-      onSelected: (f) => unawaited(_export(f)),
+      onSelected: _busy ? null : (f) => unawaited(_export(f)),
       itemBuilder: (_) => const [
         PopupMenuItem(value: _Format.pdf, child: Text('PDF')),
         PopupMenuItem(value: _Format.pptx, child: Text('PowerPoint (PPTX)')),

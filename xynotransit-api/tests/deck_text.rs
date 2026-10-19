@@ -18,17 +18,24 @@ fn uri(p: &str) -> String {
 }
 
 #[tokio::test]
-async fn only_the_controller_can_read_or_write_and_unknown_periods_are_404() {
+async fn everyone_reads_only_the_controller_writes_and_unknown_periods_are_404() {
     let app = TestApp::new().await;
     let ana = app.login("ana@example.org").await;
     let cora = app.login("cora@example.org").await;
     let p = app.ensure_period(&ana, "2026-02-01").await;
 
+    // An employee reads the words (live preview) but cannot change them.
+    let (s, v) = app.call("GET", &uri(&p), Some(&ana), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["inherited_from"], "defaults");
+
     for method in ["GET", "PUT"] {
         let body = (method == "PUT").then(|| json!({"settings": {}}));
-        let (s, v) = app.call(method, &uri(&p), Some(&ana), body.clone()).await;
-        assert_eq!(s, StatusCode::FORBIDDEN);
-        assert_eq!(v["error"], "Only the controller can do this.");
+        if method == "PUT" {
+            let (s, v) = app.call(method, &uri(&p), Some(&ana), body.clone()).await;
+            assert_eq!(s, StatusCode::FORBIDDEN);
+            assert_eq!(v["error"], "Only the controller can do this.");
+        }
         let (s, _) = app.call(method, &uri(&p), None, body.clone()).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         let missing = uri("00000000-0000-0000-0000-00000000ffff");

@@ -211,16 +211,11 @@ class _PeriodFieldsState extends ConsumerState<PeriodFields> {
   }
 }
 
-class PeriodPersonCard extends ConsumerStatefulWidget {
+class PeriodPersonCard extends ConsumerWidget {
   const PeriodPersonCard({super.key});
 
   @override
-  ConsumerState<PeriodPersonCard> createState() => _PeriodPersonCardState();
-}
-
-class _PeriodPersonCardState extends ConsumerState<PeriodPersonCard> {
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
     final start = ref.watch(periodSelectionProvider);
     final form = ref.watch(formControllerProvider);
@@ -229,14 +224,103 @@ class _PeriodPersonCardState extends ConsumerState<PeriodPersonCard> {
     final allowed = catalog == null
         ? const <Assignment>[]
         : allowedAssignments(catalog, user);
+    final isManager = user?.isController ?? false;
+    final selected = allowed.any((a) => a.id == form.assignmentId)
+        ? form.assignmentId
+        : null;
+    final period = ref.watch(periodProvider);
+    // Only someone who can report for several seats chooses between them.
+    final showChooser = allowed.length > 1;
 
+    return StepCard(
+      step: 1,
+      title: 'Who you are',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (showChooser && catalog != null) ...[
+            Labeled(
+              label: 'Reporting for',
+              child: _SeatChooser(
+                catalog: catalog,
+                allowed: allowed,
+                selected: selected,
+                epoch: form.epoch,
+                withNames: isManager,
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+          if (form.hasPerson) ...[
+            const IdentityFields(),
+            const SizedBox(height: 14),
+          ],
+          const PeriodFields(),
+          const SizedBox(height: 12),
+          Text(
+            period.hasValue
+                ? 'This report covers ${period.requireValue.label}.'
+                : 'This report covers ${Period.labelFor(start)}.',
+            style: monoStyle(context),
+          ),
+          if (user != null && allowed.isEmpty) ...[
+            const SizedBox(height: 12),
+            SoftBanner(
+              child: Text(
+                'Your account is not linked to a person yet. Ask the controller to add your email.',
+                style: bodyStyle(context, size: 15, height: 1.4),
+              ),
+            ),
+          ],
+          if (form.sentAt != null) ...[
+            const SizedBox(height: 12),
+            SoftBanner(
+              child: Text(
+                'You already sent this report on ${shortDate(form.sentAt!)}. Sending again replaces it.',
+                style: bodyStyle(context, size: 15, height: 1.4),
+              ),
+            ),
+          ],
+          if (!form.hasPerson && showChooser) ...[
+            const SizedBox(height: 12),
+            Text(
+              'Choose who you are reporting for to see the fields for the role.',
+              style: bodyStyle(context, size: 15, color: t.muted, height: 1.4),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Picks the seat to report for. Controllers see everyone, grouped by team;
+/// an employee with several seats sees the role titles of their seats.
+class _SeatChooser extends ConsumerWidget {
+  const _SeatChooser({
+    required this.catalog,
+    required this.allowed,
+    required this.selected,
+    required this.epoch,
+    required this.withNames,
+  });
+
+  final Catalog catalog;
+  final List<Assignment> allowed;
+  final String? selected;
+  final int epoch;
+  final bool withNames;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = context.tokens;
     final items = <DropdownMenuItem<String?>>[
       const DropdownMenuItem<String?>(
         value: null,
         child: Text('Choose your name'),
       ),
     ];
-    if (catalog != null) {
+    if (withNames) {
       for (final team in catalog.teams) {
         final inTeam = allowed.where((a) => a.teamId == team.id).toList();
         if (inTeam.isEmpty) continue;
@@ -263,67 +347,167 @@ class _PeriodPersonCardState extends ConsumerState<PeriodPersonCard> {
           );
         }
       }
+    } else {
+      for (final a in allowed) {
+        items.add(
+          DropdownMenuItem<String?>(value: a.id, child: Text(a.roleTitle)),
+        );
+      }
     }
-    final selected = allowed.any((a) => a.id == form.assignmentId)
-        ? form.assignmentId
-        : null;
-    final period = ref.watch(periodProvider);
+    return DropdownButtonFormField<String?>(
+      initialValue: selected,
+      key: ValueKey('person-${selected ?? 'none'}-${allowed.length}-$epoch'),
+      isExpanded: true,
+      decoration: xInput(context),
+      items: items,
+      onChanged: (id) => unawaited(
+        ref.read(formControllerProvider.notifier).selectAssignment(id),
+      ),
+    );
+  }
+}
 
-    return StepCard(
-      step: 1,
-      title: 'Period and person',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+/// Characters that cannot be seen or that act as controls.
+final _invisible = RegExp(r'[\u0000-\u001F\u007F-\u009F​-‏ - ⁠-⁯﻿]');
+
+/// Name, country and role, typed by the reporter. They start from the profile
+/// and are what the slides show.
+class IdentityFields extends ConsumerWidget {
+  const IdentityFields({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final epoch = ref.watch(formControllerProvider.select((f) => f.epoch));
+    final problems = ref.watch(
+      formControllerProvider.select((f) => f.problems),
+    );
+    final r =
+        ref.read(formControllerProvider).report?.reporter ?? const Reporter();
+    final ctl = ref.read(formControllerProvider.notifier);
+    String? errorFor(String field) {
+      for (final p in problems) {
+        if (p.toLowerCase().contains('your $field')) return p;
+      }
+      return null;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _IdentityField(
+          key: ValueKey('$epoch-name'),
+          label: 'Name',
+          fieldKey: const ValueKey('reporter-name'),
+          initial: r.name,
+          error: errorFor('name'),
+          onChanged: (v) => ctl.setReporter(name: v),
+        ),
+        const SizedBox(height: 12),
+        _IdentityField(
+          key: ValueKey('$epoch-country'),
+          label: 'Country',
+          fieldKey: const ValueKey('reporter-country'),
+          initial: r.country,
+          error: errorFor('country'),
+          onChanged: (v) => ctl.setReporter(country: v),
+        ),
+        const SizedBox(height: 12),
+        _IdentityField(
+          key: ValueKey('$epoch-role'),
+          label: 'Role',
+          fieldKey: const ValueKey('reporter-role'),
+          initial: r.role,
+          error: errorFor('role'),
+          onChanged: (v) => ctl.setReporter(role: v),
+        ),
+      ],
+    );
+  }
+}
+
+class _IdentityField extends StatefulWidget {
+  const _IdentityField({
+    super.key,
+    required this.label,
+    required this.fieldKey,
+    required this.initial,
+    required this.onChanged,
+    this.error,
+  });
+
+  final String label;
+  final Key fieldKey;
+  final String initial;
+  final String? error;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_IdentityField> createState() => _IdentityFieldState();
+}
+
+class _IdentityFieldState extends State<_IdentityField> {
+  late final TextEditingController _c = TextEditingController(
+    text: widget.initial,
+  );
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final deco = xInput(context).copyWith(
+      errorText: widget.error,
+      errorStyle: bodyStyle(context, size: 14, color: t.bad, height: 1.3),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: t.bad),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: t.bad, width: 2),
+      ),
+    );
+    return Labeled(
+      label: widget.label,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const PeriodFields(),
-          const SizedBox(height: 14),
-          Labeled(
-            label: 'Your name and role',
-            child: DropdownButtonFormField<String?>(
-              initialValue: selected,
-              key: ValueKey(
-                'person-${selected ?? 'none'}-${allowed.length}-${form.epoch}',
-              ),
-              isExpanded: true,
-              decoration: xInput(context),
-              items: items,
-              onChanged: (id) => unawaited(
-                ref.read(formControllerProvider.notifier).selectAssignment(id),
+          Expanded(
+            child: TextField(
+              key: widget.fieldKey,
+              controller: _c,
+              maxLength: Reporter.maxLength,
+              maxLengthEnforcement: MaxLengthEnforcement.enforced,
+              inputFormatters: [FilteringTextInputFormatter.deny(_invisible)],
+              keyboardType: TextInputType.text,
+              style: bodyStyle(context),
+              decoration: deco,
+              onChanged: (v) {
+                setState(() {});
+                widget.onChanged(v);
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 52,
+            height: 46,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Semantics(
+                label: '${_c.text.length} of ${Reporter.maxLength} characters',
+                excludeSemantics: true,
+                child: Text(
+                  '${_c.text.length}/${Reporter.maxLength}',
+                  style: monoStyle(context, size: 12, color: t.muted),
+                ),
               ),
             ),
           ),
-          const SizedBox(height: 12),
-          Text(
-            period.hasValue
-                ? 'This report covers ${period.requireValue.label}.'
-                : 'This report covers ${Period.labelFor(start)}.',
-            style: monoStyle(context),
-          ),
-          if (user != null && allowed.isEmpty) ...[
-            const SizedBox(height: 12),
-            SoftBanner(
-              child: Text(
-                'Your account is not linked to a person yet. Ask the controller to add your email.',
-                style: bodyStyle(context, size: 15, height: 1.4),
-              ),
-            ),
-          ],
-          if (form.sentAt != null) ...[
-            const SizedBox(height: 12),
-            SoftBanner(
-              child: Text(
-                'You already sent this report on ${shortDate(form.sentAt!)}. Sending again replaces it.',
-                style: bodyStyle(context, size: 15, height: 1.4),
-              ),
-            ),
-          ],
-          if (!form.hasPerson && allowed.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              'Choose your name to see the fields for your role.',
-              style: bodyStyle(context, size: 15, color: t.muted, height: 1.4),
-            ),
-          ],
         ],
       ),
     );

@@ -134,7 +134,13 @@ async fn deactivated_and_demoted_controllers_and_forged_tokens_are_out() {
         let (s, _) = app
             .call(m, &uri(&p), Some(&cora), Some(json!({"settings": {}})))
             .await;
-        assert_eq!(s, StatusCode::FORBIDDEN, "demoted {m}");
+        // Reading is open to every active person; writing is the controller's.
+        let want = if m == "GET" {
+            StatusCode::OK
+        } else {
+            StatusCode::FORBIDDEN
+        };
+        assert_eq!(s, want, "demoted {m}");
     }
     app.sql("update person set app_role = 'controller', active = false where email = 'cora@example.org'")
         .await;
