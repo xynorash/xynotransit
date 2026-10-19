@@ -348,30 +348,64 @@ async fn wrong_missing_or_unset_key_means_the_headers_are_ignored() {
 }
 
 #[tokio::test]
-async fn a_bad_client_header_falls_back_to_the_normal_rules() {
+async fn a_vouched_request_without_exactly_one_public_address_is_refused() {
+    // Netlify hands a visitor's own copy of the client header on to us next to its own, so the
+    // API sees two values. Falling back to the proxy's address would let a visitor spread
+    // guesses over the proxy's servers: with the key present the request is refused instead.
     let app = TestApp::with_env(&env()).await;
     app.give_password(ANA, "ana", PW).await;
     app.sql("delete from login_failure").await;
-    for ip in ["garbage", "10.1.2.3", "1.1.1.1, 2.2.2.2", ""] {
-        let h = vec![
-            ("x-xt-proxy-key", KEY.to_string()),
-            ("x-nf-client-connection-ip", ip.to_string()),
-        ];
-        assert_eq!(
-            bad(&app, "ana", NETLIFY, &h).await,
-            StatusCode::UNAUTHORIZED
-        );
-    }
-    // Public peer: the peer is the client.
-    assert_eq!(app.pair_failures("ana", Some(NETLIFY)).await, 4);
-    // Private peer (Caddy) with X-Forwarded-For: the old right-to-left rule.
-    let h = vec![
-        ("x-xt-proxy-key", KEY.to_string()),
-        ("x-nf-client-connection-ip", "garbage".to_string()),
-        ("x-forwarded-for", V2.to_string()),
+    let key = ("x-xt-proxy-key", KEY);
+    let cases: Vec<Vec<(&str, &str)>> = vec![
+        vec![key, ("x-nf-client-connection-ip", "garbage")],
+        vec![key, ("x-nf-client-connection-ip", "10.1.2.3")],
+        vec![key, ("x-nf-client-connection-ip", "1.1.1.1, 2.2.2.2")],
+        vec![key, ("x-nf-client-connection-ip", "")],
+        // The forged copy next to the real one.
+        vec![
+            key,
+            ("x-nf-client-connection-ip", "198.51.100.9"),
+            ("x-nf-client-connection-ip", V2),
+        ],
+        // No client header at all.
+        vec![key],
+        // The wrong key is not vouched for: the header is ignored, the normal rules apply.
     ];
-    bad(&app, "ana", "172.18.0.5", &h).await;
-    assert_eq!(app.pair_failures("ana", Some(V2)).await, 1);
+    for h in cases {
+        let (st, body) = login(&app, "ana", "definitely not it", NETLIFY, &h).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{h:?} {body}");
+        assert!(!body.contains(KEY));
+    }
+    // Refused before any counting: nothing was written for anyone.
+    assert_eq!(app.pair_failures("ana", Some(NETLIFY)).await, 0);
+    assert_eq!(rows_for(&app, V2).await, 0);
+    // A duplicated key header is not vouched for either: ordinary rules, peer is the client.
+    let h = vec![key, key, ("x-nf-client-connection-ip", V2)];
+    assert_eq!(
+        login(&app, "ana", "definitely not it", NETLIFY, &h).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(app.pair_failures("ana", Some(NETLIFY)).await, 1);
+    // A wrong key with a garbage client header: ignored, normal rules.
+    let h = vec![
+        ("x-xt-proxy-key", "not-the-key"),
+        ("x-nf-client-connection-ip", "garbage"),
+    ];
+    assert_eq!(
+        login(&app, "ana", "definitely not it", NETLIFY, &h).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(app.pair_failures("ana", Some(NETLIFY)).await, 2);
+    // And a good request still works, with one single public address.
+    let (st, _) = login(
+        &app,
+        "ana",
+        PW,
+        NETLIFY,
+        &[key, ("x-nf-client-connection-ip", V2)],
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
 }
 
 #[tokio::test]

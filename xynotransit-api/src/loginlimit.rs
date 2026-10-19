@@ -36,9 +36,12 @@
 //! TRUSTED FRONT DOOR (optional). When PROXY_AUTH_KEY is set and a request carries exactly one
 //! PROXY_AUTH_HEADER line equal to it (constant time compare), the client is the address in
 //! exactly one PROXY_CLIENT_HEADER line, if that parses as a PUBLIC IP (`front_door_addr`). A
-//! wrong, missing or doubled key, an unset PROXY_AUTH_KEY, or a missing, doubled, invalid or
-//! private client header means the rules above apply unchanged. Both headers of a request
-//! without the correct key are ignored completely. Every limit, audit row and trusted address
+//! wrong, missing or doubled key, or an unset PROXY_AUTH_KEY, means the rules above apply
+//! unchanged, and both headers of such a request are ignored completely. A request WITH the
+//! correct key but without exactly one public client address (missing, doubled, invalid or
+//! private: Netlify passes a visitor's own copy of the header on next to its own) is refused
+//! with 400, never answered from the proxy's own address, which would let a visitor spread
+//! guesses over the proxy's servers. Every limit, audit row and trusted address
 //! gets its address from the `ClientAddr` extractor, so they all see the same resolved address.
 
 use std::{
@@ -159,6 +162,22 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     ha.iter().zip(hb.iter()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
 }
 
+/// True when the request carries exactly one key header and it matches: the front door vouches
+/// for it. From then on the client header must be exactly one public address; anything else
+/// (a visitor adding their own copy, a missing header) is refused, never quietly replaced by the
+/// proxy's own address, which would let a visitor spread guesses over the proxy's servers.
+pub fn has_front_door_key(
+    cfg: Option<&crate::config::ProxyAuth>,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    let Some(cfg) = cfg else { return false };
+    let mut keys = headers.get_all(&cfg.key_header).iter();
+    match (keys.next(), keys.next()) {
+        (Some(sent), None) => constant_time_eq(sent.as_bytes(), cfg.key.as_bytes()),
+        _ => false,
+    }
+}
+
 /// The client address key given by a trusted front door, or `None` when the request does not
 /// carry the correct key or the client header is unusable (the caller then uses the normal rules).
 pub fn front_door_addr(
@@ -213,11 +232,16 @@ fn note_unknown() {
 }
 
 impl FromRequestParts<AppState> for ClientAddr {
-    type Rejection = std::convert::Infallible;
+    type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, st: &AppState) -> Result<Self, Self::Rejection> {
         if let Some(addr) = front_door_addr(st.config.proxy_auth.as_ref(), &parts.headers) {
             return Ok(ClientAddr(Some(addr)));
+        }
+        if has_front_door_key(st.config.proxy_auth.as_ref(), &parts.headers) {
+            // Vouched for by the front door but no single public address: refuse.
+            tracing::warn!("front door request without exactly one public client address");
+            return Err(ApiError::bad("Bad request."));
         }
         let peer = parts
             .extensions
