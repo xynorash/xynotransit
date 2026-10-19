@@ -30,6 +30,8 @@ jobs:
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test tool
       - run: flutter analyze
+      - name: PDF tools (the PDF text tests call pdftotext and pdffonts)
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - run: flutter test
       - run: flutter build web --release --no-web-resources-cdn
 
