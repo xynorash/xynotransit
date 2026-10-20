@@ -93,7 +93,7 @@ class SlideKpi extends StatelessWidget {
                 ], area: box.maxHeight);
           final grid = fitted == null || fitted.dense;
           final fit = grid
-              ? const KpiFit(width: kpiGridWidth, label: false, fontSize: 22)
+              ? const KpiFit(width: kpiGridWidth, fontSize: 22)
               : fitted;
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -108,12 +108,7 @@ class SlideKpi extends StatelessWidget {
                           for (var i = 0; i < s.targets.length; i++) ...[
                             if (i > 0) const SizedBox(height: kpiGap),
                             Expanded(
-                              child: _KpiCard(
-                                index: i + 1,
-                                target: s.targets[i],
-                                fit: fit,
-                                few: s.targets.length <= 2,
-                              ),
+                              child: _KpiCard(target: s.targets[i], fit: fit),
                             ),
                           ],
                         ],
@@ -329,19 +324,10 @@ class _Badge extends StatelessWidget {
 }
 
 class _KpiCard extends StatelessWidget {
-  const _KpiCard({
-    required this.index,
-    required this.target,
-    required this.fit,
-    required this.few,
-  });
+  const _KpiCard({required this.target, required this.fit});
 
-  final int index;
   final SnapshotTarget target;
   final KpiFit fit;
-
-  /// One or two targets: bigger status label.
-  final bool few;
 
   @override
   Widget build(BuildContext context) {
@@ -356,9 +342,7 @@ class _KpiCard extends StatelessWidget {
   /// The comment line, when there is room for it under the text.
   Widget? _comment(double cardHeight) {
     if (!showsComment(target)) return null;
-    final width = fit.label
-        ? fit.width - 80 - 2
-        : fit.width - 56 - kpiChipWidth - 16 - 2;
+    final width = fit.width - 56 - kpiChipWidth - 16 - 2;
     final textHeight = measureText(
       target.text,
       kpiTextStyle(fit.fontSize),
@@ -366,10 +350,7 @@ class _KpiCard extends StatelessWidget {
     ).height;
     final extra = kpiCommentGap + kpiCommentHeight;
     final need =
-        2 +
-        (fit.label
-            ? 2 * kpiLabelPad + kpiLabelHeight + 6 + textHeight + extra
-            : math.max(2 * kpiChipPad + textHeight + extra, kpiChipMinHeight));
+        2 + math.max(2 * kpiChipPad + textHeight + extra, kpiChipMinHeight);
     if (need > cardHeight) return null;
     return Padding(
       padding: const EdgeInsets.only(top: kpiCommentGap),
@@ -391,97 +372,64 @@ class _KpiCard extends StatelessWidget {
         border: Border.all(color: SlidePalette.cardBorder),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: fit.label
-          ? Padding(
-              padding: const EdgeInsets.symmetric(
-                vertical: kpiLabelPad,
-                horizontal: 40,
-              ),
-              // Top aligned: every "KPI 2 · PARTLY" label sits the same
-              // distance from the top of its card, one line or three.
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.start,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      if (target.status != null) ...[
-                        StatusGlyph(target.status, color, size: 22),
-                        const SizedBox(width: 8),
-                      ],
-                      Text(
-                        'KPI $index · $word',
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          vertical: kpiChipPad,
+          horizontal: 28,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // The chip fills the height of the card, up to kpiChipMaxHeight:
+            // on a tall card (1 to 3 targets) it stays a chip, centred.
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: kpiChipMaxHeight),
+              child: Container(
+                alignment: Alignment.center,
+                width: kpiChipWidth,
+                padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 6),
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (target.status != null) ...[
+                      StatusGlyph(target.status, Colors.white, size: 18),
+                      const SizedBox(width: 6),
+                    ],
+                    Flexible(
+                      child: Text(
+                        word,
+                        textAlign: TextAlign.center,
                         style: st(
-                          24,
+                          20,
                           weight: FontWeight.w700,
-                          color: color,
-                          letterSpacing: 2,
+                          color: Colors.white,
+                          letterSpacing: 1,
+                          height: 1.15,
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  text,
-                  ?comment,
-                ],
-              ),
-            )
-          : Padding(
-              padding: const EdgeInsets.symmetric(
-                vertical: kpiChipPad,
-                horizontal: 28,
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Container(
-                    width: kpiChipWidth,
-                    alignment: Alignment.center,
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 5,
-                      horizontal: 6,
                     ),
-                    decoration: BoxDecoration(
-                      color: color,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (target.status != null) ...[
-                          StatusGlyph(target.status, Colors.white, size: 18),
-                          const SizedBox(width: 6),
-                        ],
-                        Flexible(
-                          child: Text(
-                            word,
-                            textAlign: TextAlign.center,
-                            style: st(
-                              20,
-                              weight: FontWeight.w700,
-                              color: Colors.white,
-                              letterSpacing: 1,
-                              height: 1.15,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: comment == null
-                        ? text
-                        : Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [text, comment],
-                          ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: comment == null
+                  ? text
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [text, comment],
+                    ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

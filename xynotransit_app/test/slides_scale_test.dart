@@ -8,6 +8,7 @@ import 'package:xynotransit_app/domain/deck.dart';
 import 'package:xynotransit_app/domain/enums.dart';
 import 'package:xynotransit_app/domain/snapshot.dart';
 import 'package:xynotransit_app/features/slides/alt_text.dart';
+import 'package:xynotransit_app/features/slides/fit.dart';
 import 'package:xynotransit_app/features/slides/kpi_slide.dart';
 import 'package:xynotransit_app/features/slides/palette.dart';
 import 'package:xynotransit_app/features/slides/results_slide.dart';
@@ -225,48 +226,45 @@ void main() {
     });
   });
 
-  group('F4 aligned target labels', () {
-    testWidgets('every KPI label is the same distance from its card top', (
-      tester,
-    ) async {
-      for (final n in [3, 4]) {
-        await pumpSlide(
-          tester,
-          SlideKpi(
-            snap(
-              targets: targetsOf(
-                n,
-                text: (i) => i.isEven ? 'On time' : words(n == 3 ? 110 : 40),
+  group('F4 one card style', () {
+    testWidgets(
+      'every card has a status chip of the same width and left edge',
+      (tester) async {
+        for (final n in [1, 2, 3, 4, 5, 6]) {
+          await pumpSlide(
+            tester,
+            SlideKpi(
+              snap(
+                targets: targetsOf(
+                  n,
+                  text: (i) => i.isEven ? 'On time' : words(40),
+                ),
               ),
             ),
-          ),
-        );
-        final labels = find.byWidgetPredicate(
-          (w) => w is Text && RegExp(r'^KPI \d+ · ').hasMatch(w.data ?? ''),
-        );
-        expect(labels, findsNWidgets(n));
-        final dist = <double>[];
-        for (final l in labels.evaluate()) {
-          final label = find.byWidget(l.widget);
-          final card = find
-              .ancestor(
-                of: label,
-                matching: find.byWidgetPredicate(
-                  (w) =>
-                      w is Container &&
-                      w.decoration is BoxDecoration &&
-                      (w.decoration! as BoxDecoration).borderRadius ==
-                          BorderRadius.circular(20),
-                ),
-              )
-              .first;
-          dist.add(tester.getRect(label).top - tester.getRect(card).top);
+          );
+          final chips = find.byWidgetPredicate(
+            (w) => w is Container && w.constraints?.maxWidth == kpiChipWidth,
+          );
+          expect(chips, findsNWidgets(n), reason: '$n targets');
+          final rects = [
+            for (final c in chips.evaluate())
+              tester.getRect(find.byWidget(c.widget)),
+          ];
+          for (final r in rects) {
+            expect(r.left, closeTo(rects.first.left, 0.5));
+            expect(r.width, closeTo(kpiChipWidth, 0.5));
+            expect(r.height, lessThanOrEqualTo(kpiChipMaxHeight + 0.5));
+          }
+          // No "KPI 1 · MET" label above the text any more.
+          expect(
+            find.byWidgetPredicate(
+              (w) => w is Text && RegExp(r'^KPI \d+ · ').hasMatch(w.data ?? ''),
+            ),
+            findsNothing,
+          );
         }
-        for (final d in dist) {
-          expect(d, closeTo(dist.first, 0.5), reason: '$n cards: $dist');
-        }
-      }
-    });
+      },
+    );
   });
 
   group('F5 cover chips', () {
@@ -356,10 +354,10 @@ void main() {
     });
 
     testWidgets('no room, no comment', (tester) async {
-      // Three cards of two lines of big type leave no space for a line.
+      // Six texts of 200 characters need the grid, which has no comment line.
       await pumpSlide(
         tester,
-        SlideKpi(snap(targets: commentedTargets(3, len: 30))),
+        SlideKpi(snap(targets: commentedTargets(6, len: 200))),
       );
       expect(commentText(), findsNothing);
       expect(tester.takeException(), isNull);

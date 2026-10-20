@@ -42,7 +42,7 @@ void main() {
         final worst = texts
             .map((t) => kpiNeed(t, fit))
             .reduce((a, b) => a > b ? a : b);
-        final isFallback = fit.width == 760 && !fit.label && fit.fontSize == 24;
+        final isFallback = fit.width == 760 && fit.fontSize == 24;
         expect(
           worst <= avail || isFallback,
           isTrue,

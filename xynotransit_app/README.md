@@ -89,7 +89,7 @@ One rule for the API summary, the Dart compute, the tiles, the donut, the team r
 - The jump menu is a dropdown plus Previous slide and Next slide buttons.
 - The slide list is lazy: only the slides near the screen are built.
 - Slide A (counts) lays out 1 to 8 counts: the totals sit 3 to a row up to 6 counts and 4 to a row for 7 and 8 counts, and bars, numbers and labels shrink as the count grows, but no text goes below 20 px (18 px for the value labels of the bars). 1 to 3 counts look as before.
-- Slide B (targets): up to 6 targets sit in one column; 7 to 10 targets, and 6 long ones that do not fit, switch to a two-column grid of compact cards. A text that still does not fit ends with an ellipsis (the full text stays in the alt text and notes).
+- Slide A (targets, left side): one card style for every person and every team: a coloured status chip on the left (MET, PARTLY, MISSED, NOT ANSWERED), the target text beside it and, when there is room, the comment under the text. Up to 6 targets sit in one column (1 or 2 targets get bigger text); 7 to 10 targets, which a single column cannot hold, and 6 long ones that do not fit, switch to a two-column grid of compact cards. A text that still does not fit ends with an ellipsis (the full text stays in the alt text and notes).
 - A cover or divider with more team pills than fit ends with one last pill, "+N more".
 
 ### Deck text (`/manager/deck`)
